@@ -25,7 +25,7 @@ export default function ProjectOverviewPage() {
       setProject(proj);
       setArchs(archs);
       if (archs.length > 0) {
-        const vs = await architecture.listVersions(archs[0].id);
+        const vs = await architecture.listVersions(archs[0]?.id ?? '');
         setVersions(vs);
       }
     }).catch((err) => setError(err.message)).finally(() => setLoading(false));
@@ -49,8 +49,8 @@ export default function ProjectOverviewPage() {
           <CardContent>
             {archs.length === 0 ? <p className="text-sm text-muted-foreground">No architecture yet</p> : (
               <div>
-                <p className="text-sm font-medium">{archs[0].name}</p>
-                {frozenVersion && <StatusBadge value={frozenVersion.state} className="mt-2" />}
+                <p className="text-sm font-medium">{archs[0]?.name ?? "Untitled"}</p>
+                {frozenVersion ? <StatusBadge value={frozenVersion.state} className="mt-2" /> : null}
               </div>
             )}
           </CardContent>
