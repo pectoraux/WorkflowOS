@@ -1299,7 +1299,9 @@
           "at": "2026-08-28T11:26:35Z"
         }
       ],
-      "note": "implementation complete on feat/work-052-development-governance; awaiting architect review of the implementation PR; DO NOT MERGE without architect approval"
+      "note": "implementation complete on feat/work-052-development-governance; awaiting architect review of the implementation PR; DO NOT MERGE without architect approval",
+      "pr": 62,
+      "head": "44765ca"
     }
   ],
   "resumption": {
