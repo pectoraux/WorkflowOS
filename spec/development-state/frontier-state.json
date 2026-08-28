@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "derived-frontier-state",
+  "sourceOfTruth": ["spec/development-state/program-state.json", "spec/dependency-graph.md"],
+  "computedAt": "2026-08-28",
+  "currentMain": "1ccc45ff926331c0b4bd161a11bb28a7182c6146",
+  "currentLiveImplementation": {
+    "workOrder": "WORK-046",
+    "pr": 60,
+    "head": "f88cac45b8e385db6b4723f80edf1d0ff6276aa9",
+    "status": "open-review",
+    "base": "stale-relative-to-current-main"
+  },
+  "activeRule": "A derived frontier must never authorize work whose authoritative Work Order dependencies are incomplete. If live PR state and repository state disagree, halt authorization and require architect reconciliation.",
+  "plannedNext": ["WORK-047"],
+  "plannedFuture": ["WORK-048", "WORK-049", "WORK-050", "WORK-053", "WORK-054", "WORK-055", "WORK-056", "WORK-057", "WORK-058", "WORK-059", "WORK-060", "WORK-061"]
+}
