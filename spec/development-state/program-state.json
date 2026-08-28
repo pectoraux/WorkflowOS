@@ -1305,9 +1305,9 @@
           "at": "2026-08-28T11:26:35Z"
         }
       ],
-      "note": "implementation + PR #62 round-1 remediation (mutual coordination enforced by the validator; the truthful frontier; the explicit merge-vs-checkpoint completion rule) on feat/work-052-development-governance; all dependencies satisfied since the WORK-051 merge (f2c996c); the round-1 commit is LOCAL — the push is pending a re-provisioned GitHub credential in the implementation sandbox (the sandbox was reset and lost its token); DO NOT MERGE without architect approval",
+      "note": "implementation + PR #62 round-1 remediation (mutual coordination enforced by the validator; the truthful frontier; the explicit merge-vs-checkpoint completion rule) on feat/work-052-development-governance; all dependencies satisfied since the WORK-051 merge (f2c996c); the round-1 commit 7fa47c2 is PUSHED — all 7 CI workflows green on the first attempt and the remediation report (finding -> correction -> proof) posted on PR #62; DO NOT MERGE without architect approval",
       "pr": 62,
-      "head": "8f10f2c"
+      "head": "7fa47c2"
     }
   ],
   "resumption": {
@@ -1327,16 +1327,15 @@
       },
       {
         "workOrderId": "WORK-052",
-        "lastVerifiedState": "PR #62 round-1 remediation complete: the coordination contract is MUTUAL + covering (one-sided declarations are invalid state — validator-enforced), getFrontier reports TRUTHFUL coordination (every conflict mutually coordinated and every incomplete dep covered — never the mere presence of a record), and the merge-vs-checkpoint completion rule is explicit machine-readable state (completionEvent architect-merge, code-pinned: checkpoint outcomes are implementer claims that never substitute the merge; in_flight carries no mergedAs; outcomes only on started items). WORK-051 merged as f2c996c — all WORK-052 dependencies satisfied; the branch is current against main. The round-1 remediation commit is LOCAL on the branch (verified: real PostgreSQL 18 full sweep 103 files 2315/2315; static 722/722; typecheck/lint clean) — PUSH PENDING: the reset sandbox lost its GitHub token; a re-provisioned GH_TOKEN is required to push and update PR #62.",
+        "lastVerifiedState": "PR #62 round-1 remediation PUSHED to the branch head (8f10f2c -> 7fa47c2) after the GitHub credential was re-provisioned; all 7 CI workflows GREEN on 7fa47c2 (first attempt). The round-1 content: the coordination contract is MUTUAL + covering (one-sided declarations are invalid state — validator-enforced with discrimination regressions), getFrontier reports TRUTHFUL coordination (every conflict mutually coordinated and every incomplete dep covered — never the mere presence of a record; the old predicate deleted and negatively pinned), and the merge-vs-checkpoint completion rule is explicit machine-readable state (completionEvent architect-merge, code-pinned: checkpoint outcomes are implementer claims that never substitute the merge; in_flight carries no mergedAs; outcomes only on started items). WORK-051 merged as f2c996c — all WORK-052 dependencies satisfied; the branch is current against main. Verified on 7fa47c2: real PostgreSQL 18 full sweep 103 files 2315/2315 zero failures; static 722/722; typecheck 0; lint 0 errors; governance:status green (46 complete, WORK-046 + WORK-052 mutually coordinated, frontier WORK-048). The round-1 remediation report (finding -> correction -> proof) is posted on PR #62.",
         "nextSteps": [
-          "re-provision the GitHub credential in the implementation sandbox and PUSH the round-1 commit to feat/work-052-development-governance",
-          "update the PR #62 description head reference and post the round-1 remediation report (finding -> correction -> proof)",
-          "architect re-reviews PR #62 (round 2) against the three round-1 findings + the HIGH",
+          "architect re-reviews PR #62 (round 2) against the three round-1 findings + the HIGH — the remediation report comment maps each finding to its correction and discriminating regressions",
+          "if changes requested: remediate on the same branch (feat/work-052-development-governance)",
           "if approved: architect merges PR #62; record mergedAs (pr 62 + the main merge commit) and set status complete — the merge is the completion event"
         ],
         "blockers": [],
-        "recordedAt": "2026-08-28T12:28:04Z",
-        "recordedBy": "z.ai implementation agent (WORK-052 round 1)"
+        "recordedAt": "2026-08-28T13:53:35Z",
+        "recordedBy": "z.ai implementation agent (WORK-052 round 1 push)"
       }
     ]
   },
