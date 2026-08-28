@@ -125,3 +125,48 @@ CREATE TABLE wfos_delegation_attempts (
 CREATE INDEX wfos_delegation_plans_wi_idx ON wfos_delegation_plans (work_item_id);
 CREATE INDEX wfos_delegation_units_plan_idx ON wfos_delegation_units (plan_id);
 CREATE INDEX wfos_delegation_attempts_unit_idx ON wfos_delegation_attempts (unit_id);
+
+-- INTERRUPTION RACE GUARD (architectural correction): an interrupt changes
+-- the plan active → abandoned and then cancels pending units. A drive may be
+-- holding a stale in-memory 'pending' snapshot, so the dispatch transaction
+-- MUST re-check the plan authority at the exact durable-intent boundary.
+-- Locking the plan row here serializes that check against interruptPlan's
+-- UPDATE: either dispatch commits its durable intent while the plan is still
+-- active (after which the execution is considered in-flight and interruption
+-- does not touch it), or the trigger rejects the new attempt after the plan
+-- has become abandoned. This closes the window where a stale pending unit
+-- could otherwise start after interruption.
+CREATE OR REPLACE FUNCTION wfos_delegation_attempt_requires_active_plan()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  current_plan_status TEXT;
+BEGIN
+  SELECT p.status
+    INTO current_plan_status
+    FROM wfos_delegation_units AS u
+    JOIN wfos_delegation_plans AS p ON p.id = u.plan_id
+   WHERE u.id = NEW.unit_id
+   FOR SHARE OF p;
+
+  IF current_plan_status IS NULL THEN
+    RAISE EXCEPTION 'delegation unit % has no parent plan', NEW.unit_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  IF current_plan_status <> 'active' THEN
+    RAISE EXCEPTION
+      'cannot allocate delegation attempt for plan in status %',
+      current_plan_status
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wfos_delegation_attempt_active_plan_guard
+BEFORE INSERT ON wfos_delegation_attempts
+FOR EACH ROW
+EXECUTE FUNCTION wfos_delegation_attempt_requires_active_plan();
