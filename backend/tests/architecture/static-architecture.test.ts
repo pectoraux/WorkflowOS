@@ -16960,6 +16960,11 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(auditModule).toMatch(/auditMergedFinalization/);
     expect(auditModule).toMatch(/Merge pull request #/);
     expect(auditModule).toMatch(/\^\(WORK-\\d\{3\}\)\\b/);
+    // The PR #63 round-2 review: the ENTIRE mergedAs identity is validated —
+    // the PR number against the authoritative PR identity (the declared pr),
+    // not merely stored.
+    expect(auditModule).toMatch(/authoritative PR identity/);
+    expect(auditModule).toMatch(/w\.mergedAs\.pr !== w\.pr/);
     const service = readFileSync(DG_SERVICE, 'utf8');
     expect(service).toMatch(/verifyPostMergeFinalization/);
     const cli = readFileSync(DG_CLI, 'utf8');
@@ -16998,6 +17003,25 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
       mergeCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
     };
     expect(auditMergedFinalization(wrong, evidence).gaps.join('\n')).toMatch(/does not match the actual merge evidence/);
+    // DISCRIMINATION (the PR #63 round-2 review — the provenance identity): a
+    // FALSE mergedAs.pr — a different PR number with the REAL merge commit
+    // intact — is DETECTED. The PR number is part of the durable provenance
+    // identity, validated against the authoritative PR identity (the declared
+    // pr) for BOTH merge shapes, not merely stored.
+    const falsePr = structuredClone(program);
+    falsePr.workOrders.find((w) => w.id === 'WORK-052')!.mergedAs = {
+      pr: 999,
+      mergeCommit: '47615c236ec0e194e112efd3d2ef0f432c4bf210',
+    };
+    const falsePrGaps = auditMergedFinalization(falsePr, evidence).gaps;
+    expect(falsePrGaps.join('\n')).toMatch(/does not match the authoritative PR identity/);
+    expect(falsePrGaps.join('\n')).toContain('999');
+    // DISCRIMINATION (the PR #63 round-2 review — fail closed): dropping the
+    // declared pr must NOT bypass the PR-identity check — an unanchorable
+    // mergedAs.pr claim (WORK-NNN evidence, no declared pr) is DETECTED.
+    const unanchored = structuredClone(program);
+    delete (unanchored.workOrders.find((w) => w.id === 'WORK-052')! as { pr?: number }).pr;
+    expect(auditMergedFinalization(unanchored, evidence).gaps.join('\n')).toMatch(/no authoritative PR identity/);
     // The work-order document is consistent with the finalized state.
     expect(readFileSync(WORK_ORDER, 'utf8')).toMatch(/Status: COMPLETE — merged by the architect as `47615c236ec0e194e112efd3d2ef0f432c4bf210`/);
   });
@@ -17049,6 +17073,8 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(finalization).toMatch(/BOTH merge shapes \(the classic merge commit AND the WORK-NNN architect-merge subject convention\)/);
     expect(finalization).toMatch(/DISCRIMINATION \(post-merge correction, BLOCKER 1\): a MERGED work order still in_flight is a GAP/);
     expect(finalization).toMatch(/DISCRIMINATION \(post-merge correction, BLOCKER 1\): a complete work order whose mergedAs does NOT match the actual merge evidence is a GAP/);
+    expect(finalization).toMatch(/DISCRIMINATION \(the PR #63 round-2 review — the provenance identity\): a FALSE mergedAs\.pr/);
+    expect(finalization).toMatch(/DISCRIMINATION \(the PR #63 round-2 review — fail closed\): a WORK-NNN-merged work order that declares NO pr cannot anchor its mergedAs\.pr provenance claim/);
     expect(finalization).toMatch(/an in-flight work order with NO merge evidence is NOT a gap/);
     expect(finalization).toMatch(/the REAL repository audits clean/);
     const detectorTests = readFileSync(DG_DETECTOR_TESTS, 'utf8');

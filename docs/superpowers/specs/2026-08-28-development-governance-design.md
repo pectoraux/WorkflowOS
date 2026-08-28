@@ -257,9 +257,13 @@ after it landed, and the repository held a false program state (WORK-052
 2. **The merged-finalization invariant** — a Work Order with merge evidence in
    the repository's first-parent history (`Merge pull request #N` merge commits
    by PR number; the `WORK-NNN:` architect-merge subject convention by
-   work-order id) must be `complete` with matching `mergedAs`. Enforced by the
-   static architecture suite against the real git history (the visible red
-   window between merge and finalization IS the enforcement) and reported by
+   work-order id) must be `complete` with a `mergedAs` matching the
+   AUTHORITATIVE merge identity — the PR number AND the ACTUAL merge commit are
+   both validated (the PR #63 round-2 review: a genuine merge commit paired
+   with a false PR number is rejected; a bound record declaring no `pr` fails
+   closed). Enforced by the static architecture suite against the real git
+   history (the visible red window between merge and finalization IS the
+   enforcement) and reported by
    `governance:status` through the shared audit module
    (`backend/src/development-governance/internal/merged-finalization.ts`).
 3. **The ADR-0006 detector correction** — the `governance-manifest` detector's

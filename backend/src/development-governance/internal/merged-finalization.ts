@@ -15,8 +15,12 @@
  *                             order is still in_flight/pending: a merged Work
  *                             Order cannot remain represented as in_flight in
  *                             canonical state.
- *   EVIDENCE-MISMATCH       — a complete record whose mergedAs.mergeCommit is
- *                             not the actual merge commit.
+ *   EVIDENCE-MISMATCH       — a complete record whose mergedAs does not match
+ *                             the AUTHORITATIVE merge identity: the PR number
+ *                             and/or the merge commit are not the actual ones
+ *                             (a genuine merge commit paired with a false PR
+ *                             number is still a lie about provenance — the
+ *                             PR #63 round-2 review).
  *
  * Merge-evidence shapes recognized on main's first-parent chain:
  *   - `Merge pull request #N from …` — the classic merge commit (bound by PR
@@ -126,10 +130,27 @@ export function collectMergeEvidenceFromRepository(repoRoot: string): MergeEvide
 /**
  * THE MERGED-FINALIZATION INVARIANT (§34.8): every work order with merge
  * evidence in the audited history must be `complete` with a `mergedAs` that
- * records the ACTUAL merge commit (full or prefix form — historical records
- * may carry the short hash). A merged-but-in_flight work order is exactly the
- * false state the post-merge review found; a mismatched mergeCommit is a lie
- * about provenance.
+ * matches the AUTHORITATIVE MERGE IDENTITY — the ENTIRE identity, both
+ * components:
+ *
+ *   mergedAs.pr          === the authoritative PR identity — the work order's
+ *                           declared `pr`: for the classic merge shape the
+ *                           commit subject names the PR the work order binds
+ *                           by (`byPr` is keyed by that same number); for the
+ *                           WORK-NNN convention the subject binds the commit
+ *                           to the work order while the declared `pr` remains
+ *                           the PR identity, AND
+ *   mergedAs.mergeCommit === an actual merge commit for that work order
+ *                           (full or prefix form — historical records may
+ *                           carry the short hash).
+ *
+ * The PR number is part of the durable provenance claim and is VALIDATED
+ * against the authoritative identity, not merely stored (the PR #63 round-2
+ * review: a genuine merge commit paired with a false PR number must not
+ * audit clean; a record that declares no `pr` while carrying WORK-NNN merge
+ * evidence cannot anchor its claim at all — fail closed). A
+ * merged-but-in_flight work order is exactly the false state the post-merge
+ * review found; a mismatched identity is a lie about provenance.
  */
 export function auditMergedFinalization(program: ProgramState, evidence: MergeEvidence): MergedFinalizationAudit {
   const mergedWorkOrderIds: string[] = [];
@@ -156,6 +177,28 @@ export function auditMergedFinalization(program: ProgramState, evidence: MergeEv
         `workOrders[${w.id}]: mergedAs.mergeCommit "${w.mergedAs?.mergeCommit ?? ''}" does not match the ` +
           `actual merge evidence (${short}) — the finalization must record the ACTUAL merge commit`,
       );
+    }
+    // The PR-number half of the provenance identity (the PR #63 round-2
+    // review): mergedAs.pr must MATCH the authoritative PR identity, not
+    // merely be stored. In both merge shapes that identity is the work
+    // order's declared `pr` (the classic merge subject names it; the WORK-NNN
+    // convention defers to it). A bound record that declares no `pr` cannot
+    // anchor its claim — fail closed, otherwise dropping `pr` would bypass
+    // the check entirely.
+    if (w.mergedAs !== undefined) {
+      if (w.pr === undefined) {
+        gaps.push(
+          `workOrders[${w.id}]: mergedAs.pr ${String(w.mergedAs.pr)} has no authoritative PR identity — the ` +
+            `work order declares no pr while carrying merge evidence (${short}); the PR number is part of the ` +
+            'durable provenance claim and must be checkable, not merely stored (fail closed)',
+        );
+      } else if (w.mergedAs.pr !== w.pr) {
+        gaps.push(
+          `workOrders[${w.id}]: mergedAs.pr ${String(w.mergedAs.pr)} does not match the authoritative PR ` +
+            `identity (${w.pr}) — the PR number is part of the durable provenance claim and must be VALIDATED ` +
+            'against the actual merge identity, not merely stored',
+        );
+      }
     }
   }
   return { mergedWorkOrderIds, gaps };

@@ -1228,11 +1228,16 @@ code changes ride along unless separately ordered.
 evidence in the repository's first-parent history — a `Merge pull request #N
 from …` merge commit (bound by PR number) or the architect-merge subject
 convention `WORK-NNN: …` (bound by work-order id; PR #62 merged this way) —
-MUST be `complete` with matching `mergedAs`. Violations are detected by the
-static architecture suite (the audit runs against the real git history; CI
-fails between the merge and the finalization — that visible red window IS the
-enforcement) and reported by `governance:status`. The audit consumes
-repository-resident git history only, never an external service.
+MUST be `complete` with a `mergedAs` matching the AUTHORITATIVE merge
+identity: both components are validated — the PR number (the work order's
+declared `pr`, which the classic merge subject names and the `WORK-NNN:`
+convention defers to) AND the ACTUAL merge commit. A genuine merge commit
+paired with a false PR number is a violation; a bound record that declares no
+`pr` cannot anchor its `mergedAs.pr` claim and fails closed. Violations are
+detected by the static architecture suite (the audit runs against the real
+git history; CI fails between the merge and the finalization — that visible
+red window IS the enforcement) and reported by `governance:status`. The audit
+consumes repository-resident git history only, never an external service.
 
 **Authority.** The protocol adds NO new authority, NO new workflow state, NO
 automation: the architect remains the only completion authority; the

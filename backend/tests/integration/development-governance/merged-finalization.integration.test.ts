@@ -17,11 +17,13 @@ import type { ProgramState } from '../../../src/development-governance/index.js'
  *
  * The merged-finalization invariant binds the canonical program state to the
  * repository's git merge history: a Work Order with merge evidence MUST be
- * `complete` with a `mergedAs` recording the ACTUAL merge commit. This suite
- * proves the audit's positive arms and its discriminations (the false state
- * the post-merge review found — PR #62 merged as 47615c2 while WORK-052 was
- * still in_flight — can never again pass silently), plus the control-plane
- * wiring (`verifyPostMergeFinalization`) and the REAL repository audit.
+ * `complete` with a `mergedAs` matching the AUTHORITATIVE merge identity —
+ * the ENTIRE identity (the PR number AND the ACTUAL merge commit; the PR #63
+ * round-2 review). This suite proves the audit's positive arms and its
+ * discriminations (the false state the post-merge review found — PR #62
+ * merged as 47615c2 while WORK-052 was still in_flight — can never again pass
+ * silently), plus the control-plane wiring (`verifyPostMergeFinalization`)
+ * and the REAL repository audit.
  */
 describe('WORK-052 — the post-merge finalization audit binds canonical state to git merge history', () => {
   const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
@@ -113,6 +115,51 @@ describe('WORK-052 — the post-merge finalization audit binds canonical state t
     expect(gaps[0]).toContain('47615c2');
   });
 
+  it('DISCRIMINATION (the PR #63 round-2 review — the provenance identity): a FALSE mergedAs.pr — a different PR number with the REAL merge commit intact — is a GAP (the PR number is part of the durable provenance claim, VALIDATED not merely stored)', () => {
+    // The exact provenance defect the round-2 review found: the audit
+    // validated only mergedAs.mergeCommit, so a record claiming pr 999
+    // alongside the GENUINE merge commit audited clean. mergedAs must match
+    // the AUTHORITATIVE merge identity — the authoritative pair for a bound
+    // work order is (workOrderId, prNumber, mergeCommit); for the WORK-NNN
+    // convention the declared pr remains the PR identity, so mergedAs.pr
+    // must equal w.pr in addition to the commit matching.
+    const program = structuredClone(realProgram);
+    program.workOrders.find((w) => w.id === 'WORK-052')!.mergedAs = {
+      pr: 999,
+      mergeCommit: '47615c236ec0e194e112efd3d2ef0f432c4bf210',
+    };
+    // The REAL evidence: the WORK-NNN squash binds WORK-052 while the record
+    // declares pr 62 — the authoritative PR identity.
+    const evidence = collectMergeEvidenceFromRepository(REPO_ROOT);
+    const gaps = auditMergedFinalization(program, evidence).gaps;
+    expect(gaps.length).toBe(1);
+    expect(gaps[0]).toMatch(/does not match the authoritative PR identity/);
+    expect(gaps[0]).toContain('999');
+    expect(gaps[0]).toContain('62');
+    // The classic-merge shape discriminates identically (the evidence binds
+    // byPr through the SAME declared pr).
+    const byPrGaps = auditMergedFinalization(
+      structuredClone(program),
+      evidenceWith([[62, ['47615c236ec0e194e112efd3d2ef0f432c4bf210']]]),
+    ).gaps;
+    expect(byPrGaps.length).toBe(1);
+    expect(byPrGaps[0]).toMatch(/does not match the authoritative PR identity/);
+  });
+
+  it('DISCRIMINATION (the PR #63 round-2 review — fail closed): a WORK-NNN-merged work order that declares NO pr cannot anchor its mergedAs.pr provenance claim — a GAP', () => {
+    // Dropping the declared pr would otherwise bypass the PR-identity check
+    // entirely (any number could hide in mergedAs.pr); an unanchorable claim
+    // fails closed.
+    const program = structuredClone(realProgram);
+    const w052 = program.workOrders.find((w) => w.id === 'WORK-052')!;
+    delete (w052 as { pr?: number }).pr;
+    const evidence = evidenceWith([], [['WORK-052', ['47615c236ec0e194e112efd3d2ef0f432c4bf210']]]);
+    const gaps = auditMergedFinalization(program, evidence).gaps;
+    expect(gaps.length).toBe(1);
+    expect(gaps[0]).toMatch(/no authoritative PR identity/);
+    expect(gaps[0]).toMatch(/fail closed/);
+  });
+
   it('DISCRIMINATION: an in-flight work order with NO merge evidence is NOT a gap (the invariant binds merged work only — no false positives)', () => {
     // WORK-046 is in_flight with PR #60 OPEN: no evidence for 60 → no gap.
     const evidence = evidenceWith([[62, ['47615c236ec0e194e112efd3d2ef0f432c4bf210']]]);
@@ -146,12 +193,16 @@ describe('WORK-052 — the post-merge finalization audit binds canonical state t
     expect(real.evidenceSource).toMatch(/first-parent merge history/);
   });
 
-  it('the REAL repository audits clean — the drift the post-merge review found is closed (WORK-052: merged 47615c2, finalized complete)', () => {
+  it('the REAL repository audits clean — the drift the post-merge review found is closed (WORK-052: merged 47615c2, finalized complete with the full provenance identity)', () => {
     const evidence = collectMergeEvidenceFromRepository(REPO_ROOT);
     // The real history binds WORK-052 through the WORK-NNN squash convention.
     expect(evidence.byWorkOrder.get('WORK-052')).toEqual(['47615c236ec0e194e112efd3d2ef0f432c4bf210']);
+    // …and WORK-051 through the classic merge shape (its declared pr 52) —
+    // BOTH shapes audit clean with their full mergedAs identities.
+    expect(evidence.byPr.get(52)).toEqual(['f2c996c26b0a1cdf6b0b946102e4aa669a2847c9']);
     const audit = auditMergedFinalization(realProgram, evidence);
     expect(audit.gaps).toEqual([]);
     expect(audit.mergedWorkOrderIds).toContain('WORK-052');
+    expect(audit.mergedWorkOrderIds).toContain('WORK-051');
   });
 });

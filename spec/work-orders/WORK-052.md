@@ -272,4 +272,24 @@ behavior contradicted ADR-0006. The corrective finalization:
    manifests are `inconclusive` (a blocking assertion then blocks — fail-closed
    downstream); `fail` is reserved for established validation violations.
 
+## Post-merge correction (architect review of the corrective change — the provenance identity)
+
+The PR #63 architectural review found one provenance defect in the new
+merged-finalization invariant: the audit validated only
+`mergedAs.mergeCommit` — a genuine merge commit paired with a false
+`mergedAs.pr` audited clean, violating the stated finalization obligation
+(`mergedAs` records the PR number AND the actual merge commit). The narrow
+correction:
+
+1. **The full provenance identity is validated**: `mergedAs.pr` must match the
+   authoritative PR identity — the work order's declared `pr` for BOTH merge
+   shapes (the classic merge subject names it; the `WORK-NNN:` convention
+   defers to it) — in addition to `mergedAs.mergeCommit` matching an actual
+   merge commit. A bound record that declares no `pr` fails closed (dropping
+   `pr` must not bypass the check).
+2. **Discriminating regressions** (integration + static suites): a mutation of
+   `mergedAs.pr: 62 → 999` with the REAL merge commit intact is REJECTED; the
+   unanchorable no-`pr` arm is REJECTED; the model/spec/ADR enforcement text
+   records the identity semantics.
+
 This change is the first execution of the finalization protocol it codifies.
