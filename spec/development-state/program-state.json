@@ -907,7 +907,7 @@
       ],
       "branch": "feat/work-046-multi-agent-delegation",
       "pr": 60,
-      "head": "f88cac4",
+      "head": "a52b2e4",
       "issue": 60,
       "workOrder": "spec/work-orders/WORK-046.md",
       "origin": "architect",
@@ -947,7 +947,7 @@
         "reason": "shares the static-architecture suite and composition-root surfaces with the (now merged) WORK-051 — coordinated by reserved migration numbering (0052-0056 WORK-051, 0057 WORK-046); ALSO shares the static-architecture suite with the in-flight WORK-052 (both append describe blocks to the same file) — merge order is serialized by the architect: whichever PR merges second rebases its describe-block additions",
         "adrs": []
       },
-      "note": "implementation complete at head f88cac4; all 7 CI workflows green; awaiting architect review of PR #60. WORK-051 (the other shared-surface partner) has since MERGED as f2c996c — the coordination record is durable history for that side and MUTUAL coordination with the in-flight WORK-052."
+      "note": "integration reconciliation complete: the architect round-1 remediation (0e15abf interruption/dispatch race guard at the durable-attempt boundary + 75ca9b6 two-connection regression) retained VERBATIM, integrated onto current main@0541d13 by merge a52b2e4 (retaining the merged WORK-051 f2c996c + WORK-052 47615c2/1ccc45f + the owner-uploaded WORK-053–059 work orders) with the reconciliation commit on top; full re-verification on the integrated baseline recorded in the PR #60 integration report; awaiting architect re-review. The migration reservation (0052–0056 WORK-051, 0057 WORK-046) resolved exactly as coordinated — the coordination records are durable history."
     },
     {
       "id": "WORK-047",
@@ -1319,14 +1319,14 @@
     "activeHandoffs": [
       {
         "workOrderId": "WORK-046",
-        "lastVerifiedState": "Implementation complete at head f88cac4 on branch feat/work-046-multi-agent-delegation (PR #60): provider-neutral delegation coordination over the existing execution boundary; migration 0057 (0052-0056 reserved for WORK-051); six real-PG two-actor regressions green; all 7 CI workflows green on the first attempt.",
+        "lastVerifiedState": "Integration reconciliation complete on branch feat/work-046-multi-agent-delegation (PR #60): merge a52b2e4 onto main@0541d13 retains the architect round-1 remediation verbatim (0e15abf the interruption/dispatch race guard at the durable-attempt boundary + 75ca9b6 the two-connection regression proving stale allocation is rejected with complete rollback); full re-verification on the integrated baseline — typecheck/lint/static architecture/delegation suites including the race regression/development-governance suites/full real-PG sweep/arch:check/governance:status — recorded in the PR #60 integration report.",
         "nextSteps": [
-          "architect reviews PR #60 (the static-suite shared-surface partner WORK-051 has since merged — the coordination record documents the reserved numbering)",
+          "architect re-reviews PR #60 on the reconciled baseline (merge a52b2e4 + the reconciliation commit)",
           "if changes requested: remediate on the same branch",
-          "if approved: architect merges PR #60; record mergedAs and set status complete; WORK-047 becomes eligible once also complete"
+          "if approved: architect merges PR #60; record mergedAs and set status complete (post-merge finalization per §34.8/ADR-0007); WORK-047 becomes eligible once complete"
         ],
         "blockers": [],
-        "recordedAt": "2026-08-28T12:28:04Z",
+        "recordedAt": "2026-08-28T19:25:49Z",
         "recordedBy": "z.ai implementation agent (WORK-046)"
       }
     ]

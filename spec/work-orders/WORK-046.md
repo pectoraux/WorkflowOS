@@ -1,6 +1,6 @@
 # WORK-046 — Multi-Agent Delegation
 
-Status: READY
+Status: IMPLEMENTED — reconciled onto current main@0541d13 (PR #60: integration merge retaining the round-1 remediation verbatim); awaiting architect re-review
 Architecture: frozen v1.0 authority model + forward multi-agent intelligence direction (§33.9)
 Dependencies: WORK-034, WORK-036, WORK-044, WORK-045
 
@@ -48,12 +48,16 @@ It does not implement agent intelligence (WORK-047), a second workflow engine, a
 
 ## Pre-implementation architectural checkpoint (REQUIRED before implementation starts)
 
-This is the first work item developed under the WORK-051 governance model (the
-architecture-checkpoint process is itself under review on PR #52; until that
-machinery merges, this checkpoint is delivered as this documented conformance
-matrix — evaluated against the proposed design BEFORE implementation — plus the
-executable static invariants in the implementation PR, which serve as the PR
-conformance checkpoint).
+This is the first work item developed under the WORK-051 governance model.
+At implementation time the architecture-checkpoint process was itself under
+review on PR #52, so the pre-implementation checkpoint was delivered as this
+documented conformance matrix — evaluated against the proposed design BEFORE
+implementation — plus the executable static invariants in the implementation
+PR (the PR conformance checkpoint). The governance machinery has since
+MERGED (WORK-051 as f2c996c, WORK-052 as 47615c2) and is now LIVE: the
+integration round (below) re-verified the delegation implementation through
+the now-live detectors, the shared validation engine, and the governance
+state machinery, with zero design changes required.
 
 The proposed delegation design must preserve, and the implementation must
 prove structurally:
@@ -198,11 +202,12 @@ Evidence: static architecture test.
 
 ## Migration numbering note
 
-This branch numbers its migration `0057_*` although `main`'s last migration is
-`0051_*`: the pending WORK-051 branch (PR #52) already carries migrations
-`0052`–`0056`. Numbering WORK-046 at `0057` keeps BOTH merge orders clean
-(migrations apply in filename order; `0052`–`0056` are reserved for the
-WORK-051 branch).
+This branch numbers its migration `0057_*`. At implementation time main's
+last migration was `0051_*`, and `0052`–`0056` were reserved for the
+then-pending WORK-051 branch (PR #52). That branch has since MERGED as
+`f2c996c`, so `0052`–`0056` are now the merged WORK-051 migrations and
+`0057` applies after them in filename order — the reservation resolved
+exactly as coordinated (both merge orders stayed clean).
 
 ## Stop conditions
 
@@ -227,3 +232,61 @@ STOP and raise an Architecture Change Request if implementation requires:
 - Independent Architect Review approves the implementation PR.
 - Implementation PR is merged.
 - WORK-046 is then marked VERIFIED before WORK-047 becomes eligible.
+
+## Integration record (2026-08-28 — reconciliation onto the current governance baseline)
+
+The original implementation (head `f88cac4`, off `main` @ `5c7d5bb`) was
+delivered before WORK-051/WORK-052 merged. The architect's review of PR #60
+ordered two things before approval: reconciliation with the current `main`,
+and the interruption-to-dispatch race regression. Both are delivered:
+
+- **Round-1 remediation (retained VERBATIM on the branch)**: `0e15abf` closes
+  the interruption-to-dispatch race at the durable-intent boundary — the
+  migration's `wfos_delegation_attempt_requires_active_plan()` trigger takes
+  `FOR SHARE` on the plan row inside the BEFORE INSERT on
+  `wfos_delegation_attempts`, serializing the dispatch re-check against
+  `interruptPlan`'s `active → abandoned` UPDATE; `75ca9b6` proves the race on
+  TWO independent PostgreSQL connections (a stale pending snapshot can no
+  longer allocate an attempt after the interruption commits, and the failed
+  allocation rolls back completely — unit still `pending`, zero attempt rows).
+- **Integration shape**: a MERGE of `main` @ `0541d13` (merge commit
+  `a52b2e4`), deliberately NOT a rebase, so the two remediation commits
+  remain on the branch exactly as reviewed. `main` @ `0541d13` carries the
+  merged WORK-051 (`f2c996c`, migrations `0052`–`0056`), the merged WORK-052
+  (`47615c2`) with its post-merge finalization (`1ccc45f`), and the
+  owner-uploaded spec documents (the WORK-053–059 work orders + the
+  governance protocol documents) — all now beneath the delegation slice.
+- **Shared-surface resolution (no semantic change)**: (1) the static-suite
+  append collision — main's WORK-052 describe block and this branch's
+  WORK-046 describe block both append at the file end; both are preserved,
+  WORK-052's first; (2) the WORK-040 "last migration" pin, advanced to
+  `0057_` (after the merged WORK-051 migrations `0052`–`0056`).
+  `app.ts` / `api/server.ts` / `api/index.ts` / `index.ts` merged cleanly
+  (the delegation wiring is purely additive beside the WORK-051/052
+  composition).
+- **Migration reservation resolved**: `0052`–`0056` are now the MERGED
+  WORK-051 migrations; `0057_delegation_plans.sql` carries the resolved
+  numbering note and the race-guard trigger from `0e15abf`, unchanged
+  otherwise.
+- **Governance machinery evaluation**: the delegation implementation was
+  re-verified through the now-live WORK-051/052 machinery — the shared
+  architecture-governance validation engine, the detector registry
+  (incl. the governance-manifest detector under its ADR-0006 semantics),
+  `arch:check`, `governance:status`, and the development-governance state
+  invariants — with the delegation design PRESERVED as frozen (no
+  modernization; no conflict was demonstrated).
+- **Canonical state reconciliation**: `spec/development-state/program-state.json`
+  WORK-046 entry + handoff updated to the integrated head (the merge
+  `a52b2e4`); coordination records are durable history on both sides
+  (WORK-051 merged `f2c996c`, WORK-052 merged `47615c2`).
+- **Verification (this round)**: typecheck; lint; static architecture suite
+  (the WORK-046 invariants beside the WORK-051/052 invariants); the
+  delegation integration suite on real PostgreSQL 18 INCLUDING the
+  two-connection interruption race regression; the development-governance
+  suites against the reconciled canonical state; the full real-PG regression
+  sweep; `arch:check`; `governance:status`. (Exact counts are recorded in the
+  PR #60 integration report.)
+- **Preserved by decision**: the delegation design itself is UNCHANGED by
+  this round — the architect's rule was to reconcile with the new governance
+  layer while preserving the frozen WORK-046 architecture; no conflict was
+  demonstrated, so no design change was made.

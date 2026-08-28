@@ -25,9 +25,12 @@
 --   unit.status    pending | dispatched | succeeded | failed | unresolved | cancelled
 --   attempt.outcome NULL (in flight) | succeeded | failed | unresolved
 --
--- NOTE ON NUMBERING: this migration is 0057 although main's last migration
--- is 0051 — 0052–0056 are reserved for the pending WORK-051 branch (PR #52).
--- Migrations apply in filename order; both merge orders stay clean.
+-- NOTE ON NUMBERING: this migration is 0057. At implementation time
+-- main's last migration was 0051, and 0052–0056 were reserved for the
+-- then-pending WORK-051 branch (PR #52); that branch has since MERGED
+-- (f2c996c), so 0052–0056 are now the merged WORK-051 migrations and
+-- this file applies after them in filename order — the reservation
+-- resolved exactly as coordinated (both merge orders stayed clean).
 
 CREATE TABLE wfos_delegation_plans (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
