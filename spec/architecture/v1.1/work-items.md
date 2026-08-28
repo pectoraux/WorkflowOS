@@ -1,0 +1,17 @@
+# WorkflowOS v1.1 Work Items
+
+These are the planned v1.1 evolution Work Orders. They supplement the frozen v1.0 `spec/work-items.md` and do not retroactively alter completed v1.0 Work Items.
+
+| Work Item | Purpose | Dependencies |
+|---|---|---|
+| WORK-053 | Architecture v1.1 foundation and control loop | WORK-046, WORK-051, WORK-052 |
+| WORK-054 | Derived System Model and provenance graph | WORK-039, WORK-053 |
+| WORK-055 | Quality Attributes and Architecture Fitness | WORK-053, WORK-054 |
+| WORK-056 | Engineering Signals and Feedback Intake | WORK-039, WORK-041, WORK-054 |
+| WORK-057 | Change Programs and Change Sets | WORK-053, WORK-054, WORK-046, WORK-047 |
+| WORK-058 | Adaptive Assurance Engine | WORK-053, WORK-055, WORK-046, WORK-051, WORK-052 |
+| WORK-059 | Operational and Release Governance | WORK-055, WORK-056, WORK-058, WORK-019 |
+| WORK-060 | Continuous Architecture Evolution and ACR Feedback Loop | WORK-055, WORK-056, WORK-058, WORK-059, WORK-005 |
+| WORK-061 | Self-Hosting Conformance and Continuous Governance | WORK-057, WORK-058, WORK-059, WORK-060, WORK-047, WORK-050 |
+
+All items remain architect-governed and require a Work Order file, declared surfaces, deterministic assurance, checkpoint requirements, proof contract, and architect-controlled merge.
