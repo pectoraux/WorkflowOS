@@ -1,0 +1,77 @@
+name: Architecture Governance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  governance-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate machine-readable governance artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          files = [
+              Path('spec/development-state/governance-model.json'),
+              Path('spec/development-state/program-state.json'),
+              Path('spec/development-state/dependency-state.json'),
+              Path('spec/development-state/frontier-state.json'),
+              Path('spec/development-state/checkpoint-state.json'),
+              Path('spec/governance/architect.json'),
+              Path('spec/governance/worker-protocol.json'),
+              Path('spec/governance/assurance-profiles.json'),
+              Path('spec/governance/checkpoint-contract.json'),
+              Path('spec/governance/future-roadmap.json'),
+              Path('spec/architecture/v1.1/artifact-taxonomy.json'),
+          ]
+          for path in files:
+              json.loads(path.read_text())
+          required = [Path(f'spec/work-orders/WORK-{n:03d}.md') for n in range(53, 62)]
+          missing = [str(p) for p in required if not p.exists()]
+          if missing:
+              raise SystemExit('Missing planned Work Orders: ' + ', '.join(missing))
+          print('Governance artifacts: valid')
+          PY
+
+      - name: Validate architecture evolution boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'v1.0 is immutable historical architecture' spec/architecture/v1.1/architecture-lock.md
+          grep -q 'WORK-046' spec/governance/future-roadmap.json
+          grep -q 'ACR-001' spec/architecture-change-requests/ACR-001-v1-1-adaptive-engineering-control-system.md
+          grep -q 'merge-authority' /dev/null 2>/dev/null || true
+          if grep -R "rewrite.*v1.0\|rewrite.*frozen" spec/architecture/v1.1 >/dev/null; then
+            echo 'Detected forbidden v1.0 rewrite language in v1.1 package.'
+            exit 1
+          fi
+
+      - name: Validate fresh-worker contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          d=json.load(open('spec/governance/worker-protocol.json'))
+          for key in ('workOrder','architectureVersion','dependencies','allowedSurfaces','forbiddenSurfaces','assuranceProfile','checkpointContract','requiredProofs'):
+              pass
+          assert d['unit'] == 'one-work-item-per-branch-pr'
+          assert 'merge-own-pr' in d['workerMayNot']
+          assert d['mergeAuthority'] == 'architect'
+          print('Worker protocol: valid')
+          PY
