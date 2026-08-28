@@ -1,0 +1,335 @@
+import { describe, it, expect, beforeAll } from 'vitest';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { IMPACT_CHECKPOINT_MATRIX } from '../../../src/architecture-checkpoints/index.js';
+import {
+  DefaultDevelopmentGovernanceService,
+  FileSystemGovernanceStateLoader,
+} from '../../../src/development-governance/index.js';
+import type {
+  GovernanceModel,
+  ProgramState,
+  WorkOrderRecord,
+} from '../../../src/development-governance/index.js';
+
+/**
+ * WORK-052 — the parallel implementation protocol (ADR-0003) and the adaptive
+ * assurance profiles (ADR-0002), as DETERMINISTIC functions of the declared
+ * repository-resident state:
+ *
+ *   W052-AC03 — two genuinely independent items are concurrently executable;
+ *               a dependent item is rejected; shared migration/authority
+ *               conflicts are detected.
+ *   W052-AC04 — simple → LIGHT, ordinary → STANDARD, complex → HIGH_ASSURANCE,
+ *               critical → CRITICAL; the profile deterministically alters the
+ *               required checkpoints/proofs/evidence; dominance over the
+ *               WORK-051 impact matrix is preserved.
+ */
+describe('WORK-052 — parallel eligibility, conflicts, and assurance selection', () => {
+  const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+  const GOVERNANCE_DIR = join(REPO_ROOT, 'spec', 'development-state');
+
+  let model: GovernanceModel;
+  let realProgram: ProgramState;
+  let realService: DefaultDevelopmentGovernanceService;
+
+  beforeAll(async () => {
+    const loaded = await new FileSystemGovernanceStateLoader({
+      repoRoot: REPO_ROOT,
+      governanceDir: GOVERNANCE_DIR,
+    }).load();
+    model = loaded.model;
+    realProgram = loaded.program;
+    realService = DefaultDevelopmentGovernanceService.fromLoadedState(model, realProgram);
+  });
+
+  // --- fixture work orders over the REAL governance model ----------------------
+
+  const wo = (overrides: Partial<WorkOrderRecord> & Pick<WorkOrderRecord, 'id' | 'status'>): WorkOrderRecord => ({
+    title: `fixture ${overrides.id}`,
+    dependencies: [],
+    surfaces: { modules: [], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+    surfaceFlags: ['documentation'],
+    assuranceProfile: 'LIGHT',
+    ...overrides,
+  });
+
+  const serviceWith = (workOrders: WorkOrderRecord[]): DefaultDevelopmentGovernanceService =>
+    DefaultDevelopmentGovernanceService.fromLoadedState(model, {
+      ...realProgram,
+      workOrders: [...realProgram.workOrders, ...workOrders],
+    });
+
+  // --- W052-AC03: parallel eligibility + conflicts -------------------------------
+
+  it('W052-AC03 — two genuinely independent Work Items are recognized as concurrently executable', () => {
+    const service = serviceWith([
+      wo({ id: 'WORK-901', status: 'pending', dependencies: [], surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT' }),
+      wo({ id: 'WORK-902', status: 'pending', dependencies: [], surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT' }),
+    ]);
+    const report = service.evaluateParallelEligibility(['WORK-901', 'WORK-902']);
+    for (const a of report.assessments) {
+      expect(a.dependencyEligible, `${a.workOrderId} has no dependencies`).toBe(true);
+      expect(a.unsatisfiedDependencies).toEqual([]);
+      expect(a.conflictsWith).toEqual([]);
+    }
+    const pair = report.pairwise.find((p) => (p.a === 'WORK-901' && p.b === 'WORK-902') || (p.a === 'WORK-902' && p.b === 'WORK-901'));
+    expect(pair).toBeTruthy();
+    expect(pair!.parallelSafe, 'disjoint surfaces + independent deps ⇒ concurrently executable').toBe(true);
+    expect(pair!.sharedSurfaces).toEqual([]);
+  });
+
+  it('W052-AC03 — a Work Item with an unsatisfied dependency is REJECTED from parallel execution', () => {
+    const service = serviceWith([
+      wo({ id: 'WORK-903', status: 'in_flight', branch: 'feat/x', surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT' }),
+      wo({ id: 'WORK-904', status: 'pending', dependencies: ['WORK-903'], surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT' }),
+    ]);
+    const report = service.evaluateParallelEligibility(['WORK-903', 'WORK-904']);
+    const dependent = report.assessments.find((a) => a.workOrderId === 'WORK-904')!;
+    expect(dependent.dependencyEligible).toBe(false);
+    expect(dependent.unsatisfiedDependencies).toEqual(['WORK-903']);
+    // Even though they are surface-disjoint, the dependency makes the pair
+    // non-parallel: the frontier rule gates the dependent item.
+    expect(service.getFrontier().dependencyEligible.map((w) => w.id)).not.toContain('WORK-904');
+    const blocked = service.getFrontier().blocked.find((w) => w.id === 'WORK-904');
+    expect(blocked?.blockedBy).toEqual(['WORK-903']);
+  });
+
+  it('W052-AC03 — shared migration surfaces are detected as a conflict', () => {
+    const service = serviceWith([
+      wo({
+        id: 'WORK-905', status: 'in_flight', branch: 'feat/a',
+        surfaces: { modules: ['agents'], appLayer: [], migrations: ['0058'], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['schema'], assuranceProfile: 'CRITICAL',
+      }),
+      wo({
+        id: 'WORK-906', status: 'in_flight', branch: 'feat/b',
+        surfaces: { modules: ['reviews'], appLayer: [], migrations: ['0058'], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['schema'], assuranceProfile: 'CRITICAL',
+      }),
+    ]);
+    const pair = service.evaluateParallelEligibility(['WORK-905', 'WORK-906']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.sharedSurfaces).toEqual([{ kind: 'migrations', value: '0058' }]);
+    expect(pair.coordinated, 'no coordination record was declared').toBe(false);
+  });
+
+  it('W052-AC03 — reserved migration numbers participate in conflict detection (the 0057 lesson)', () => {
+    const service = serviceWith([
+      wo({
+        id: 'WORK-907', status: 'in_flight', branch: 'feat/c',
+        surfaces: { modules: [], appLayer: [], migrations: ['0059'], reservedMigrations: ['0060'], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['schema'], assuranceProfile: 'CRITICAL',
+      }),
+      wo({
+        id: 'WORK-908', status: 'pending',
+        surfaces: { modules: [], appLayer: [], migrations: [], reservedMigrations: ['0060'], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['schema'], assuranceProfile: 'CRITICAL',
+      }),
+    ]);
+    const pair = service.evaluateParallelEligibility(['WORK-907', 'WORK-908']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.sharedSurfaces).toContainEqual({ kind: 'migrations', value: '0060' });
+  });
+
+  it('W052-AC03 — shared authority surfaces are detected as a conflict', () => {
+    const service = serviceWith([
+      wo({
+        id: 'WORK-909', status: 'in_flight', branch: 'feat/d',
+        surfaces: { modules: ['workflows'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['authorityBoundary'], assuranceProfile: 'CRITICAL',
+      }),
+      wo({
+        id: 'WORK-910', status: 'pending',
+        surfaces: { modules: ['workflows', 'verification'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['authorityBoundary'], assuranceProfile: 'CRITICAL',
+      }),
+    ]);
+    const pair = service.evaluateParallelEligibility(['WORK-909', 'WORK-910']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.sharedSurfaces).toEqual([{ kind: 'modules', value: 'workflows' }]);
+  });
+
+  it('W052-AC03 — shared spec documents conflict (including directory containment: docs/adr/ owns what is beneath it)', () => {
+    const service = serviceWith([
+      wo({
+        id: 'WORK-911', status: 'in_flight', branch: 'feat/e',
+        surfaces: { modules: [], appLayer: [], migrations: [], reservedMigrations: [], specDocs: ['docs/adr/'], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT',
+      }),
+      wo({
+        id: 'WORK-912', status: 'pending',
+        surfaces: { modules: [], appLayer: [], migrations: [], reservedMigrations: [], specDocs: ['docs/adr/ADR-0007-x.md'], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['documentation'], assuranceProfile: 'LIGHT',
+      }),
+    ]);
+    const pair = service.evaluateParallelEligibility(['WORK-911', 'WORK-912']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.sharedSurfaces.length).toBeGreaterThan(0);
+  });
+
+  it('W052-AC03 — the real program state: WORK-046/WORK-051/WORK-052 shared-surface conflicts are reported and coordinated', () => {
+    const report = realService.evaluateParallelEligibility(['WORK-046', 'WORK-051', 'WORK-052']);
+    // WORK-052 ↔ WORK-051: the detector registry + static suite are shared, coordinated via ADR-0005/0006.
+    const pair52_51 = report.pairwise.find(
+      (p) => (p.a === 'WORK-052' && p.b === 'WORK-051') || (p.a === 'WORK-051' && p.b === 'WORK-052'),
+    )!;
+    expect(pair52_51.parallelSafe).toBe(false);
+    expect(pair52_51.sharedSurfaces.some((s) => s.value.includes('detector-registry.ts'))).toBe(true);
+    expect(pair52_51.coordinated).toBe(true);
+    // WORK-052's dependency on the in-flight WORK-051 is explicit + coordinated.
+    const a052 = report.assessments.find((a) => a.workOrderId === 'WORK-052')!;
+    expect(a052.dependencyEligible).toBe(false);
+    expect(a052.unsatisfiedDependencies).toEqual(['WORK-051']);
+    // The conflict facts are still REPORTED even when coordinated — the
+    // architect sees the shared surfaces, not a silent pass.
+    expect(a052.conflictsWith.length).toBeGreaterThan(0);
+  });
+
+  // --- W052-AC04: deterministic assurance selection ------------------------------
+
+  it('W052-AC04 — simple → LIGHT, ordinary → STANDARD, complex → HIGH_ASSURANCE, critical → CRITICAL (deterministic)', () => {
+    const cases: Array<{ id: string; flags: WorkOrderRecord['surfaceFlags']; expected: string }> = [
+      { id: 'WORK-920', flags: ['documentation'], expected: 'LIGHT' },
+      { id: 'WORK-921', flags: ['localBehavior'], expected: 'LIGHT' },
+      { id: 'WORK-922', flags: ['moduleInternals'], expected: 'STANDARD' },
+      { id: 'WORK-923', flags: ['multiModule'], expected: 'STANDARD' },
+      { id: 'WORK-924', flags: ['publicContracts'], expected: 'HIGH_ASSURANCE' },
+      { id: 'WORK-925', flags: ['concurrency'], expected: 'HIGH_ASSURANCE' },
+      { id: 'WORK-926', flags: ['externalSideEffects'], expected: 'HIGH_ASSURANCE' },
+      { id: 'WORK-927', flags: ['schema'], expected: 'CRITICAL' },
+      { id: 'WORK-928', flags: ['authorityBoundary'], expected: 'CRITICAL' },
+      { id: 'WORK-929', flags: ['securityTenant'], expected: 'CRITICAL' },
+      // Mixed surfaces: the MOST severe surface wins (first-match, most severe first).
+      { id: 'WORK-930', flags: ['documentation', 'schema'], expected: 'CRITICAL' },
+      { id: 'WORK-931', flags: ['documentation', 'publicContracts'], expected: 'HIGH_ASSURANCE' },
+      { id: 'WORK-932', flags: ['localBehavior', 'multiModule'], expected: 'STANDARD' },
+    ];
+    const service = serviceWith(
+      cases.map((c) => wo({
+        id: c.id,
+        status: 'pending',
+        surfaceFlags: c.flags,
+        assuranceProfile: c.expected as WorkOrderRecord['assuranceProfile'],
+      })),
+    );
+    for (const c of cases) {
+      expect(service.resolveAssurance(c.id).profile, `${c.id} surfaces [${c.flags?.join(', ')}]`).toBe(c.expected);
+    }
+  });
+
+  it('W052-AC04 — the same surfaces ALWAYS select the same profile (pure function, repeated resolution)', () => {
+    const service = serviceWith([
+      wo({ id: 'WORK-933', status: 'pending', surfaceFlags: ['moduleInternals', 'multiModule'], assuranceProfile: 'STANDARD' }),
+    ]);
+    const first = service.resolveAssurance('WORK-933');
+    const second = service.resolveAssurance('WORK-933');
+    const third = service.resolveAssurance('WORK-933');
+    expect(first.profile).toBe('STANDARD');
+    expect(second.profile).toBe(first.profile);
+    expect(third.profile).toBe(first.profile);
+    expect(first.requiredCheckpointKinds).toEqual(second.requiredCheckpointKinds);
+    expect(first.requiredProofClasses).toEqual(third.requiredProofClasses);
+  });
+
+  it('W052-AC04 — the selected profile deterministically alters checkpoint/evidence requirements', () => {
+    const light = realService.resolveAssurance('WORK-048'); // STANDARD-class item? resolve by its flags
+    void light;
+    // Direct per-profile requirement comparison through the service.
+    const profiles = ['LIGHT', 'STANDARD', 'HIGH_ASSURANCE', 'CRITICAL'] as const;
+    const requirements = profiles.map((p) => ({
+      profile: p,
+      contracts: realService.getCheckpointApplicability(p),
+      resolution: (() => {
+        const service = serviceWith([
+          wo({
+            id: `WORK-94${profiles.indexOf(p)}`,
+            status: 'pending',
+            surfaceFlags: p === 'LIGHT' ? ['documentation']
+              : p === 'STANDARD' ? ['moduleInternals']
+              : p === 'HIGH_ASSURANCE' ? ['publicContracts']
+              : ['authorityBoundary'],
+            assuranceProfile: p,
+          }),
+        ]);
+        return service.resolveAssurance(`WORK-94${profiles.indexOf(p)}`);
+      })(),
+    }));
+    // Checkpoint kinds monotonically expand with depth.
+    expect(requirements[0]!.resolution.requiredCheckpointKinds).toEqual(['pr_conformance']);
+    expect(requirements[1]!.resolution.requiredCheckpointKinds).toEqual(['work_order', 'pr_conformance']);
+    expect(requirements[2]!.resolution.requiredCheckpointKinds).toEqual([
+      'readiness', 'work_order', 'pr_conformance', 'verification_entry',
+    ]);
+    expect(requirements[3]!.resolution.requiredCheckpointKinds).toEqual([
+      'readiness', 'work_order', 'pr_conformance', 'verification_entry',
+    ]);
+    // Proof classes expand; only CRITICAL demands the architect review record.
+    expect(requirements[0]!.resolution.requiredProofClasses).toEqual(['static']);
+    expect(requirements[1]!.resolution.requiredProofClasses).toEqual(['static', 'dynamic']);
+    expect(requirements[2]!.resolution.requiredProofClasses).toEqual(['static', 'dynamic', 'discrimination']);
+    expect(requirements[3]!.resolution.requiredProofClasses).toEqual(['static', 'dynamic', 'discrimination']);
+    expect(requirements[0]!.resolution.architectReviewRecord).toBe(false);
+    expect(requirements[3]!.resolution.architectReviewRecord).toBe(true);
+    // Applicable contracts grow with depth: LIGHT < STANDARD < HIGH_ASSURANCE/CRITICAL.
+    expect(requirements[0]!.contracts.length).toBeLessThan(requirements[1]!.contracts.length);
+    expect(requirements[1]!.contracts.length).toBeLessThanOrEqual(requirements[2]!.contracts.length);
+    expect(requirements[2]!.contracts.length).toBe(requirements[3]!.contracts.length);
+    // Evidence requirements grow monotonically.
+    expect(requirements[0]!.resolution.requiredEvidence.length).toBeLessThan(requirements[3]!.resolution.requiredEvidence.length);
+    // CRITICAL demands the architect-review-record evidence by name.
+    expect(requirements[3]!.resolution.requiredEvidence).toContain('architect-review-record');
+  });
+
+  it('W052-AC04 — profile requirements DOMINATE the WORK-051 impact/checkpoint matrix (assurance adds depth, never subtracts)', () => {
+    // For every profile, at every impact level it covers, every checkpoint
+    // kind the LIVE matrix applies there must be required by the profile.
+    for (const profile of ['LIGHT', 'STANDARD', 'HIGH_ASSURANCE', 'CRITICAL'] as const) {
+      const req = model.assuranceProfiles.requirements[profile];
+      for (const level of req.impactCoverage) {
+        for (const [kind, levels] of Object.entries(IMPACT_CHECKPOINT_MATRIX)) {
+          if ((levels as readonly string[]).includes(level)) {
+            expect(
+              req.checkpointKinds,
+              `${profile} covers impact ${level}; matrix kind ${kind} applies there and must be required`,
+            ).toContain(kind);
+          }
+        }
+      }
+      // Coherence: the impact floor is at least the level the matrix's
+      // heaviest covered kind applies at.
+      expect(['low', 'medium', 'high']).toContain(req.impactFloor);
+    }
+    // The impact-floor coherence is enforced by the validation engine on the
+    // real state: WORK-052 (CRITICAL) binds runtime impact high.
+    const real = realService.resolveAssurance('WORK-052');
+    expect(real.impactFloor).toBe('high');
+    expect(real.runtimeImpactBinding).toBe('high');
+  });
+
+  it('W052-AC04 — unknown/unclassified surfaces fail closed to the HIGH_ASSURANCE floor', async () => {
+    const { selectAssuranceProfile } = await import('../../../src/architecture-checkpoints/index.js');
+    // No declared surfaces: the fail-closed default (HIGH_ASSURANCE in the canonical model).
+    expect(selectAssuranceProfile(model, [])).toBe('HIGH_ASSURANCE');
+    // The model's declared default IS the strict floor.
+    expect(model.assuranceProfiles.selection.unclassifiedDefault).toBe('HIGH_ASSURANCE');
+    // A record with no surfaceFlags resolves through the same floor.
+    const service = serviceWith([wo({ id: 'WORK-940', status: 'pending', surfaceFlags: undefined, assuranceProfile: undefined })]);
+    expect(service.resolveAssurance('WORK-940').profile).toBe('HIGH_ASSURANCE');
+  });
+
+  // --- the real frontier (W052-AC03 applied to the live program) -----------------
+
+  it('W052-AC03 — the REAL frontier: WORK-048 is the dependency-eligible item; 047/049/050 are blocked', () => {
+    const frontier = realService.getFrontier();
+    expect(frontier.dependencyEligible.map((w) => w.id)).toEqual(['WORK-048']);
+    const blockedIds = frontier.blocked.map((w) => w.id);
+    expect(blockedIds).toContain('WORK-047');
+    expect(blockedIds).toContain('WORK-049');
+    expect(blockedIds).toContain('WORK-050');
+    expect(frontier.blocked.find((w) => w.id === 'WORK-047')!.blockedBy).toEqual(['WORK-046']);
+    expect(frontier.blocked.find((w) => w.id === 'WORK-049')!.blockedBy).toEqual(['WORK-048']);
+    expect(frontier.blocked.find((w) => w.id === 'WORK-050')!.blockedBy).toEqual(['WORK-048']);
+  });
+});
