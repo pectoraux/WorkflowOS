@@ -55,23 +55,25 @@ jobs:
           grep -q 'v1.0 is immutable historical architecture' spec/architecture/v1.1/architecture-lock.md
           grep -q 'WORK-046' spec/governance/future-roadmap.json
           grep -q 'ACR-001' spec/architecture-change-requests/ACR-001-v1-1-adaptive-engineering-control-system.md
-          grep -q 'merge-authority' /dev/null 2>/dev/null || true
-          if grep -R "rewrite.*v1.0\|rewrite.*frozen" spec/architecture/v1.1 >/dev/null; then
-            echo 'Detected forbidden v1.0 rewrite language in v1.1 package.'
+          if grep -R -E 'silently.*rewrite|rewrite.*in place' spec/architecture/v1.1 >/dev/null; then
+            echo 'Detected language permitting silent architecture rewrite.'
             exit 1
           fi
 
-      - name: Validate fresh-worker contract
+      - name: Validate persistent authority boundaries
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
-          d=json.load(open('spec/governance/worker-protocol.json'))
-          for key in ('workOrder','architectureVersion','dependencies','allowedSurfaces','forbiddenSurfaces','assuranceProfile','checkpointContract','requiredProofs'):
-              pass
-          assert d['unit'] == 'one-work-item-per-branch-pr'
-          assert 'merge-own-pr' in d['workerMayNot']
-          assert d['mergeAuthority'] == 'architect'
-          print('Worker protocol: valid')
+          architect=json.load(open('spec/governance/architect.json'))
+          worker=json.load(open('spec/governance/worker-protocol.json'))
+          required = {'workOrder','architectureVersion','dependencies','allowedSurfaces','forbiddenSurfaces','assuranceProfile','checkpointContract','requiredProofs'}
+          assert required.issubset(set(worker['requiredContext']))
+          assert 'merge-own-pr' in worker['workerMayNot']
+          assert 'change-governing-architecture-without-acr' in worker['workerMayNot']
+          assert worker['mergeAuthority'] == 'architect'
+          assert 'approve-architecture-change' in architect['decisionRights']
+          assert 'approve-merge' in architect['decisionRights']
+          print('Persistent authority boundaries: valid')
           PY
