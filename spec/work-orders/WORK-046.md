@@ -260,7 +260,13 @@ and the interruption-to-dispatch race regression. Both are delivered:
   append collision — main's WORK-052 describe block and this branch's
   WORK-046 describe block both append at the file end; both are preserved,
   WORK-052's first; (2) the WORK-040 "last migration" pin, advanced to
-  `0057_` (after the merged WORK-051 migrations `0052`–`0056`).
+  `0057_` (after the merged WORK-051 migrations `0052`–`0056`);
+  (3) the WORK-051 self-host checkpoint assertion ARCH-SELF-006 (the
+  schema-migration head pin `expectedLastMigrationNumber`), advanced
+  `56 → 57` — the same reserved-numbering coordination PR #52 round 4
+  itself executed when it advanced the pin to 56; without this the frozen
+  self-host checkpoint evaluates the real tree (which now contains `0057`)
+  as `blocked`.
   `app.ts` / `api/server.ts` / `api/index.ts` / `index.ts` merged cleanly
   (the delegation wiring is purely additive beside the WORK-051/052
   composition).
