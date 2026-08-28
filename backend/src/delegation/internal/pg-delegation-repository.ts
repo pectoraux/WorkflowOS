@@ -20,6 +20,13 @@
  *   - attempt allocation: SELECT unit FOR UPDATE + UNIQUE (unit_id,
  *     attempt_no) — concurrent dispatchers of one unit serialize; exactly
  *     one attempt row per logical attempt.
+ *   - attempt outcome recording is ATTEMPT-FENCED: the unit-state mutation
+ *     fires ONLY when the recorded attempt IS the unit's CURRENT attempt
+ *     (attempt_no = attempt_count — the allocation invariant), so a late
+ *     result for a SUPERSEDED attempt (a retry allocated the next one)
+ *     cannot change the unit's current state. The attempt row itself still
+ *     records the late outcome as history (per-attempt truth); only the
+ *     unit's CURRENT state is owned by the CURRENT attempt.
  *   - status transitions are guarded CAS (UPDATE ... WHERE status = expected)
  *     — a lost CAS returns null and the caller converges on the current row.
  */
@@ -306,8 +313,26 @@ export class PgDelegationRepository {
   }
 
   /**
-   * Record an attempt outcome + update the unit coordination status (a
-   * guarded transition from 'dispatched' to the terminal/unresolved state).
+   * Record an attempt outcome + update the unit coordination status.
+   *
+   * ATTEMPT-FENCED (the retry contract): the unit-state mutation fires ONLY
+   * when the recorded attempt IS the unit's CURRENT attempt — the row being
+   * mutated must satisfy `a.attempt_no = u.attempt_count` for the very
+   * attempt whose outcome is recorded (`a.id = $3`). A late result for a
+   * SUPERSEDED attempt (a retry already allocated the next attempt —
+   * `attempt_count` moved past it) is INCAPABLE of changing the unit's
+   * current state: the EXISTS fence rejects it, the UPDATE matches zero
+   * rows, and this method returns null (the caller converges on the current
+   * row). The late outcome is still recorded on the attempt row itself —
+   * per-attempt history is truthful — but the unit's current state stays
+   * owned by the CURRENT attempt (and, through it, the plan-completion
+   * check can only complete through current-attempt outcomes).
+   *
+   * Under READ COMMITTED the fenced UPDATE is also correct when it BLOCKS
+   * on a concurrent retry's allocation lock: PostgreSQL re-evaluates the
+   * WHERE (including the EXISTS fence) against the NEW committed row
+   * version, so a unit whose current attempt just became N+1 rejects a
+   * result for attempt N even in the blocked-then-reevaluated interleaving.
    */
   async recordAttemptOutcome(input: {
     attemptId: string;
@@ -321,19 +346,37 @@ export class PgDelegationRepository {
         // outcome IS NULL (in flight) OR 'unresolved' (the honest limbo — a
         // re-drive may resolve the SAME attempt once its record appears or
         // its re-submit succeeds; a terminal outcome is NEVER overwritten).
+        // NOTE: this is the PER-ATTEMPT historical record — it is fenced by
+        // attemptId only. The unit's CURRENT state is fenced by the
+        // attempt-generation fence below.
         `UPDATE wfos_delegation_attempts
            SET outcome = $2, outcome_detail = $3::jsonb, updated_at = NOW()
          WHERE id = $1 AND (outcome IS NULL OR outcome = 'unresolved')`,
         [input.attemptId, input.outcome, JSON.stringify(input.outcomeDetail)],
       );
+      // THE ATTEMPT-GENERATION FENCE: the unit mutation additionally
+      // requires the recorded attempt to BE the unit's current attempt
+      // (attempt_no = attempt_count — the allocation transaction bumps
+      // attempt_count and inserts that very attempt_no atomically under the
+      // unit row lock, so the equality holds for exactly one live attempt).
+      // A result for attempt N-1 after a retry allocated attempt N matches
+      // ZERO rows here — the unit stays on attempt N's state.
       const updated = await tx.query<UnitRow>(
-        `UPDATE wfos_delegation_units
+        `UPDATE wfos_delegation_units u
            SET status = $2, updated_at = NOW()
-         WHERE id = $1 AND status IN ('dispatched', 'failed', 'unresolved')
-         RETURNING id, plan_id, ''::text AS work_item_id, unit_key, role_id,
-                   role_revision, mode, provider, model, depends_on, status,
-                   attempt_count, created_at, updated_at`,
-        [input.unitId, input.unitStatus],
+         WHERE u.id = $1
+           AND u.status IN ('dispatched', 'failed', 'unresolved')
+           AND EXISTS (
+             SELECT 1
+               FROM wfos_delegation_attempts a
+              WHERE a.id = $3
+                AND a.unit_id = u.id
+                AND a.attempt_no = u.attempt_count
+           )
+         RETURNING u.id, u.plan_id, ''::text AS work_item_id, u.unit_key, u.role_id,
+                   u.role_revision, u.mode, u.provider, u.model, u.depends_on, u.status,
+                   u.attempt_count, u.created_at, u.updated_at`,
+        [input.unitId, input.unitStatus, input.attemptId],
       );
       if (updated.rows.length === 0) return null;
       const reread = await tx.query<UnitRow>(

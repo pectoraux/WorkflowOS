@@ -296,3 +296,83 @@ and the interruption-to-dispatch race regression. Both are delivered:
   this round — the architect's rule was to reconcile with the new governance
   layer while preserving the frozen WORK-046 architecture; no conflict was
   demonstrated, so no design change was made.
+
+## Round-3 correction record (2026-08-28 — the attempt-generation race)
+
+The architect's round-3 review of PR #60 (CHANGES REQUIRED, on head
+`20e72f6`) found one remaining blocking concurrency defect in
+`PgDelegationRepository.recordAttemptOutcome()`: the attempt outcome row was
+fenced by `attemptId`, but the unit-state mutation was fenced only by
+`unit_id AND status IN ('dispatched', 'failed', 'unresolved')` — no fence
+tying the unit mutation to the CURRENT attempt. That permitted:
+
+```text
+attempt 1 → unresolved → retry → attempt 2 allocated (unit = dispatched)
+→ LATE attempt-1 result arrives → recordAttemptOutcome(attempt 1)
+→ unit = succeeded   ← WRONG: attempt 2 is still executing
+```
+
+which could propagate into the plan-completion check and incorrectly complete
+the delegation plan (a genuine violation of the retry contract, not a
+cosmetic concern).
+
+- **The fix (the attempt-generation fence)**: the unit-state mutation is now
+  ATTEMPT-FENCED — it additionally requires the recorded attempt to BE the
+  unit's current attempt, via
+  `EXISTS (SELECT 1 FROM wfos_delegation_attempts a WHERE a.id = $3 AND
+  a.unit_id = u.id AND a.attempt_no = u.attempt_count)`. The allocation
+  transaction bumps `attempt_count` and inserts that very `attempt_no`
+  atomically under the unit row lock, so the equality identifies exactly one
+  live attempt — the current one. A result for attempt N-1 after a retry
+  allocated attempt N is structurally incapable of changing the unit's
+  current state: the fence rejects it, `recordAttemptOutcome` returns null,
+  and the caller converges on the current row. The late outcome is still
+  recorded on the attempt row itself (per-attempt history stays truthful);
+  only the unit's CURRENT state (and through it the plan-completion check)
+  is owned by the CURRENT attempt. Under READ COMMITTED the fence is also
+  correct in the blocked-then-reevaluated interleaving: PostgreSQL
+  re-evaluates the WHERE (including the EXISTS fence) against the NEW
+  committed row version, so a unit whose current attempt just became N+1
+  rejects a result for attempt N even when the stale recorder's UPDATE was
+  already in flight on a second connection. No schema change was needed —
+  the fence is established inside the durable operation itself, from the
+  existing allocation invariant.
+- **The regression** (`delegation-attempt-generation-race.integration.test.ts`,
+  real PostgreSQL 18, TWO independent connections — mirroring the `75ca9b6`
+  precedent): T1 is the late attempt-1 outcome recorder (the exact production
+  `recordAttemptOutcome` transaction shape, paused between its two
+  statements), T2 is the retry allocation on an independent connection (the
+  production dispatch transaction). T1's unit UPDATE genuinely BLOCKS on
+  T2's row lock (proven by a contention probe — it cannot resolve while T2
+  holds the lock); when T2 commits the retry, the blocked UPDATE
+  re-evaluates against the NEW row version and the fence rejects the stale
+  mutation. All three architect-required directions are covered: stale
+  attempt-1 SUCCESS → unit REMAINS dispatched on attempt 2; stale attempt-1
+  FAILURE → unit REMAINS dispatched on attempt 2; attempt 2 resolves → the
+  unit takes the attempt-2 outcome → the plan may complete (success →
+  plan `completed`; failure → unit `failed` + plan stays `active` and
+  recoverable). A sequential form (through the production repository
+  methods) covers the same contract on BOTH the pglite and real-PG paths.
+- **Discrimination proof**: against the UNFENCED repository (the pre-fix
+  head), all three regression tests FAIL (the unit flips to the stale
+  attempt's outcome exactly as the architect described); with the fence,
+  all three pass.
+- **Static pin**: invariant (k) in the WORK-046 describe block pins the
+  fence in the repository SQL, the same fence inside the regression's
+  mirrored SQL, the contention proof, and the three required scenario
+  titles — the fix is now structurally enforced.
+- **Design scope**: the coordinator's convergence semantics are unchanged
+  (a fenced-away stale record returns null → converge on the current row,
+  exactly as a lost CAS already did); no new state, no new authority, no
+  scheduler, no workflow vocabulary — the delegation design itself is
+  otherwise UNCHANGED.
+- **Verification (this round, real PostgreSQL 18)**: typecheck 0 errors;
+  lint 0 errors (2 pre-existing warnings); static architecture 736/736
+  (+1: the attempt-generation fence invariant); the delegation suites
+  15/15 (11 plans + 3 new race regressions + the round-1 interruption
+  race); development-governance + architecture-governance 90/91 (the 1 =
+  the documented pre-existing merged-finalization pin failure, WORK-052
+  scope, identical on `main`); full real-PG sweep 107 files — 2356 passed /
+  1 failed (the same pre-existing failure); pglite full sweep 2312 passed /
+  44 skipped / 1 failed (the same one); `governance:status` exit 0 and
+  truthful.

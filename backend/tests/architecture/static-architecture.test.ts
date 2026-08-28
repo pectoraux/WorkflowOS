@@ -17115,6 +17115,9 @@ describe('WORK-046 invariants — Multi-Agent Delegation (coordination, not auth
   const TESTS = join(
     BACKEND_ROOT, 'tests', 'integration', 'delegation', 'delegation-plans.integration.test.ts',
   );
+  const DELEGATION_TESTS_DIR = join(BACKEND_ROOT, 'tests', 'integration', 'delegation');
+  // The attempt-generation race regression (architect round-3 correction).
+  const RACE_TESTS = join(DELEGATION_TESTS_DIR, 'delegation-attempt-generation-race.integration.test.ts');
   const APP_TS = join(BACKEND_ROOT, 'src', 'app.ts');
   const WORK_ORDER = join(BACKEND_ROOT, '..', 'spec', 'work-orders', 'WORK-046.md');
 
@@ -17369,5 +17372,32 @@ describe('WORK-046 invariants — Multi-Agent Delegation (coordination, not auth
     // The migration pin advanced (WORK-040's last-migration expectation).
     const staticSelf = readFileSync(join(BACKEND_ROOT, 'tests', 'architecture', 'static-architecture.test.ts'), 'utf8');
     expect(staticSelf).toMatch(/the last migration is the WORK-046 delegation coordination ledger 0057/);
+  });
+
+  // --- (k) the attempt-generation fence (architect round-3 correction) ---------
+
+  it('the unit-state mutation in recordAttemptOutcome is ATTEMPT-FENCED — a stale attempt-N result cannot change a unit whose current attempt is N+1 (the retry contract)', () => {
+    const repoCode = stripCodeComments(readFileSync(REPO, 'utf8'));
+    // THE FENCE: the unit mutation is additionally fenced on the recorded
+    // attempt BEING the unit's current attempt (attempt_no = attempt_count —
+    // the allocation invariant). Without it, a late result for a superseded
+    // attempt could flip the unit (and through it the plan-completion check)
+    // while the retry's attempt was still executing.
+    expect(repoCode).toMatch(/AND EXISTS \(\s*SELECT 1\s*FROM wfos_delegation_attempts a\s*WHERE a\.id = \$3\s*AND a\.unit_id = u\.id\s*AND a\.attempt_no = u\.attempt_count\s*\)/);
+    // The guarded status CAS stays (terminal unit states are never rewritten).
+    expect(repoCode).toMatch(/u\.status IN \('dispatched', 'failed', 'unresolved'\)/);
+    // The regression: the two-actor race file carries the SAME fence in its
+    // mirrored production SQL (the blocked-then-reevaluated interleaving).
+    const race = readFileSync(RACE_TESTS, 'utf8');
+    expect(race).toMatch(/a\.attempt_no = u\.attempt_count/);
+    expect(race).toMatch(/FOR UPDATE/);
+    expect(race).toMatch(/still-blocked/); // the proof of contention
+    // The architect's three required scenarios, by title.
+    expect(race).toMatch(/stale attempt 1 SUCCESS: the unit REMAINS dispatched on attempt 2/);
+    expect(race).toMatch(/stale attempt 1 FAILURE: the unit REMAINS dispatched on attempt 2/);
+    expect(race).toMatch(/attempt 2 resolves → the unit takes the attempt-2 outcome → the plan may complete/);
+    // The interruption race guard regression stays pinned (round-1).
+    expect(readFileSync(join(DELEGATION_TESTS_DIR, 'delegation-interruption-race.integration.test.ts'), 'utf8'))
+      .toMatch(/rejects a stale dispatch after interruption/);
   });
 });

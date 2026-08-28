@@ -458,7 +458,12 @@ export class DefaultDelegationCoordinator implements DelegationCoordinator {
         return driveResultFromUnit(unitRowToUnit(updated), executionId, action);
       }
     }
-    // A concurrent driver recorded the outcome first — converge on the row.
+    // The fenced mutation did not fire. Two honest causes: a concurrent
+    // driver recorded THIS attempt's outcome first (the status CAS lost), or
+    // a retry SUPERSEDED this attempt (the attempt-generation fence in
+    // recordAttemptOutcome rejected a stale result — the unit's current state
+    // is owned by the newer attempt). Either way THIS attempt no longer owns
+    // the unit's current state — converge on the row.
     const fresh = await this.repo.findUnitById(unit.id);
     return driveResultFromUnit(fresh ?? unit, executionId, 'converged');
   }
