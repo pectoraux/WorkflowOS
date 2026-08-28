@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "derived-dependency-state",
+  "sourceOfTruth": "spec/dependency-graph.md + spec/development-state/program-state.json",
+  "computedAt": "2026-08-28",
+  "rules": {
+    "eligible": "all declared dependencies are complete",
+    "parallelEligible": "eligible AND no uncoordinated protected-surface overlap",
+    "blocked": "one or more dependencies are not complete",
+    "staleState": "dependency graph and program state disagree; fail closed and require architect reconciliation"
+  },
+  "futureGeneration": {
+    "WORK-053": ["WORK-046", "WORK-051", "WORK-052"],
+    "WORK-054": ["WORK-039", "WORK-053"],
+    "WORK-055": ["WORK-053", "WORK-054"],
+    "WORK-056": ["WORK-039", "WORK-041", "WORK-054"],
+    "WORK-057": ["WORK-053", "WORK-054", "WORK-046", "WORK-047"],
+    "WORK-058": ["WORK-053", "WORK-055", "WORK-046", "WORK-051", "WORK-052"],
+    "WORK-059": ["WORK-055", "WORK-056", "WORK-058", "WORK-019"],
+    "WORK-060": ["WORK-055", "WORK-056", "WORK-058", "WORK-059", "WORK-005"],
+    "WORK-061": ["WORK-057", "WORK-058", "WORK-059", "WORK-060", "WORK-047", "WORK-050"]
+  }
+}
