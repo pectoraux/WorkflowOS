@@ -188,6 +188,21 @@ export class DefaultDevelopmentGovernanceService implements DevelopmentGovernanc
   getFrontier(): FrontierView {
     const inFlight = this.listWorkOrders({ status: 'in_flight' }).map((w) => {
       const incomplete = this.incompleteDependencies(w);
+      const conflicts = this.inFlightConflicts(w);
+      // TRUTHFUL coordination (the PR #62 round-1 review, BLOCKER 2): an item
+      // is coordinated ONLY when EVERY reported in-flight conflict is MUTUALLY
+      // coordinated AND every incomplete dependency is covered by mutual
+      // coordination — never the mere presence of a coordination record.
+      // (Within validated state the coverage/mutuality invariants are already
+      // enforced; this computes the fact from the record, not the assumption.)
+      const depsCoordinated = incomplete.every((d) => {
+        const dep = this.byId.get(d);
+        return (
+          (w.coordination?.with ?? []).includes(d) &&
+          (dep?.coordination?.with ?? []).includes(w.id)
+        );
+      });
+      const coordinated = conflicts.every((c) => c.coordinated) && depsCoordinated;
       return {
         id: w.id,
         title: w.title,
@@ -195,9 +210,9 @@ export class DefaultDevelopmentGovernanceService implements DevelopmentGovernanc
         pr: w.pr ?? null,
         head: w.head ?? null,
         assuranceProfile: w.assuranceProfile ?? this.profileFor(w),
-        coordinated: incomplete.length === 0 || Boolean(w.coordination),
+        coordinated,
         incompleteDependencies: incomplete,
-        conflicts: this.inFlightConflicts(w),
+        conflicts,
       };
     });
 

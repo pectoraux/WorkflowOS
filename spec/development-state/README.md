@@ -40,11 +40,19 @@ module remains the per-project ADR/authority; this directory is the self-hosting
    checkpoint kinds, proof classes.
 3. The work-order dependency DAG is acyclic and references known Work Orders only.
 4. `complete` records carry merge evidence (`pr` + `mergeCommit`); `in_flight` records
-   carry a branch (and a PR number once opened).
-5. The self-hosting boundary contains the code-pinned core prohibitions (ADR-0004).
-6. Each assurance profile's requirements dominate the WORK-051 impact/checkpoint matrix
+   carry a branch (and a PR number once opened) and NO merge evidence — the explicit
+   merge-vs-checkpoint rule: the architect's merge is the ONLY completion event, and
+   checkpoint outcomes are implementer claims recorded only on started (`in_flight` /
+   `complete`) items; they never substitute the merge (code-pinned, PR #62 round 1).
+5. Coordination records are MUTUAL and COVERING: a coordination reference between two
+   in-flight work orders appears on BOTH records (one-sided declarations are invalid
+   state), an in-flight start over incomplete dependencies coordinates with THOSE
+   dependencies, and references point at started (in-flight) or merged (complete) work
+   orders only (PR #62 round 1).
+6. The self-hosting boundary contains the code-pinned core prohibitions (ADR-0004).
+7. Each assurance profile's requirements dominate the WORK-051 impact/checkpoint matrix
    at the corresponding impact level (ADR-0002) — assurance adds depth, never subtracts.
-7. Every checkpoint contract's enforcement references exist in the repository.
+8. Every checkpoint contract's enforcement references exist in the repository.
 
 A repository whose development state violates any invariant is NOT a valid governed
 state: the control plane refuses to serve it, and the `governance-manifest` checkpoint

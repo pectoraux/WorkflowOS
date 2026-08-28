@@ -157,8 +157,14 @@ integration test against the REAL repository artifacts + the `governance:status`
 The loader rejects: schema drift, cyclic dependency DAG, unknown dependency references,
 unknown status/assurance vocabulary, weakened self-hosting boundary (missing core
 prohibitions), weakened assurance requirement matrix, unknown detector kinds, a `complete`
-work order without merge evidence, and checkpoint contracts whose enforcement references
-do not exist in the repository. Evidence: discrimination tests (each mutation rejected).
+work order without merge evidence, a `in_flight` work order carrying merge evidence
+(merged-but-in-flight), checkpoint outcomes on unstarted (`pending`/`blocked`) items, a
+weakened or missing merge-vs-checkpoint completion rule, ONE-SIDED coordination (a
+coordination reference between two in-flight work orders not reciprocated), a
+coordination record that does not cover the incomplete dependencies it started over,
+coordination references to unstarted work orders, and checkpoint contracts whose
+enforcement references do not exist in the repository. Evidence: discrimination tests
+(each mutation rejected).
 
 ### W052-AC03 — Parallel dependency eligibility
 

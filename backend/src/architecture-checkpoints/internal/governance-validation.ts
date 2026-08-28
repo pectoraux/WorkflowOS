@@ -143,6 +143,22 @@ export const CORE_SELF_HOSTING_PROHIBITIONS: readonly string[] = [
 ];
 
 /**
+ * The code-pinned completion rule (the PR #62 round-1 review, BLOCKER 3):
+ * the architect's MERGE is the ONLY completion event. Checkpoint outcomes are
+ * implementer-recorded claims that support the PR review; they never
+ * transition status and never substitute the merge. The artifact's
+ * `completionRule` must match these pinned essentials — weakening the rule in
+ * governance-model.json is a validation failure, not a silent policy change.
+ */
+export const CODE_PINNED_COMPLETION_RULE: Readonly<{
+  completionEvent: 'architect-merge';
+  outcomesAllowedOn: readonly string[];
+}> = {
+  completionEvent: 'architect-merge',
+  outcomesAllowedOn: ['in_flight', 'complete'],
+};
+
+/**
  * The code-pinned assurance minimums (ADR-0002): every profile's declared
  * requirements must be a SUPERSET of these. These minimums are themselves the
  * dominance floor over the WORK-051 impact/checkpoint matrix (each profile
@@ -260,6 +276,15 @@ export interface GovernanceModel {
   };
   checkpointContracts: CheckpointContract[];
   selfHostingBoundary: SelfHostingBoundary;
+  /** The explicit merge-vs-checkpoint completion rule (the PR #62 round-1 review, BLOCKER 3). */
+  completionRule: {
+    completionEvent: string;
+    rule: string;
+    checkpointOutcomesAre: string;
+    inFlightInvariant: string;
+    outcomesAllowedOn: string[];
+    historicalNote?: string;
+  };
   parallelProtocol: { authority: string; rules: string[]; surfaceKinds: string[] };
   feedbackOrigins: FeedbackOrigin[];
   feedbackRule: string;
@@ -445,7 +470,7 @@ export async function validateGovernanceState(
 
   if (model && typeof model === 'object') knownKeys(model, [
     '$schema', 'schemaVersion', 'artifact', 'authority', 'engineeringControlLoop', 'assuranceProfiles',
-    'checkpointContracts', 'selfHostingBoundary', 'parallelProtocol', 'feedbackOrigins',
+    'checkpointContracts', 'selfHostingBoundary', 'completionRule', 'parallelProtocol', 'feedbackOrigins',
     'feedbackRule', 'authorityMap', 'detector',
   ], 'governance-model', violations);
 
@@ -677,6 +702,14 @@ export async function validateGovernanceState(
   const protocol = model.parallelProtocol;
   if (!protocol || !isStringArray(protocol.rules) || protocol.rules.length < 6) {
     violations.push('parallelProtocol: at least 6 rules required (one Work Item per branch/PR; dependency eligibility; conflict detection; scope integrity; centralized decisions; merge gate)');
+  } else {
+    // MUTUALITY is part of the protocol itself (the PR #62 round-1 review):
+    // a declared coordination between two in-flight work orders appears on
+    // BOTH records — one-sided declarations are invalid state.
+    const declaresMutuality = protocol.rules.some((r) => /mutual|both records|one-sided/i.test(r));
+    if (!declaresMutuality) {
+      violations.push('parallelProtocol.rules: the mutuality rule is REQUIRED (a declared coordination between two in-flight work orders appears on both records; one-sided declarations are invalid state — the PR #62 round-1 review, BLOCKER 1)');
+    }
   }
   if (!isStringArray(model.feedbackOrigins) || model.feedbackOrigins.length === 0) {
     violations.push('feedbackOrigins: non-empty vocabulary required');
@@ -689,6 +722,32 @@ export async function validateGovernanceState(
     violations.push('authorityMap: non-empty required');
   }
   if (model.detector?.kind !== 'governance-manifest') violations.push('detector.kind must be "governance-manifest"');
+
+  // --- (8b) the explicit merge-vs-checkpoint completion rule -----------------
+  // The architect's MERGE is the ONLY completion event; checkpoint outcomes
+  // are implementer claims (the PR #62 round-1 review, BLOCKER 3). The
+  // artifact must declare the rule AND match the code-pinned essentials.
+  const completion = model.completionRule;
+  if (!completion || typeof completion !== 'object') {
+    violations.push('completionRule: REQUIRED — the merge-vs-checkpoint completion rule must be explicit machine-readable state (the PR #62 round-1 review, BLOCKER 3)');
+  } else {
+    knownKeys(completion, ['completionEvent', 'rule', 'checkpointOutcomesAre', 'inFlightInvariant', 'outcomesAllowedOn', 'historicalNote'], 'completionRule', violations);
+    if (completion.completionEvent !== CODE_PINNED_COMPLETION_RULE.completionEvent) {
+      violations.push(`completionRule.completionEvent must be "${CODE_PINNED_COMPLETION_RULE.completionEvent}" (got ${JSON.stringify(completion.completionEvent)}) — the architect's merge is the ONLY completion event; checkpoint outcomes must NEVER complete a work order (the code-pinned rule was weakened)`);
+    }
+    if (!isNonEmptyString(completion.rule) || !/mergedAs/.test(completion.rule ?? '')) {
+      violations.push('completionRule.rule must state the mergedAs merge-evidence requirement');
+    }
+    if (!isNonEmptyString(completion.checkpointOutcomesAre) || !/claim/i.test(completion.checkpointOutcomesAre ?? '')) {
+      violations.push('completionRule.checkpointOutcomesAre must state that checkpoint outcomes are implementer CLAIMS (never a substitute for the merge)');
+    }
+    if (!isNonEmptyString(completion.inFlightInvariant)) {
+      violations.push('completionRule.inFlightInvariant required');
+    }
+    if (!isStringArray(completion.outcomesAllowedOn) || completion.outcomesAllowedOn.length !== CODE_PINNED_COMPLETION_RULE.outcomesAllowedOn.length || !CODE_PINNED_COMPLETION_RULE.outcomesAllowedOn.every((s, i) => completion.outcomesAllowedOn[i] === s)) {
+      violations.push(`completionRule.outcomesAllowedOn must be exactly [${CODE_PINNED_COMPLETION_RULE.outcomesAllowedOn.join(', ')}] — widening where implementer claims may be recorded weakens the merge-vs-checkpoint separation`);
+    }
+  }
 
   // --- (9) the program state -------------------------------------------------
   if (program && typeof program === 'object') knownKeys(program, ['$schema', 'schemaVersion', 'artifact', 'protocol', 'asOf', 'governing', 'workOrders', 'resumption', 'decisions'], 'program-state', violations);
@@ -767,23 +826,61 @@ export async function validateGovernanceState(
         }
       }
 
-      // Coordination is mandatory for an in-flight start over incomplete deps.
+      // Coordination contract (ADR-0003 + the PR #62 round-1 review, BLOCKER 1):
+      //   COVERAGE  — an in-flight item with incomplete dependencies must carry
+      //               an explicit coordination record covering EVERY incomplete
+      //               dependency (coordinating with someone else is not
+      //               coordinating with the dependency you started over).
+      //   MUTUALITY — a coordination reference to another IN-FLIGHT work order
+      //               must be reciprocated on that work order's record:
+      //               ONE-SIDED coordination is invalid state, never accepted.
+      //   LIVENESS  — a coordination reference to a pending/blocked work order
+      //               is incoherent (nothing started to coordinate with).
+      //   HISTORY   — references to COMPLETE work orders are durable history
+      //               (the coordination happened; the partner has since
+      //               merged) and are exempt from mutuality.
       if (w.status === 'in_flight') {
-        const incomplete = (w.dependencies ?? []).filter((d) => byId.get(d)?.status !== 'complete' && d);
-        // (unknown deps reported below once the map is complete)
-        const declaredIncomplete = (w.dependencies ?? []).filter((d) => orders.some((o) => o.id === d && o.status !== 'complete'));
+        const declaredIncomplete = (w.dependencies ?? []).filter(
+          (d) => orders.some((o) => o.id === d && o.status !== 'complete'),
+        );
+        const coordination = w.coordination;
         if (declaredIncomplete.length > 0) {
-          const coordination = w.coordination;
           if (!coordination || !isStringArray(coordination.with) || coordination.with.length === 0 || !isNonEmptyString(coordination.reason)) {
             violations.push(`workOrders[${w.id}]: in_flight while dependencies are incomplete ([${declaredIncomplete.join(', ')}]) REQUIRES an explicit coordination record (with + reason) — uncoordinated parallel starts are exactly what this protocol exists to prevent`);
           } else {
-            for (const other of coordination.with) {
-              const rec = orders.find((o) => o.id === other);
-              if (!rec || rec.status !== 'in_flight') violations.push(`workOrders[${w.id}].coordination.with: "${other}" is not an in-flight work order`);
+            for (const dep of declaredIncomplete) {
+              if (!coordination.with.includes(dep)) {
+                violations.push(`workOrders[${w.id}].coordination: incomplete dependency "${dep}" is NOT covered by the coordination record (with: [${coordination.with.join(', ')}]) — a start over an incomplete dependency must coordinate with THAT dependency`);
+              }
             }
           }
         }
-        void incomplete;
+        if (coordination && isStringArray(coordination.with)) {
+          for (const other of coordination.with) {
+            const rec = orders.find((o) => o.id === other);
+            if (!rec) {
+              violations.push(`workOrders[${w.id}].coordination.with: unknown work order "${other}"`);
+            } else if (rec.status === 'pending' || rec.status === 'blocked') {
+              violations.push(`workOrders[${w.id}].coordination.with: "${other}" is ${rec.status} — coordination references started (in_flight) or merged (complete) work orders only`);
+            } else if (rec.status === 'in_flight') {
+              const reciprocal = rec.coordination?.with;
+              if (!isStringArray(reciprocal) || !reciprocal.includes(w.id)) {
+                violations.push(`workOrders[${w.id}].coordination.with: the coordination with "${other}" is ONE-SIDED — "${other}" does not declare coordination with ${w.id} (coordination is mutual or it is not coordination; the PR #62 round-1 review, BLOCKER 1)`);
+              }
+            }
+          }
+        }
+      }
+
+      // The explicit merge-vs-checkpoint completion rule (the PR #62 round-1
+      // review, BLOCKER 3): the architect's MERGE is the ONLY completion
+      // event; checkpoint outcomes are implementer claims that support the
+      // review but never substitute the merge.
+      if (w.status === 'in_flight' && w.mergedAs) {
+        violations.push(`workOrders[${w.id}]: status "in_flight" MUST NOT carry merge evidence (mergedAs) — the merge is the completion event; merged-but-in-flight is a lie about the merge (the explicit merge-vs-checkpoint rule)`);
+      }
+      if ((w.status === 'pending' || w.status === 'blocked') && w.checkpointOutcomes && w.checkpointOutcomes.length > 0) {
+        violations.push(`workOrders[${w.id}]: checkpointOutcomes are implementer claims about a STARTED implementation — status "${w.status}" carries none (the explicit merge-vs-checkpoint rule)`);
       }
 
       for (const outcome of w.checkpointOutcomes ?? []) {

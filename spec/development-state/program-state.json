@@ -941,12 +941,13 @@
       "runtimeImpactBinding": "high",
       "coordination": {
         "with": [
-          "WORK-051"
+          "WORK-051",
+          "WORK-052"
         ],
-        "reason": "shares the static-architecture suite and composition-root surfaces with the in-flight WORK-051; migration numbering coordinated by reservation (0052-0056 WORK-051, 0057 WORK-046) so both merge orders stay clean",
+        "reason": "shares the static-architecture suite and composition-root surfaces with the (now merged) WORK-051 — coordinated by reserved migration numbering (0052-0056 WORK-051, 0057 WORK-046); ALSO shares the static-architecture suite with the in-flight WORK-052 (both append describe blocks to the same file) — merge order is serialized by the architect: whichever PR merges second rebases its describe-block additions",
         "adrs": []
       },
-      "note": "implementation complete at head f88cac4; all 7 CI workflows green; awaiting architect review of PR #60"
+      "note": "implementation complete at head f88cac4; all 7 CI workflows green; awaiting architect review of PR #60. WORK-051 (the other shared-surface partner) has since MERGED as f2c996c — the coordination record is durable history for that side and MUTUAL coordination with the in-flight WORK-052."
     },
     {
       "id": "WORK-047",
@@ -1055,7 +1056,7 @@
     {
       "id": "WORK-051",
       "title": "Architecture Governance and Checkpoints",
-      "status": "in_flight",
+      "status": "complete",
       "dependencies": [
         "WORK-005",
         "WORK-008",
@@ -1120,7 +1121,11 @@
           "docs/adr/ADR-0005-work-052-base-branch.md"
         ]
       },
-      "note": "round-4 remediation complete at head a25eeef; all 7 CI workflows green on the latest attempt; awaiting architect round-4 re-review of PR #52"
+      "note": "Merged by the architect as f2c996c (PR #52, head a25eeef, round-4 remediation). branch/pr/head kept as the historical record of how it merged; the coordination record is durable history (WORK-046 shared surfaces were coordinated by reserved migration numbering; WORK-052 branched from this work item per ADR-0005).",
+      "mergedAs": {
+        "pr": 52,
+        "mergeCommit": "f2c996c"
+      }
     },
     {
       "id": "WORK-052",
@@ -1173,9 +1178,10 @@
       "runtimeImpactBinding": "high",
       "coordination": {
         "with": [
-          "WORK-051"
+          "WORK-051",
+          "WORK-046"
         ],
-        "reason": "WORK-052 builds on the WORK-051 checkpoint substrate (Issue #61: 'Build on the already merged WORK-038 through WORK-051 foundations'); the branch is created from the WORK-051 head and merges main — see ADR-0005. The detector-registry advance (6→7) extends a WORK-051-owned closed set — see ADR-0006.",
+        "reason": "branched from the (now merged) WORK-051 head per Issue #61 and ADR-0005 — that side is durable history after the f2c996c merge; ALSO shares the static-architecture suite and the development-governance artifacts with the in-flight WORK-046 (both append describe blocks to backend/tests/architecture/static-architecture.test.ts) — merge order serialized by the architect, second-to-merge rebases",
         "adrs": [
           "docs/adr/ADR-0005-work-052-base-branch.md",
           "docs/adr/ADR-0006-governance-manifest-detector.md"
@@ -1299,49 +1305,38 @@
           "at": "2026-08-28T11:26:35Z"
         }
       ],
-      "note": "implementation complete on feat/work-052-development-governance; awaiting architect review of the implementation PR; DO NOT MERGE without architect approval",
+      "note": "implementation + PR #62 round-1 remediation (mutual coordination enforced by the validator; the truthful frontier; the explicit merge-vs-checkpoint completion rule) on feat/work-052-development-governance; all dependencies satisfied since the WORK-051 merge (f2c996c); the round-1 commit is LOCAL — the push is pending a re-provisioned GitHub credential in the implementation sandbox (the sandbox was reset and lost its token); DO NOT MERGE without architect approval",
       "pr": 62,
-      "head": "44765ca"
+      "head": "8f10f2c"
     }
   ],
   "resumption": {
     "protocol": "On conversation loss, a fresh agent reads spec/work-orders/<ID>.md + this file + the ADRs, then continues from the handoff record of its Work Order. Handoff records are updated on the work item's own branch as work progresses (repository-resident, no chat dependency).",
     "activeHandoffs": [
       {
-        "workOrderId": "WORK-051",
-        "lastVerifiedState": "Round-4 remediation complete at head a25eeef on branch feat/work-051-architecture-governance-checkpoints (PR #52): SecretStore credential authority, unified durable adoption identity (migration 0056), commit-SHA validation on convergence, fail-closed replay reconstruction, corrected PR description. All 7 CI workflows green on the first attempt; static 695/695; full real-PG sweep green (one documented pre-existing intermittency).",
-        "nextSteps": [
-          "architect re-reviews PR #52 at head a25eeef against the round-3 findings",
-          "if changes requested: remediate on the same branch following the review scope",
-          "if approved: architect merges PR #52; then record merge evidence here and set status complete"
-        ],
-        "blockers": [],
-        "recordedAt": "2026-08-28T08:00:00Z",
-        "recordedBy": "z.ai implementation agent (WORK-051 round 4)"
-      },
-      {
         "workOrderId": "WORK-046",
         "lastVerifiedState": "Implementation complete at head f88cac4 on branch feat/work-046-multi-agent-delegation (PR #60): provider-neutral delegation coordination over the existing execution boundary; migration 0057 (0052-0056 reserved for WORK-051); six real-PG two-actor regressions green; all 7 CI workflows green on the first attempt.",
         "nextSteps": [
-          "architect reviews PR #60",
+          "architect reviews PR #60 (the static-suite shared-surface partner WORK-051 has since merged — the coordination record documents the reserved numbering)",
           "if changes requested: remediate on the same branch",
-          "if approved: architect merges PR #60; record merge evidence; WORK-047 becomes eligible once also complete"
+          "if approved: architect merges PR #60; record mergedAs and set status complete; WORK-047 becomes eligible once also complete"
         ],
         "blockers": [],
-        "recordedAt": "2026-08-28T09:00:00Z",
+        "recordedAt": "2026-08-28T12:28:04Z",
         "recordedBy": "z.ai implementation agent (WORK-046)"
       },
       {
         "workOrderId": "WORK-052",
-        "lastVerifiedState": "Implementation complete: design package (§34 + lock forward-evolution invariants + design doc + ADRs 0001-0006), machine-readable canonical state (governance-model.json + program-state.json + README authority declaration), the development-governance control plane (loader + fail-closed validation + frontier/parallel/assurance/resumption queries + governance:status CLI), the governance-manifest detector (registry 6->7 per ADR-0006), 14 new static invariants + 40 new integration tests. Verification: typecheck 0; lint 0 errors (2 pre-existing warnings); static 721/721; real PostgreSQL 18 full sweep 2304/2304 (103 files); pglite 2260 passed/44 skipped.",
+        "lastVerifiedState": "PR #62 round-1 remediation complete: the coordination contract is MUTUAL + covering (one-sided declarations are invalid state — validator-enforced), getFrontier reports TRUTHFUL coordination (every conflict mutually coordinated and every incomplete dep covered — never the mere presence of a record), and the merge-vs-checkpoint completion rule is explicit machine-readable state (completionEvent architect-merge, code-pinned: checkpoint outcomes are implementer claims that never substitute the merge; in_flight carries no mergedAs; outcomes only on started items). WORK-051 merged as f2c996c — all WORK-052 dependencies satisfied; the branch is current against main. The round-1 remediation commit is LOCAL on the branch (verified: real PostgreSQL 18 full sweep 103 files 2315/2315; static 722/722; typecheck/lint clean) — PUSH PENDING: the reset sandbox lost its GitHub token; a re-provisioned GH_TOKEN is required to push and update PR #62.",
         "nextSteps": [
-          "architect reviews the WORK-052 implementation PR against Issue #61 and the acceptance criteria W052-AC01..AC10",
-          "if changes requested: remediate on the same branch following the review scope",
-          "if approved: architect merges the PR; record merge evidence in program-state.json; WORK-052 becomes complete and the frontier advances"
+          "re-provision the GitHub credential in the implementation sandbox and PUSH the round-1 commit to feat/work-052-development-governance",
+          "update the PR #62 description head reference and post the round-1 remediation report (finding -> correction -> proof)",
+          "architect re-reviews PR #62 (round 2) against the three round-1 findings + the HIGH",
+          "if approved: architect merges PR #62; record mergedAs (pr 62 + the main merge commit) and set status complete — the merge is the completion event"
         ],
         "blockers": [],
-        "recordedAt": "2026-08-28T11:26:35Z",
-        "recordedBy": "z.ai implementation agent (WORK-052)"
+        "recordedAt": "2026-08-28T12:28:04Z",
+        "recordedBy": "z.ai implementation agent (WORK-052 round 1)"
       }
     ]
   },

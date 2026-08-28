@@ -16863,6 +16863,39 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(cli).not.toMatch(/readFileSync|readdirSync/);
   });
 
+  // --- (6b) the explicit merge-vs-checkpoint completion rule (PR #62 round 1) --
+
+  it('the merge-vs-checkpoint completion rule is explicit, code-pinned, and enforced (PR #62 round 1, BLOCKER 3)', () => {
+    // The code-pinned rule exists in the shared engine.
+    const engine = readFileSync(AC_VALIDATION, 'utf8');
+    expect(engine).toMatch(/CODE_PINNED_COMPLETION_RULE/);
+    expect(engine).toMatch(/completionEvent: 'architect-merge'/);
+    // The enforcement: in_flight + mergedAs is rejected; outcomes on unstarted items are rejected.
+    expect(engine).toMatch(/MUST NOT carry merge evidence/);
+    expect(engine).toMatch(/claims about a STARTED implementation/);
+    // The mutuality + coverage enforcement (BLOCKER 1).
+    expect(engine).toMatch(/ONE-SIDED/);
+    expect(engine).toMatch(/is NOT covered by the coordination record/);
+    // The model artifact carries the explicit rule and the mutuality protocol rule.
+    const model = JSON.parse(readFileSync(GOV_MODEL, 'utf8')) as {
+      completionRule: { completionEvent: string; rule: string; checkpointOutcomesAre: string; outcomesAllowedOn: string[] };
+      parallelProtocol: { rules: string[] };
+    };
+    expect(model.completionRule.completionEvent).toBe('architect-merge');
+    expect(model.completionRule.rule).toMatch(/mergedAs/);
+    expect(model.completionRule.checkpointOutcomesAre).toMatch(/claim/i);
+    expect(model.completionRule.outcomesAllowedOn).toEqual(['in_flight', 'complete']);
+    expect(
+      model.parallelProtocol.rules.some((r) => /MUTUAL|both records/i.test(r)),
+      'the protocol declares the mutuality rule',
+    ).toBe(true);
+    // The frontier computes the coordination FACT (BLOCKER 2), never the mere
+    // presence of a record: the truthful computation is pinned in the service.
+    const service = stripW52(readFileSync(DG_SERVICE, 'utf8'));
+    expect(service).toMatch(/const coordinated = conflicts\.every\(\(c\) => c\.coordinated\) && depsCoordinated;/);
+    expect(service).not.toMatch(/coordinated: incomplete\.length === 0 \|\| Boolean\(w\.coordination\)/);
+  });
+
   // --- (7) mandatory regression coverage (the executable proof contract) ------
 
   it('the WORK-052 integration suites carry the mandated regression markers', () => {
@@ -16878,6 +16911,15 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(state).toMatch(/W052-AC02 — DISCRIMINATION: a weakened CRITICAL assurance matrix is REJECTED/);
     expect(state).toMatch(/W052-AC02 — DISCRIMINATION: an enforcement reference to a missing file is REJECTED/);
     expect(state).toMatch(/W052-AC02 — DISCRIMINATION: schema drift \(unknown field\) is REJECTED/);
+    // PR #62 round-1 findings — the architect's three blockers.
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 1\): ONE-SIDED coordination is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 1\): a coordination record that does NOT cover the incomplete dependencies is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 1\): coordination referencing an UNSTARTED work order is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 3\): an in_flight work order carrying MERGE EVIDENCE is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 3\): checkpoint outcomes on an UNSTARTED \(pending\) work order are REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 3\): a WEAKENED completion rule \(checkpoint outcomes completing work\) is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — DISCRIMINATION \(PR #62 round 1, BLOCKER 3\): a MISSING completion rule is REJECTED/);
+    expect(state).toMatch(/W052-AC02 — the merge-vs-checkpoint rule is POSITIVE: all outcomes evidenced but NOT merged stays in_flight/);
     expect(state).toMatch(/W052-AC07 — crash\/restart\/resume: a fresh control-plane instance reconstructs the resumption view/);
     expect(state).toMatch(/W052-AC07 — resuming a work order with no handoff record fails closed/);
     const parallel = readFileSync(DG_PARALLEL_TESTS, 'utf8');
@@ -16889,6 +16931,9 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(parallel).toMatch(/W052-AC04 — the selected profile deterministically alters checkpoint\/evidence requirements/);
     expect(parallel).toMatch(/W052-AC04 — profile requirements DOMINATE the WORK-051 impact\/checkpoint matrix/);
     expect(parallel).toMatch(/W052-AC04 — unknown\/unclassified surfaces fail closed to the HIGH_ASSURANCE floor/);
+    expect(parallel).toMatch(/W052-AC03 \/ PR #62 round 1 BLOCKER 2 — the frontier reports TRUTHFUL coordination/);
+    expect(parallel).toMatch(/W052-AC03 \/ PR #62 round 1 BLOCKER 2 — a MUTUALLY declared coordination flips the frontier flags to true/);
+    expect(parallel).toMatch(/W052-AC03 \/ PR #62 round 1 BLOCKER 2 — the frontier dependency-coordination flag is truthful/);
     const detectorTests = readFileSync(DG_DETECTOR_TESTS, 'utf8');
     expect(detectorTests).toMatch(/WORK-052 — the governance-manifest detector \(self-hosting boundary at the checkpoint substrate\)/);
     expect(detectorTests).toMatch(/W052-AC09 — a valid governance manifest at the bound revision PASSES with durable \/verification evidence/);

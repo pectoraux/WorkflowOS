@@ -87,6 +87,7 @@ export {
   CONTROL_LOOP_STAGES,
   CORE_SELF_HOSTING_PROHIBITIONS,
   CODE_PINNED_PROFILE_MINIMUMS,
+  CODE_PINNED_COMPLETION_RULE,
   selectAssuranceProfile,
 } from '../architecture-checkpoints/index.js';
 

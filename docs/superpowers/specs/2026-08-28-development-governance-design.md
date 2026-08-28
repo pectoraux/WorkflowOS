@@ -82,11 +82,17 @@ Two machine-readable artifacts under `spec/development-state/` (authority declar
   outcomes, feedback origin, and handoff/resumption records.
 
 The invariants the loader enforces (fail-closed): schema match; closed vocabularies;
-acyclic dependency DAG over known Work Orders; monotonic, evidence-backed status
-(`complete` requires merge evidence); boundary integrity against code-pinned core
-prohibitions; assurance matrix integrity (each profile's requirements dominate the
-WORK-051 impact/checkpoint matrix — never weaker); every checkpoint contract's
-enforcement references exist in the repository.
+acyclic dependency DAG over known Work Orders; monotonic, evidence-backed status under
+the EXPLICIT merge-vs-checkpoint completion rule — the architect's merge (`mergedAs`:
+pr + mergeCommit) is the ONLY completion event, checkpoint outcomes are
+implementer-recorded claims that never substitute the merge, an `in_flight` record
+carries a branch and NO merge evidence, and outcomes are recorded only on started
+items; coordination records are MUTUAL (one-sided declarations are invalid state) and
+COVERING (an in-flight start over incomplete dependencies coordinates with those
+dependencies); boundary integrity against code-pinned core prohibitions; assurance
+matrix integrity (each profile's requirements dominate the WORK-051 impact/checkpoint
+matrix — never weaker); every checkpoint contract's enforcement references exist in
+the repository.
 
 ## 6. Parallel implementation protocol
 

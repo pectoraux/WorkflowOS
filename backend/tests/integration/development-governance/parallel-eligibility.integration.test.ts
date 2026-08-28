@@ -169,22 +169,112 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     expect(pair.sharedSurfaces.length).toBeGreaterThan(0);
   });
 
-  it('W052-AC03 — the real program state: WORK-046/WORK-051/WORK-052 shared-surface conflicts are reported and coordinated', () => {
-    const report = realService.evaluateParallelEligibility(['WORK-046', 'WORK-051', 'WORK-052']);
-    // WORK-052 ↔ WORK-051: the detector registry + static suite are shared, coordinated via ADR-0005/0006.
-    const pair52_51 = report.pairwise.find(
-      (p) => (p.a === 'WORK-052' && p.b === 'WORK-051') || (p.a === 'WORK-051' && p.b === 'WORK-052'),
-    )!;
-    expect(pair52_51.parallelSafe).toBe(false);
-    expect(pair52_51.sharedSurfaces.some((s) => s.value.includes('detector-registry.ts'))).toBe(true);
-    expect(pair52_51.coordinated).toBe(true);
-    // WORK-052's dependency on the in-flight WORK-051 is explicit + coordinated.
+  it('W052-AC03 — the real program state: the WORK-046/WORK-052 shared-surface conflict is reported and MUTUALLY coordinated (PR #62 round 1)', () => {
+    const report = realService.evaluateParallelEligibility(['WORK-046', 'WORK-052']);
+    // The two in-flight items share the static-architecture suite — the
+    // conflict is REPORTED (never a silent pass) and MUTUALLY coordinated.
+    const pair = report.pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.sharedSurfaces.some((s) => s.value.includes('static-architecture.test.ts'))).toBe(true);
+    expect(pair.coordinated, 'the coordination is declared on BOTH records').toBe(true);
+    // WORK-052's dependency on WORK-051 is SATISFIED since the f2c996c merge.
     const a052 = report.assessments.find((a) => a.workOrderId === 'WORK-052')!;
-    expect(a052.dependencyEligible).toBe(false);
-    expect(a052.unsatisfiedDependencies).toEqual(['WORK-051']);
-    // The conflict facts are still REPORTED even when coordinated — the
-    // architect sees the shared surfaces, not a silent pass.
+    expect(a052.dependencyEligible).toBe(true);
+    expect(a052.unsatisfiedDependencies).toEqual([]);
+    // The conflict facts are still REPORTED even when coordinated.
     expect(a052.conflictsWith.length).toBeGreaterThan(0);
+    expect(a052.conflictsWith[0]!.workOrderId).toBe('WORK-046');
+    expect(a052.conflictsWith[0]!.coordinated).toBe(true);
+  });
+
+  it('W052-AC03 / PR #62 round 1 BLOCKER 2 — the frontier reports TRUTHFUL coordination (an UNDECLARED in-flight conflict is coordinated: false, never a silent pass)', () => {
+    // Two in-flight items sharing modules:agents with NO coordination records
+    // at all: the frontier must report the conflict AND coordinated: false.
+    const service = serviceWith([
+      wo({
+        id: 'WORK-960', status: 'in_flight', branch: 'feat/und-a',
+        surfaces: { modules: ['fixture-domain-a'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+      }),
+      wo({
+        id: 'WORK-961', status: 'in_flight', branch: 'feat/und-b',
+        surfaces: { modules: ['fixture-domain-a'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+      }),
+    ]);
+    const frontier = service.getFrontier();
+    const a = frontier.inFlight.find((w) => w.id === 'WORK-960')!;
+    const b = frontier.inFlight.find((w) => w.id === 'WORK-961')!;
+    expect(a.conflicts.map((c) => c.with)).toEqual(['WORK-961']);
+    expect(a.conflicts[0]!.coordinated).toBe(false);
+    expect(b.conflicts[0]!.coordinated).toBe(false);
+    // The item-level flag is FALSE for both — the mere presence of (no)
+    // coordination records can never produce a TRUE here.
+    expect(a.coordinated).toBe(false);
+    expect(b.coordinated).toBe(false);
+    // And the pairwise view agrees.
+    const pair = service.evaluateParallelEligibility(['WORK-960', 'WORK-961']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.coordinated).toBe(false);
+  });
+
+  it('W052-AC03 / PR #62 round 1 BLOCKER 2 — a MUTUALLY declared coordination flips the frontier flags to true (the same fixture + mutual records)', () => {
+    const service = serviceWith([
+      wo({
+        id: 'WORK-962', status: 'in_flight', branch: 'feat/dec-a',
+        surfaces: { modules: ['fixture-domain-b'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+        coordination: { with: ['WORK-963'], reason: 'serialized merge order over the shared module', adrs: [] },
+      }),
+      wo({
+        id: 'WORK-963', status: 'in_flight', branch: 'feat/dec-b',
+        surfaces: { modules: ['fixture-domain-b'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+        coordination: { with: ['WORK-962'], reason: 'serialized merge order over the shared module', adrs: [] },
+      }),
+    ]);
+    const frontier = service.getFrontier();
+    const a = frontier.inFlight.find((w) => w.id === 'WORK-962')!;
+    const b = frontier.inFlight.find((w) => w.id === 'WORK-963')!;
+    expect(a.conflicts[0]!.coordinated).toBe(true);
+    expect(b.conflicts[0]!.coordinated).toBe(true);
+    expect(a.coordinated).toBe(true);
+    expect(b.coordinated).toBe(true);
+    // Still parallelSafe: false — the shared surface is a fact; coordination
+    // documents the resolution, it does not erase the conflict.
+    const pair = service.evaluateParallelEligibility(['WORK-962', 'WORK-963']).pairwise[0]!;
+    expect(pair.parallelSafe).toBe(false);
+    expect(pair.coordinated).toBe(true);
+  });
+
+  it('W052-AC03 / PR #62 round 1 BLOCKER 2 — the frontier dependency-coordination flag is truthful (an in-flight start over an incomplete, UNCOVERED dependency reports coordinated: false)', () => {
+    // Fixture built via fromLoadedState (the validator would reject the
+    // uncovered start — proven separately); the frontier must still REPORT
+    // the truth rather than assuming coordination.
+    const service = serviceWith([
+      wo({
+        id: 'WORK-964', status: 'in_flight', branch: 'feat/unc',
+        dependencies: ['WORK-965'],
+        surfaces: { modules: ['notifications'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+        coordination: { with: ['WORK-966'], reason: 'coordinated with the wrong partner — does not cover the incomplete dependency', adrs: [] },
+      }),
+      wo({
+        id: 'WORK-965', status: 'pending',
+        surfaces: { modules: ['benchmark'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+      }),
+      wo({
+        id: 'WORK-966', status: 'in_flight', branch: 'feat/wrong',
+        surfaces: { modules: ['runtime'], appLayer: [], migrations: [], reservedMigrations: [], specDocs: [], sharedIntegrationSurfaces: [] },
+        surfaceFlags: ['moduleInternals'], assuranceProfile: 'STANDARD',
+        coordination: { with: ['WORK-964'], reason: 'mutual with the wrong partner', adrs: [] },
+      }),
+    ]);
+    const frontier = service.getFrontier();
+    const item = frontier.inFlight.find((w) => w.id === 'WORK-964')!;
+    expect(item.incompleteDependencies).toEqual(['WORK-965']);
+    expect(item.coordinated, 'an in-flight start over an uncovered incomplete dependency is NOT coordinated').toBe(false);
   });
 
   // --- W052-AC04: deterministic assurance selection ------------------------------

@@ -605,7 +605,8 @@
       "surface declarations + conflict detection: two in_flight work orders sharing a declared surface are a reported conflict (not parallel-safe without explicit architect coordination)",
       "scope integrity: a worker edits only its own declared surfaces; cross-scope edits require a Work Order amendment",
       "centralized architecture decisions: Work Orders + ADRs are the only decision entry points",
-      "PR review by the architect is the merge gate"
+      "PR review by the architect is the merge gate",
+      "coordination records are MUTUAL: a declared coordination between two in-flight work orders appears on BOTH records, covers every incomplete dependency the start was coordinated over, and one-sided declarations are invalid state"
     ],
     "surfaceKinds": [
       "modules",
@@ -669,5 +670,16 @@
     "defaultModelPath": "spec/development-state/governance-model.json",
     "defaultProgramPath": "spec/development-state/program-state.json",
     "semantics": "fail closed: missing/unreadable/invalid manifests are inconclusive; a weakened boundary, cyclic DAG, evidence-inconsistent status, unknown vocabulary, or missing enforcement references fail"
+  },
+  "completionRule": {
+    "completionEvent": "architect-merge",
+    "rule": "status 'complete' ⇔ mergedAs merge evidence (pr + mergeCommit): the architect's merge of the implementation PR into main is the ONLY completion event.",
+    "checkpointOutcomesAre": "implementer-recorded, revision-bound CLAIMS that support the architect's PR review; they never transition status and never substitute the merge — a work order with every outcome evidenced but no merge is still in_flight.",
+    "inFlightInvariant": "an in_flight work order carries a branch and NO mergedAs evidence — merged-but-in-flight is a lie about the merge.",
+    "outcomesAllowedOn": [
+      "in_flight",
+      "complete"
+    ],
+    "historicalNote": "WORK-001..WORK-051 completed before this rule was recorded; their merge evidence alone satisfies it (checkpoint outcomes were not part of their contracts)."
   }
 }
