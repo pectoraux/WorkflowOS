@@ -4,6 +4,13 @@ Status: proposed pending ACR-001 approval and merge.
 
 v1.1 is an additive evolution of frozen v1.0. Historical v1.0 documents are never rewritten to make v1.1 true.
 
+> **Reconciliation (2026-08-29):** this package was reconciled against main `8f27cc7`
+> (the merged WORK-046..050 wave). See [`reconciliation-record.md`](reconciliation-record.md)
+> for the verified repository truth, the corrected derived state, the architect
+> upload-wave roadmap collision (WORK-053..059 identity divergence + the v1.1-vs-2.0
+> version label — awaiting architect reconciliation), and the GitHub enforcement gaps
+> recorded as v1.1 governance requirements.
+
 ## Scope
 
 v1.1 adds the durable architectural model for:

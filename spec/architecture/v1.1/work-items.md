@@ -15,3 +15,9 @@ These are the planned v1.1 evolution Work Orders. They supplement the frozen v1.
 | WORK-061 | Self-Hosting Conformance and Continuous Governance | WORK-057, WORK-058, WORK-059, WORK-060, WORK-047, WORK-050 |
 
 All items remain architect-governed and require a Work Order file, declared surfaces, deterministic assurance, checkpoint requirements, proof contract, and architect-controlled merge.
+
+> **Reconciliation note (2026-08-29):** these WORK-053..061 identities follow the
+> architect-issued GitHub issues #65..#73 (2026-08-28T17:34Z). The architect's
+> direct-to-main upload wave one hour later re-uses WORK-053..059 for different
+> scopes under a "2.0" label — recorded in [`reconciliation-record.md`](reconciliation-record.md)
+> and awaiting architect reconciliation. No item here is activated.

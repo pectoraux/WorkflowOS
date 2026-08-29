@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "governingArchitectureCandidate": "v1.1",
   "status": "proposed",
+  "architectRoadmap": {
+    "note": "The architect's direct-to-main upload wave (2026-08-28T18:24..18:40Z) declares a parallel 'v2.0' roadmap that RE-USES the WORK-053..059 identifiers with different scopes: spec/governance/ARCHITECTURE_LOCK.md ('Version: 2.0, Status: FROZEN'), spec/work-orders/DAG.yaml, spec/implementation/CURRENT_STATE.md, and the em-dash work-order files. The architect-issued GitHub issues #65..#73 (17:34Z the same day, one hour EARLIER) define WORK-053..061 as this package's v1.1 roadmap. The identifier collision and the v1.1-vs-2.0 version label require architect reconciliation; this package follows the issued-issue track and claims no authority over the uploaded files. Full analysis: spec/architecture/v1.1/reconciliation-record.md.",
+    "uploadedWorkOrders": [
+      "WORK-053 — Architecture Checkpoint Framework",
+      "WORK-054 — Adaptive Assurance Profiles",
+      "WORK-055 — Evidence and Proof Registry",
+      "WORK-056 — Change Program - Change Set Model",
+      "WORK-057 — Architecture Fitness Engine",
+      "WORK-058 — Continuous Maintenance Intelligence",
+      "WORK-059 — WorkflowOS Self-Hosting Lifecycle"
+    ]
+  },
   "sequence": [
     "WORK-053",
     "WORK-054",
@@ -21,5 +33,5 @@
     {"wave": 5, "items": ["WORK-059", "WORK-060"]},
     {"wave": 6, "items": ["WORK-061"]}
   ],
-  "rule": "Parallel waves are planning hints only; actual execution eligibility is derived from authoritative Work Order status, dependencies, protected-surface coordination, and current main revision."
+  "rule": "Parallel waves are planning hints only; actual execution eligibility is derived from authoritative Work Order status, dependencies, protected-surface coordination, and current main revision. Until the architect reconciles the roadmap collision recorded in architectRoadmap, NO wave is authorized."
 }

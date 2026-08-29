@@ -1,17 +1,23 @@
 {
   "schemaVersion": 1,
   "kind": "derived-frontier-state",
-  "sourceOfTruth": ["spec/development-state/program-state.json", "spec/dependency-graph.md"],
-  "computedAt": "2026-08-28",
-  "currentMain": "1ccc45ff926331c0b4bd161a11bb28a7182c6146",
-  "currentLiveImplementation": {
-    "workOrder": "WORK-046",
-    "pr": 60,
-    "head": "f88cac45b8e385db6b4723f80edf1d0ff6276aa9",
-    "status": "open-review",
-    "base": "stale-relative-to-current-main"
-  },
+  "sourceOfTruth": [
+    "spec/development-state/program-state.json",
+    "spec/dependency-graph.md",
+    "spec/work-orders/ (the architect-issued Work Order files, GitHub issues #64..#73, and DAG.yaml)"
+  ],
+  "computedAt": "2026-08-29",
+  "currentMain": "8f27cc755a2ffbb27de79c9b1a6e884a222b296b",
+  "currentLiveImplementation": null,
+  "liveImplementationNote": "Nothing is in flight: every recorded work order is complete (WORK-050 merged as 8f27cc7 by PR #78 and finalized by this package's reconciliation commit; 52/52 complete, merged finalized 7/7). The only open implementation PRs are this architecture package itself (#74) and the stale pre-wave test branch #50.",
   "activeRule": "A derived frontier must never authorize work whose authoritative Work Order dependencies are incomplete. If live PR state and repository state disagree, halt authorization and require architect reconciliation.",
-  "plannedNext": ["WORK-047"],
-  "plannedFuture": ["WORK-048", "WORK-049", "WORK-050", "WORK-053", "WORK-054", "WORK-055", "WORK-056", "WORK-057", "WORK-058", "WORK-059", "WORK-060", "WORK-061"]
+  "knownConflicts": [
+    "WORK IDENTITY COLLISION (halt authorization; requires architect reconciliation): the architect-issued GitHub issues #65..#73 (2026-08-28T17:34Z) define WORK-053..061 as the v1.1 evolution roadmap that this package carries, while the architect's direct-to-main upload wave (2026-08-28T18:24..18:40Z, commits 7db2ad3..0541d13) re-uses the WORK-053..059 identifiers for a DIFFERENT roadmap (Architecture Checkpoint Framework, Adaptive Assurance Profiles, Evidence and Proof Registry, Change Program/Change Set Model, Architecture Fitness Engine, Continuous Maintenance Intelligence, Self-Hosting Lifecycle) under a '2.0' version label (spec/governance/ARCHITECTURE_LOCK.md, spec/work-orders/DAG.yaml, spec/implementation/CURRENT_STATE.md). The uploaded material was authored while WORK-052 was still active (CURRENT_STATE.md says 'Active: WORK-052', which had completed at 16:34Z that day). Until the architect reconciles the identifier collision and the v1.1-vs-2.0 version label, this frontier describes both tracks but authorizes neither.",
+    "The architect's DAG.yaml and their own uploaded work-order files disagree internally: WORK-054 (DAG.yaml: ready, depends_on [WORK-052] vs the uploaded file: BLOCKED, Depends On [WORK-053]) and WORK-055 (DAG.yaml: blocked, depends_on [WORK-053, WORK-054] vs the uploaded file: READY, Depends On [WORK-052]).",
+    "spec/implementation/CURRENT_STATE.md (uploaded 2026-08-28T18:35Z) says 'Active: WORK-052' — stale at upload time (WORK-052 completed 16:34Z) and superseded by the WORK-046..050 wave that merged afterwards; it is the architect's document to update.",
+    "Open PR #50 (test(WORK-043), base a1b88a9b) predates the WORK-046..050 wave and is stale relative to current main."
+  ],
+  "plannedNext": ["WORK-053"],
+  "plannedNextNote": "WORK-053 is the dependency-eligible head of BOTH forward tracks (the issued-issue track: deps WORK-046+WORK-051+WORK-052, all complete; the uploaded-file track: Depends On WORK-052, complete) — but the two tracks assign WORK-053 different scopes (v1.1 Foundation and Control Loop vs Architecture Checkpoint Framework). Authorization stays halted until the architect reconciles the identity collision (see knownConflicts).",
+  "plannedFuture": ["WORK-054", "WORK-055", "WORK-056", "WORK-057", "WORK-058", "WORK-059", "WORK-060", "WORK-061"]
 }

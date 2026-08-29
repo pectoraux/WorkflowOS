@@ -20,7 +20,14 @@ Create ArchitectureVersion v1.1 with the Engineering Control Loop; derived Syste
 All v1.0 security, tenancy, authority, lifecycle, provenance, idempotency, concurrency, provider-isolation, verification, and evidence guarantees remain mandatory.
 
 ## Migration strategy
-Implement v1.1 artifacts and capabilities incrementally through WORK-053..061. Existing v1.0 Work Items continue to use their current contracts. No destructive migration is required for the architecture-definition layer.
+Implement v1.1 artifacts and capabilities incrementally through WORK-053..061 (the architect-issued issues #65..#73). Existing v1.0 Work Items continue to use their current contracts. No destructive migration is required for the architecture-definition layer.
+
+> **Reconciliation note (2026-08-29):** this ACR was reconciled against main `8f27cc7`
+> (the merged WORK-046..050 wave). The architect's upload wave of 2026-08-28T18:24–18:40Z
+> re-uses the WORK-053..059 identifiers for a different roadmap under a "2.0" version
+> label — the divergence (identifiers and version label) is recorded in
+> `spec/architecture/v1.1/reconciliation-record.md` and awaits the architect's
+> reconciliation; the approval decision below remains the architect's alone.
 
 ## Rollback
 Unmerged v1.1 Work Items can be abandoned without altering v1.0 authoritative state. A future v1.1-derived artifact may be removed only through its owning authority; historical v1.0 records remain intact.
