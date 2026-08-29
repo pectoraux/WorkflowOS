@@ -1110,7 +1110,9 @@
         "sharedIntegrationSurfaces": [
           "backend/src/api/routes/execution.route.ts",
           "backend/src/api/routes/delegation.route.ts",
-          "backend/tests/architecture/static-architecture.test.ts"
+          "backend/src/api/routes/work-items.route.ts",
+          "backend/tests/architecture/static-architecture.test.ts",
+          "frontend/src/api/client.ts"
         ]
       },
       "surfaceFlags": [
@@ -1389,14 +1391,10 @@
     "activeHandoffs": [
       {
         "workOrderId": "WORK-050",
-        "lastVerifiedState": "STARTED on branch feat/work-050-unified-execution-ux (off main@07ac9cc — the merged WORK-049, whose post-merge finalization is carried by this same change per §34.8/ADR-0007): the derived work order spec/work-orders/WORK-050.md + the governed activation. Scope established from the repository (not prior reports): the Work Item page already loads executions/agent-runs/verification/workflow; the routing recommendation renders via the WORK-048 AdvisoryCard; the WORK-047 intelligence endpoint exists but is unused by any page; the WORK-042 handoff log + the WORK-046 delegation plans have NO frontend-reachable read (only the handoff POST + the GET-by-planKey exist) — WORK-050 adds the two read-only GETs and the unified execution section (a pure facts→view derivation + per-surface read-states + the recommended-vs-actually-selected discipline).",
+        "lastVerifiedState": "IMPLEMENTED on branch feat/work-050-unified-execution-ux: the two read-only backend GETs (the cross-mode-handoff record read on the execution routes + the delegation-plans list on the delegation routes — both GET-only, project.read, server-side scoped) + the work-item GET's server-resolved projectId (the project-scoped advisory reads become addressable) + the pure execution-view derivation helper (frontend/src/lib/execution-view.ts — actuallySelected comes ONLY from the execution record; the routing/intelligence advisories stay structurally distinct) + the Workbench's WorkItemPage unified execution section (current state / actually-selected vs advisory routing+intelligence / constraints / handoff / delegated units / verification / next action — per-surface read-states with explicit per-surface error testids) + the regressions (16 lib tests + 19 page tests + 14 API integration tests + 9 static invariants + 4 browser E2E tests) + the CI workflow.",
         "nextSteps": [
-          "implement the two read-only backend reads (the cross-mode-handoff record GET + the delegation-plans list GET) with project.read authorization and the existing route patterns",
-          "implement the pure execution-view derivation helper (facts in → view out; deterministic; recommended and actually-selected structurally distinct)",
-          "implement the Work Item unified execution section (current state / provider-model-mode / agent role / why-this-route / constraints / recommendation / handoff / verification / next action; per-surface read-states)",
-          "adversarial regressions: the 15-point matrix (recommendation≠selection ×2, native/external parity, failed-read error states ×4, refresh consistency, tenant isolation, the static no-authority proofs, record-sourced identity, no fabricated statuses, determinism)",
-          "static architecture pins: no frontend execution/routing/intelligence/delegation/handoff authority, no state machines, no second stores, GET-only new routes, the 32-route-file set unchanged",
-          "full verification: typecheck, lint, frontend tests, static suite, real-PG sweep, browser E2E; open the PR"
+          "run the FULL verification stack (both typechecks/lints, the entire frontend suite, the static suite, the development-governance suite, the FULL real-PG sweep, the browser E2E set)",
+          "open the PR with the exact SHAs and the evidence (do NOT merge; the architect is the sole merge authority)"
         ],
         "blockers": [],
         "recordedAt": "2026-08-29T15:01:10Z",
