@@ -41,8 +41,9 @@
 #
 # Required repository configuration:
 #   secrets: VERCEL_TOKEN   (Vercel access token)
-#   secrets: RAILWAY_TOKEN  (Railway API token — OPTIONAL; enables automated
-#                             backend deploys; absent = visible skip)
+#   secrets: RAILWAY_TOKEN  (Railway PROJECT token for the production project —
+#                             OPTIONAL; enables automated backend deploys;
+#                             absent = visible skip)
 #   vars:    VERCEL_ORG_ID, VERCEL_PROJECT_ID, PRODUCTION_API_URL
 #
 # SECURITY: no credentials are committed in this file; all secrets arrive
@@ -308,30 +309,69 @@ jobs:
           echo "  See docs/deployment/production.md for the full variable set."
           echo ""
           echo "Automated deploys arm automatically once RAILWAY_TOKEN exists:"
-          echo "  railway up --service workflowos-api   (or connect the repo in the Railway project)"
+          echo "  railway up --service WorkflowOS        (the production project's api service)"
+          echo "  railway up --service WorkflowOS-Worker  (…and its worker service)"
 
       - name: Deploy Railway backend (api + worker services)
         if: needs.credentials.outputs.has_railway == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
         run: |
           set -euo pipefail
+          if [ -z "${PRODUCTION_API_URL}" ]; then
+            echo "::error::PRODUCTION_API_URL repository variable is not set — cannot verify the live backend contract after deployment."
+            exit 1
+          fi
           npm install --global @railway/cli@latest
-          # One codebase, two roles: the repository's backend/Dockerfile is
-          # deployed to both Railway services; the role is selected by the
-          # service's WORKFLOWOS_ROLE variable. CLI `railway up` targets the
-          # linked service; CI links are provided through Railway project
-          # variables set at secret-configuration time.
+          # RAILWAY_TOKEN is a Railway PROJECT token bound to the production
+          # project; `--service` selects within it. The real service names —
+          # verified live with the project token on 2026-08-29 — are
+          # `WorkflowOS` (WORKFLOWOS_ROLE=api) and `WorkflowOS-Worker`
+          # (WORKFLOWOS_ROLE=worker). One codebase, two roles: the repository's
+          # backend/Dockerfile builds both. `railway up` uploads the checkout
+          # root; each service's build config (rootDirectory `backend` +
+          # Dockerfile) trims to backend/Dockerfile — proven live by the
+          # repo-root CLI deployments of 2026-08-29 (identical image digests).
+          #
+          # CLI uploads carry NO git context: RAILWAY_GIT_COMMIT_SHA is only
+          # injected for Git-connected deployments. The release SHA is
+          # therefore set as WORKFLOWOS_COMMIT_SHA on both services — /health
+          # reports it as deployment.commitSha, which the backend-contract
+          # gate verifies on every subsequent release. (--skip-deploys: the
+          # `up` below is the deploy; no extra restarts.)
+          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS" --skip-deploys
+          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS-Worker" --skip-deploys
           echo "Deploying backend (role api)…"
-          railway up --ci --service workflowos-api || {
+          railway up --ci --service "WorkflowOS" || {
             echo "::error::Railway api-service deployment failed — see logs above."
             exit 1
           }
           echo "Deploying backend (role worker)…"
-          railway up --ci --service workflowos-worker || {
+          railway up --ci --service "WorkflowOS-Worker" || {
             echo "::error::Railway worker-service deployment failed — see logs above."
             exit 1
           }
+          # Post-deploy contract check: the live API must report the released
+          # SHA — the exact identity the backend-contract gate probes on every
+          # later release. (`up --ci` returns when the build logs end; the
+          # rollout may still be converging, hence the retry loop.)
+          BACKEND_SHA=""
+          for _ in $(seq 1 12); do
+            HEALTH=$(curl -sS --max-time 15 "${PRODUCTION_API_URL}/health" || echo '{}')
+            BACKEND_SHA=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deployment",{}).get("commitSha",""))' 2>/dev/null || echo "")
+            if [ "$BACKEND_SHA" = "$RELEASE_SHA" ]; then
+              echo "backend contract verified live: /health deployment.commitSha = $RELEASE_SHA"
+              break
+            fi
+            echo "waiting for the live backend to report the release SHA…"
+            sleep 10
+          done
+          if [ "$BACKEND_SHA" != "$RELEASE_SHA" ]; then
+            echo "::error::The production backend does not report the released commit SHA (got '${BACKEND_SHA:-none}'). The deployment-identity surface is not live — inspect the Railway deployment logs."
+            exit 1
+          fi
 
   # ---------------------------------------------------------------------------
   # Deployment evidence — immutable per-release record (summary + artifact).
