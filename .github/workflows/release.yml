@@ -298,7 +298,12 @@ jobs:
   railway-worker-deploy:
     name: deploy railway backend (worker role)
     runs-on: ubuntu-latest
-    needs: [railway-api-deploy]
+    # `credentials` is needed here explicitly: this job's fail-closed guard
+    # reads needs.credentials.outputs.has_railway, and a job that does not
+    # `need` the credentials job sees an EMPTY context (undefined != 'true'
+    # would then fail every run — exactly the defect found by the first live
+    # pipeline execution on 2026-08-29).
+    needs: [railway-api-deploy, credentials]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout
