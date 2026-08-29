@@ -52,13 +52,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Positive invariant assertions (the v1.0/v1.1 boundary):
           grep -q 'v1.0 is immutable historical architecture' spec/architecture/v1.1/architecture-lock.md
-          grep -q 'WORK-046' spec/governance/future-roadmap.json
+          grep -q 'ACR approval is required before v1.1 becomes governing' spec/architecture/v1.1/architecture-lock.md
           grep -q 'ACR-001' spec/architecture-change-requests/ACR-001-v1-1-adaptive-engineering-control-system.md
-          if grep -R -E 'silently.*rewrite|rewrite.*in place' spec/architecture/v1.1 >/dev/null; then
-            echo 'Detected language permitting silent architecture rewrite.'
-            exit 1
-          fi
+          # The machine-readable roadmap must agree with the machine-readable
+          # dependency state, and v1.1 must remain proposed until ACR approval.
+          python - <<'PY'
+          import json
+          roadmap = json.load(open('spec/governance/future-roadmap.json'))
+          dep = json.load(open('spec/development-state/dependency-state.json'))
+          seq = set(roadmap['sequence'])
+          gen = set(dep['futureGeneration'])
+          assert seq == gen, (
+              'future-roadmap sequence and dependency-state futureGeneration disagree: '
+              + str(sorted(seq ^ gen))
+          )
+          for wave in roadmap['parallelWaves']:
+              for item in wave['items']:
+                  assert item in seq, f'parallel wave item {item} is not in the sequence'
+          assert roadmap['status'] == 'proposed', 'v1.1 must remain proposed until ACR approval'
+          print('Evolution boundary checks: valid')
+          PY
 
       - name: Validate persistent authority boundaries
         shell: bash
