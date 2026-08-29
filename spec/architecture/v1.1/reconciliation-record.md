@@ -1,11 +1,11 @@
 # v1.1 Architecture Package — Reconciliation Record
 
-Reconciled: 2026-08-29
+Reconciled: 2026-08-29 (pass 1: base/stale-state reconciliation against `8f27cc7`; pass 2: §8 — the architect's REQUEST CHANGES verdict, identity resolution implemented)
 Reconciled against main: `8f27cc755a2ffbb27de79c9b1a6e884a222b296b` (WORK-050 / PR #78, squash-merged at branch head `6c9031c` on 2026-08-29T16:57:01Z; the merge tree is identical to the approved head)
 Package base at authoring: `1ccc45ff926331c0b4bd161a11bb28a7182c6146` (the WORK-052 post-merge finalization)
 Status of v1.1: **PROPOSED** — the governing architecture remains frozen **v1.0** (`spec/development-state/program-state.json`). v1.1 becomes governing ONLY through ACR-001 approval by the architecture authority. Nothing in this package activates it.
 
-This record is the durable evidence of the PR #74 reconciliation pass: what was verified against the real repository, what was stale, what was corrected, what conflicts remain for the architect to resolve, and what the GitHub governance artifacts actually enforce today.
+This record is the durable evidence of the PR #74 reconciliation passes: what was verified against the real repository, what was stale, what was corrected, what conflicts the first pass deferred to the architect, how the architect resolved them (§8), and what the GitHub governance artifacts actually enforce today.
 
 ## 1. Repository truth (independently re-established, not taken from any prior report)
 
@@ -28,7 +28,7 @@ This record is the durable evidence of the PR #74 reconciliation pass: what was 
 
 Historical statements that remain CORRECTLY historical (untouched): the design and plan documents (`docs/superpowers/…2026-08-28…`) are dated authoring records; ACR-001's motivation correctly describes the governing v1.0 + WORK-051/052 state; the merge facts of WORK-046..050 are history, not claims.
 
-## 3. The architect upload-wave collision (REQUIRES ARCHITECT RECONCILIATION — not resolved here)
+## 3. The architect upload-wave collision (RESOLVED 2026-08-29 by the architect's PR #74 verdict — the resolution is implemented in §8; the text below is the first pass's durable record of the collision as found)
 
 Timeline (all 2026-08-28, UTC):
 
@@ -54,6 +54,8 @@ Concept-level correspondence between the two roadmaps (for the architect's recon
 | WORK-061 Self-Hosting Conformance and Continuous Governance | WORK-059 WorkflowOS Self-Hosting Lifecycle |
 
 This package does NOT touch the architect's uploaded files, does not rename its own work orders, and does not choose between the tracks — the architect's reconciliation and ACR-001 disposition decide. Until then the derived state records both tracks and halts authorization (`frontier-state.json` knownConflicts, `dependency-state.json` knownConflicts, `future-roadmap.json` architectRoadmap).
+
+> **[2026-08-29, pass 2]** The architect has since decided (the PR #74 REQUEST CHANGES verdict): the architect-issued issue track is canonical; the upload-wave artifacts are retired under distinct `UW-053..059` identities. **§8 records and implements that resolution.** The paragraph above is the first pass's record of the deferral, preserved as history.
 
 ## 4. GitHub enforcement status (recorded as v1.1 governance requirements — NOT implemented here)
 
@@ -101,7 +103,40 @@ Checked against the actual merged code and governance state:
 ## 7. What this reconciliation deliberately does NOT do
 
 - Does not activate WORK-053..061 and does not implement any of their runtime behavior.
-- Does not resolve the §3 roadmap collision or the v1.1-vs-2.0 version label — the architect decides.
-- Does not rewrite v1.0 frozen documents, the architect's direct-to-main uploads, or the historical record.
+- Does not rewrite v1.0 frozen documents or the historical record (the upload-wave material is preserved verbatim under archival banners — §8).
 - Does not enable branch protection or claim GitHub enforcement that does not exist (§4).
 - Does not merge itself — the architect is the sole merge authority.
+
+> **[2026-08-29, pass 2]** The first pass additionally deferred the §3 roadmap collision to the architect. The architect resolved it by verdict; §8 implements that resolution (the upload wave is retired — not erased, and v1.0 remains untouched).
+
+## 8. The 2026-08-29 architect verdict — identity resolution implemented
+
+The architect reviewed the pass-1 reconciled package (head `aac1a568`) and returned **REQUEST CHANGES** with one blocking finding: the pass-1 reconciliation *documented* the WORK identity/version collision but did not *eliminate* it, so the repository still failed the central persistent-architect requirement — a fresh architect could not determine exactly which architecture and Work Order identity is authoritative. The verdict:
+
+1. **The blocking finding is accepted as correct.** Documentation of an ambiguity is not resolution of the ambiguity. The collision was live on `main` (the em-dash files in `spec/work-orders/` and the `v2.0 FROZEN` documents in `spec/governance/`) and on this branch (which added the canonical `WORK-053.md..WORK-061.md` beside them).
+2. **The architect chose the canonical track**: the architect-issued GitHub issue track — **ACR-001, WORK-053..061, v1.1** — because those identities were explicitly issued as the architecture evolution program; a late direct upload cannot silently supersede them.
+3. **The architect's required corrections, implemented in this pass**:
+
+| # | Required correction | Implementation |
+|---|---|---|
+| 1 | Retire/rename the conflicting `WORK-053..059` upload-wave artifacts so the identifiers are no longer duplicated | The seven em-dash files are **removed from `spec/work-orders/`** and preserved in `spec/archive/upload-wave-2026-08-28/` under distinct **`UW-053..UW-059`** identities (banner + re-identified heading; original body verbatim) |
+| 2 | Correct the misleading `v2.0 FROZEN` governance documents on `main` | `spec/governance/ARCHITECTURE_LOCK.md` ("Version: 2.0, Status: FROZEN"), `ARCHITECT_ROLE.md`, `AGENT_PROTOCOL.md`, `NEW_ARCHITECT_START.md`, `spec/work-orders/DAG.yaml` ("architecture_version: 2.0"), and `spec/implementation/CURRENT_STATE.md` are **removed from their live locations** and archived with correction banners stating the truth: no ACR was ever approved; the governing architecture is v1.0 (frozen); v1.1 is proposed |
+| 3 | Preserve the upload-wave artifacts as historical/proposed material with distinct identities and explicitly non-authoritative status | Every archived file carries a **RETIRED / NON-AUTHORITATIVE banner** naming its original path, its retired identity, and the canonical meaning of the identifier it claimed; the original content below each banner is the verbatim historical record |
+| 4 | Machine-readable state contains exactly one canonical mapping for each Work Order ID | `spec/archive/upload-wave-2026-08-28/index.json` is the machine-readable retirement record (original claimed ID → retired `UW-` identity → the canonical meaning); the derived state's `knownConflicts` are replaced by `resolvedConflicts`; `future-roadmap.json`'s `architectRoadmap` is replaced by `retiredUploadWave`; `dependency-state.json` `futureGeneration` is the one canonical dependency mapping for WORK-053..061; `spec/work-orders/` now contains only canonical `WORK-NNN.md` files (+ `TEMPLATE.md`) |
+| 5 | A discrimination test proving duplicate Work Order identifiers cannot coexist as authoritative artifacts | The ONE fail-closed validation engine (`backend/src/architecture-checkpoints/internal/governance-validation.ts`) now validates the **work-order identity surface**: `spec/work-orders/` may contain only `WORK-NNN.md` (+ `TEMPLATE.md`); any variant file claiming a `WORK-NNN` identity (e.g. the em-dash form), any duplicate identity, and any program-state record referencing a non-canonical identity artifact are REJECTING violations. Enforced by the control-plane loader (`governance:status`), the revision-bound `governance-manifest` detector (ADR-0006), the governance CI workflow, and discrimination tests (green: the real repository; red: collision fixtures) |
+| 6 | Re-run governance CI and `governance:status` | Re-run on the resolution head — see the PR delivery report for the full evidence |
+| 7 | Do **not** activate WORK-053 | WORK-053 remains **planned** (not `in_flight`, no branch, no handoff); `program-state.json` still carries no WORK-053..061 records; the frontier records it as dependency-eligible and awaiting architect authorization |
+
+4. **The verdict's non-blocking observation** — GitHub enforcement (CODEOWNERS, templates, governance CI) is documentary because `main` has no branch protection/rulesets — remains recorded as a v1.1 governance requirement in §4 and is deliberately NOT fabricated into compliance.
+5. **What the verdict conceptually approved** — the v1.1 direction (SENSE → … → LEARN control loop, adaptive assurance, derived system model/provenance, architecture fitness, engineering signals, Change Programs/Change Sets, operational/release governance, continuous architecture evolution, self-hosting, authority-boundary preservation, Work Item as the atomic execution/review unit) — is unchanged by this pass; v1.1 remains PROPOSED and becomes governing only through ACR-001 approval.
+
+### What a fresh architect now reads (exactly one answer per question)
+
+- *What does WORK-053 mean?* → `spec/work-orders/WORK-053.md` (Architecture v1.1 Foundation and Control Loop, issue #65); the only other artifact mentioning that identity claim is the retired `UW-053` record in the archive, marked non-authoritative.
+- *Which architecture version governs?* → v1.0 (frozen) per `spec/development-state/program-state.json`; the only documents that claimed "2.0 FROZEN" are archived with correction banners; v1.1 exists only as the proposed package under `spec/architecture/v1.1/`.
+- *What may start next?* → Nothing without the architect's authorization; WORK-053 is dependency-eligible and intentionally not activated.
+
+### Verification additions carried by this pass
+
+- `governance.yml`: a new CI step validates work-order identity uniqueness (the authoritative directory holds only canonical `WORK-NNN.md` files; the archive index is consistent with the archived files; program-state references only canonical artifacts).
+- The `DUPLICATE-AUTHORITY` checkpoint contract (governance-model.json) gains the identity-surface discrimination evidence as an enforcement reference — duplicate Work Order identities are a duplicate-authority violation by definition.

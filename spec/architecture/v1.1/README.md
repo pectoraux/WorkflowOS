@@ -4,12 +4,14 @@ Status: proposed pending ACR-001 approval and merge.
 
 v1.1 is an additive evolution of frozen v1.0. Historical v1.0 documents are never rewritten to make v1.1 true.
 
-> **Reconciliation (2026-08-29):** this package was reconciled against main `8f27cc7`
-> (the merged WORK-046..050 wave). See [`reconciliation-record.md`](reconciliation-record.md)
-> for the verified repository truth, the corrected derived state, the architect
-> upload-wave roadmap collision (WORK-053..059 identity divergence + the v1.1-vs-2.0
-> version label — awaiting architect reconciliation), and the GitHub enforcement gaps
-> recorded as v1.1 governance requirements.
+> **Reconciliation (2026-08-29, pass 1 + pass 2):** this package was reconciled against main `8f27cc7`
+> (the merged WORK-046..050 wave), then — after the architect's REQUEST CHANGES verdict —
+> the WORK-053..059 identity collision and the v1.1-vs-2.0 version-label conflict were
+> **resolved at the identity/authority layer**: the architect-issued issue track (ACR-001,
+> WORK-053..061, v1.1) is canonical; the upload wave is retired under `UW-053..059`
+> identities in `spec/archive/upload-wave-2026-08-28/`. See
+> [`reconciliation-record.md`](reconciliation-record.md) (§3 + §8) for the verified repository
+> truth, the resolution, and the GitHub enforcement gaps recorded as v1.1 governance requirements.
 
 ## Scope
 

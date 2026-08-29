@@ -28,7 +28,7 @@ module remains the per-project ADR/authority; this directory is the self-hosting
 
 The next architecture generation is proposed, not silently activated:
 
-- `spec/architecture/v1.1/` — additive architecture and lock package, including the [reconciliation record](../architecture/v1.1/reconciliation-record.md) (2026-08-29: the verified repository truth, the corrected derived state, the architect upload-wave roadmap collision, and the GitHub enforcement gaps).
+- `spec/architecture/v1.1/` — additive architecture and lock package, including the [reconciliation record](../architecture/v1.1/reconciliation-record.md) (2026-08-29 pass 1: the verified repository truth and the corrected derived state; pass 2: the architect verdict resolving the upload-wave identity collision — §8; and the GitHub enforcement gaps).
 - `spec/architecture-change-requests/ACR-001-v1-1-adaptive-engineering-control-system.md` — durable architecture evolution proposal.
 - `spec/governance/` — persistent architect, worker, assurance and checkpoint contracts.
 - `spec/governance/future-roadmap.json` — planned v1.1 Work Order sequence and parallelization hints.
