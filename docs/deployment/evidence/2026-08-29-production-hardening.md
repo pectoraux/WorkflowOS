@@ -290,3 +290,128 @@ Post-merge bootstrap runbook (for the architect):
    stage deploys both services from merged main with the identity surface +
    SHA variable, then verifies `/health deployment.commitSha` live.
 3. Every subsequent push to main passes the backend-contract gate naturally.
+
+---
+
+## Addendum 3 — REQUEST CHANGES remediation: strict pipeline, fail-closed credentials, production FULLY healthy (2026-08-29 ~23:00Z)
+
+The architect's verdict on PR #79 found four failures. All four are
+remediated, with live proof:
+
+### 1. Release ordering — now a STRICT PIPELINE (and machine-checked)
+
+`release.yml` was restructured into exactly the required DAG:
+
+```
+backend-contract-gate → railway-api-deploy → railway-worker-deploy
+      → backend-verification → deploy-frontend → deployment-evidence
+```
+
+Every stage `needs` its predecessor — no two production stages can run
+concurrently. `backend-verification` is the new enforcement point: the LIVE
+backend must report the exact release SHA (`/health deployment.commitSha`) AND
+be fully ready (`/health/ready` 200 — postgres, redis, objectStore ALL ok)
+before the frontend may ship.
+
+The structure is machine-checked in CI (`deployment-topology.test.ts`,
+RD-01..RD-05): the workflow is parsed as YAML and the strict chain asserted;
+the pre-remediation CONCURRENT topology (frontend + railway stages both off
+the gate) and the warning-only visible-skip step are REJECTING violations —
+both discriminations were red-proofed locally before commit (RD-01/DH-06
+fail on the concurrent shape; RD-02/DH-04 fail on the skip shape).
+
+### 2. Normal releases FAIL CLOSED on missing credentials
+
+Missing `RAILWAY_TOKEN` or `VERCEL_TOKEN` now FAILS the release at the stage
+that needs it (`::error::` + `exit 1` + manual recovery steps). Visible
+skips remain ONLY on the PR preview path (per-PR conveniences that never
+touch production). Live proof: dispatch run **33279257765** — with the
+live backend still on the pre-identity `/health` shape, the gate FAILED and
+every downstream stage (including the frontend deploy) was SKIPPED. The
+pipeline refuses to ship a frontend against an unverified backend.
+
+### 3. Production is NOW healthy — the object store is REAL for the first time
+
+Root cause (worse than the earlier diagnosis): the production
+`OBJECT_STORAGE_ACCESS_KEY_ID`/`SECRET_ACCESS_KEY` values were literally
+`placeholder` (11 chars each) and the endpoint was an invalid
+non-account-scoped R2 host. The store NEVER worked; readiness was
+permanently 503.
+
+Remediation — a real, private, durable S3-compatible store owned by the
+project:
+
+- `deploy/minio/` (infra-as-code, in this PR): pinned `minio/minio` +
+  `minio/mc` images, an idempotent bootstrap (`init.sh`) that starts the
+  server, waits for the S3 API, creates the `workflowos-prod` bucket
+  (private), and forwards SIGTERM for graceful drains.
+- Provisioned LIVE via the Railway project token: service `MinIO`
+  (private-network endpoint `minio.railway.internal`, NO public domain),
+  500MB volume `minio-volume` mounted at `/data` (attached through Railway's
+  IaC `config apply` — the raw `volumeCreate` mutation is outside project-
+  token scope), generated credentials set as service variables.
+- Both app services now carry
+  `OBJECT_STORAGE_ENDPOINT=http://minio.railway.internal:9000`,
+  `REGION=us-east-1`, and the MinIO credential pair (the backend's
+  dependency-free SigV4 adapter speaks path-style requests — MinIO's native
+  model; NO code changes, the same ObjectStore boundary). The R2 swap-back
+  procedure is documented in `docs/deployment/production.md`.
+
+Live result: `/health/ready` = **200 ready, objectStore ok (5–19 ms)** — a
+real put+get+delete round-trip through the private network. This is the
+first fully-green production readiness in the project's history.
+
+### 4. Live end-to-end proof of the corrected pipeline (dispatch run 33279601226)
+
+Full strict pipeline, GREEN end-to-end on the remediation head (`2dc8dc3`):
+
+| stage | result |
+|---|---|
+| backend contract gate | success — live SHA `4693fb7` is an ancestor of the release |
+| deploy railway backend (api role) | success — deploys + sets `WORKFLOWOS_COMMIT_SHA=2dc8dc3` |
+| deploy railway backend (worker role) | success |
+| verify live backend | success — `/health` reports `2dc8dc3a…`; readiness 200, all checks ok |
+| deploy vercel production | success — `vercel --prod` + REQUIRE_READY=1 live E2E |
+| deployment evidence | success |
+
+Independently re-verified after the run: `/health` reports
+`commitSha 2dc8dc3a40f4…` (role api, environment production); readiness
+fully green; the SPA serves 200 through the Vercel origin; `/api/health`
+through the Vercel rewrite reports the SAME deployment identity; an
+authenticated read-only `GET /api/projects` returns live data through the
+full Browser → Vercel → Railway → PostgreSQL path.
+
+Honest execution record — three dispatch runs, not one:
+
+1. **33279257765** — the gate FAILS CLOSED against a pre-identity live
+   backend (the desired blocking behavior; everything downstream skipped).
+2. **33279476449** — gate + api deploy green; the worker stage failed on a
+   REAL defect in my first strict-pipeline revision: the worker job's
+   fail-closed guard read `needs.credentials.*` without declaring
+   `credentials` in its `needs` (GitHub resolves undeclared needs to an
+   empty context → `undefined != 'true'` fired the guard). Found by LIVE
+   execution, fixed in `2dc8dc3` (the worker job now needs
+   `[railway-api-deploy, credentials]`), with the defect documented in the
+   commit message.
+3. **33279601226** — the FULL pipeline green (the table above).
+
+### Deployed-from note (precise)
+
+The live backend runs the remediation branch head (`2dc8dc3` = main + this
+PR), because the deployment-identity surface, the fail-closed store, and
+the strict pipeline all ship IN this PR — main alone cannot report
+`commitSha`. On merge, the pipeline deploys main with the identical
+mechanism (the dispatch runs prove the exact code path).
+
+### Observations for the architect (no action taken)
+
+- The Railway workspace is on the free plan; provisioning surfaced a
+  resource-limit warning. The `perceptive-emotion` ghost service (empty
+  shell, no production instances, not queryable through the project token)
+  consumes a service slot; deleting it is an architect decision.
+- The `WorkflowOS` API service is Git-connected to `pectoraux/WorkflowOS`
+  (root dir `backend`, check suites off); the worker is CLI-upload-only by
+  configuration (source type github, repo unset — no auto-deploys).
+- MinIO credentials were generated with openssl, set only as Railway
+  service variables, and never committed or printed; the R2 placeholder
+  values they replaced carried no secret material.
