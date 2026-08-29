@@ -213,3 +213,80 @@ Secret hygiene: the Redis password has now been transmitted twice in the
 operator channel; it remains absent from every repository artifact
 (this file included). Rotation at the architect's convenience is prudent
 but not urgent (private-network-only reachability).
+
+---
+
+## Addendum 2 — the Railway project token: supplied, verified, armed (2026-08-29 ~22:10Z)
+
+The operator supplied a UUID-format token — the exact closure path
+documented in the previous addendum. Empirical verification:
+
+- It is a REAL **Railway PROJECT token** bound to the production project
+  (`fortunate-art`, id `82db36d4-b386-490a-8827-f71a2e94b7e3`, workspace
+  "Tetevi Ekon's Projects"). Project-scoped operations succeed: CLI
+  `status`, `variable set`, `up`, `deployment list`. Account-scoped queries
+  (`me`, `projects`, `deployment(id:)`) return "Not Authorized" — that is
+  the token's DESIGN scope, not a defect (and why account-token-style
+  probes reject it).
+- It is stored as the `RAILWAY_TOKEN` Actions secret (presence verified via
+  the repository secret list; values are write-only). The `release.yml`
+  Railway stage is ARMED. The token value appears in NO repository artifact
+  (this file included). Rotation note: it transited the operator channel;
+  rotating at the architect's convenience is prudent.
+
+Live project topology (verified with the token):
+
+- `WorkflowOS` — `WORKFLOWOS_ROLE=api`, public domain
+  workflowos-production.up.railway.app; build config: rootDirectory
+  `backend` + Dockerfile.
+- `WorkflowOS-Worker` — `WORKFLOWOS_ROLE=worker`; same build config.
+- `Redis` — private network (`redis-volume`), already wired via `REDIS_URL`.
+- `perceptive-emotion` — an orphan service shell with no instances in the
+  production environment (not even queryable through the project token);
+  flagged for the architect, deliberately untouched.
+
+Backend state (honest record — the deploy itself happened in the
+interrupted continuation and is recorded here for the first time): both app
+services were redeployed from `main` @ `a12444a` via CLI on 2026-08-29 (api
+21:30Z, worker 21:35Z; repository-root uploads). A verification redeploy of
+the worker at 22:01Z from the same source reproduced the IDENTICAL image
+digest (`sha256:1a74bfb4…`) — proving both the repo-root upload + build
+config path and build determinism. The backend is therefore CURRENT with
+main, but `/health` still returns the minimal pre-identity shape — the
+deployment-identity surface ships in THIS pull request, so the
+backend-contract gate stays blocked until the PR merges (expected, by
+design). `WORKFLOWOS_COMMIT_SHA=a12444a` is set on both services
+(`--skip-deploys`), so the identity will surface on the first post-merge
+deploy.
+
+Two release-pipeline defects found against the live project and FIXED
+(commit `d66277a`):
+
+1. Wrong service names (`workflowos-api`/`workflowos-worker` → the real
+   `WorkflowOS`/`WorkflowOS-Worker`) — the armed stage would have failed
+   its first run with "service not found".
+2. No commit-SHA propagation on CLI deploys — the stage now sets
+   `WORKFLOWOS_COMMIT_SHA=<release sha>` (`--skip-deploys`) and verifies
+   the live `/health` reports the released SHA after deploying.
+
+Object store — ROOT CAUSE CONFIRMED, operator input still required:
+`OBJECT_STORAGE_ENDPOINT=https://workflowos.r2.cloudflarestorage.com` is not
+a valid R2 endpoint. R2 S3 endpoints are account-scoped
+(`https://<account-id>.r2.cloudflarestorage.com`); the configured hostname
+resolves only through the zone's wildcard DNS and cannot route to a real
+account. Readiness therefore stays 503 (postgres ok, redis ok, objectStore
+broken), and the release pipeline's `REQUIRE_READY=1` production
+verification WILL FAIL on every main release until the real R2 endpoint is
+set (R2 dashboard → Overview → "S3 API" → update `OBJECT_STORAGE_ENDPOINT`
+on both Railway services; the existing access key/secret may already be
+valid). This is the remaining open item.
+
+Post-merge bootstrap runbook (for the architect):
+
+1. Merge this PR.
+2. Dispatch `release` ONCE with `skip_backend_gate=true` (the documented
+   exceptional transition — the live backend still reports the pre-identity
+   `/health` shape until this PR's code deploys). The armed railway-backend
+   stage deploys both services from merged main with the identity surface +
+   SHA variable, then verifies `/health deployment.commitSha` live.
+3. Every subsequent push to main passes the backend-contract gate naturally.
