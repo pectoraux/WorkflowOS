@@ -963,6 +963,8 @@
         "WORK-046"
       ],
       "branch": "feat/work-047-agent-intelligence",
+      "pr": 75,
+      "head": "1b5a6ac",
       "workOrder": "spec/work-orders/WORK-047.md",
       "origin": "architect",
       "surfaces": {
