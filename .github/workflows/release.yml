@@ -8,15 +8,45 @@
 #   roles api + worker) ← PostgreSQL (authoritative) + Redis (non-authoritative)
 #   + Object storage (S3-compatible adapter through the ObjectStore boundary).
 #
-# Release sequencing (database schema → backend → worker → frontend) is
-# enforced by the `backend-contract-gate` job: the production frontend is only
-# deployed after the LIVE production backend reports (via GET /health
-# deployment identity) a commit that is an ancestor of the commit being
-# released. A frontend release can therefore never assume a backend contract
-# that is not yet deployed. Exceptional transitions (e.g. bootstrap after a
-# long backend freeze) can be approved by the architect through
-# workflow_dispatch with `skip_backend_gate=true` — the skip is recorded in
-# the run logs and the deployment evidence.
+# Release sequencing (schema → backend → worker → verification → frontend) is
+# enforced as a STRICT PIPELINE — every stage `needs` its predecessor, no two
+# production stages ever run concurrently:
+#
+#   backend-contract-gate   (the LIVE backend's /health deployment.commitSha
+#                            must be an ancestor of the release commit)
+#            ↓
+#   railway-api-deploy      (deploys the api role; schema migrations run on
+#                            api-role startup)
+#            ↓
+#   railway-worker-deploy   (deploys the worker role)
+#            ↓
+#   backend-verification    (the live /health must report the EXACT release
+#                            SHA and /health/ready must be fully ready — 200,
+#                            every dependency check ok, including the object
+#                            store)
+#            ↓
+#   deploy-frontend         (vercel --prod, then live verification against
+#                            the real production URL: SPA shell, assets, deep
+#                            links, /api rewrite, backend liveness + readiness,
+#                            authenticated read-only call through the full
+#                            Browser→Vercel→Railway→PostgreSQL path)
+#            ↓
+#   deployment-evidence     (immutable per-release evidence: job summary +
+#                            artifact; durable repository evidence lives under
+#                            docs/deployment/evidence/)
+#
+# FAIL-CLOSED credentials: a NORMAL production release REQUIRES the
+# RAILWAY_TOKEN and VERCEL_TOKEN secrets. A missing credential FAILS the
+# release at the stage that needs it (explicit error + the manual recovery
+# steps) — the frontend can never ship while the backend deploy or its
+# verification was skipped. Visible skips exist ONLY on the PR preview path
+# (previews are optional per-PR conveniences that never touch production).
+#
+# Exceptional transitions (e.g. bootstrap after a long backend freeze, when
+# the live backend predates the deployment-identity surface) can be approved
+# by the architect through workflow_dispatch with `skip_backend_gate=true` —
+# the skip is recorded in the run logs and the deployment evidence and skips
+# ONLY the ancestry precheck, never the deploy/verify stages themselves.
 #
 # Pull requests:
 #   - static checks: vercel configuration invariants + frontend typecheck
@@ -25,25 +55,15 @@
 #     is a non-production canary; see frontend/vercel.ts)
 #   - PRs NEVER deploy into production Railway state.
 #
-# Push to main:
-#   - backend-contract-gate (see above)
-#   - deploy-frontend → `vercel deploy --prod` (gated on VERCEL_TOKEN)
-#   - verify-production → live verification against the real production URL
-#     (SPA shell, assets, deep links, /api rewrite, backend liveness +
-#     readiness, authenticated read-only call through the full
-#     Browser→Vercel→Railway→PostgreSQL path)
-#   - railway-backend → automated backend deployment (gated on RAILWAY_TOKEN;
-#     while the token is absent the job SKIPS VISIBLY with the manual deploy
-#     steps — it never silently pretends the backend was deployed)
-#   - deployment-evidence → immutable per-release evidence (job summary +
-#     artifact); the durable repository evidence lives under
-#     docs/deployment/evidence/ and is updated by delivery pull requests.
+# Push to main / workflow_dispatch (the production release path — the strict
+# pipeline above; PRs never enter it):
+#   - backend-contract-gate → railway-api-deploy → railway-worker-deploy →
+#     backend-verification → deploy-frontend → deployment-evidence
 #
 # Required repository configuration:
-#   secrets: VERCEL_TOKEN   (Vercel access token)
+#   secrets: VERCEL_TOKEN   (Vercel access token — REQUIRED for releases)
 #   secrets: RAILWAY_TOKEN  (Railway PROJECT token for the production project —
-#                             OPTIONAL; enables automated backend deploys;
-#                             absent = visible skip)
+#                            REQUIRED for releases)
 #   vars:    VERCEL_ORG_ID, VERCEL_PROJECT_ID, PRODUCTION_API_URL
 #
 # SECURITY: no credentials are committed in this file; all secrets arrive
@@ -218,12 +238,158 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
-  # Production frontend deployment + live verification (main only).
+  # Railway api-role deployment — STRICT PIPELINE stage 1 after the gate.
+  # Schema migrations run on api-role startup, so this stage precedes the
+  # worker. Missing Railway credentials FAIL the release (never a skip).
+  # ---------------------------------------------------------------------------
+  railway-api-deploy:
+    name: deploy railway backend (api role — schema migrations)
+    runs-on: ubuntu-latest
+    needs: [backend-contract-gate, credentials]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: FAIL CLOSED — Railway credentials unavailable
+        if: needs.credentials.outputs.has_railway != 'true'
+        run: |
+          echo "::error::RAILWAY_TOKEN is not configured. A normal production release FAILS CLOSED here: the backend must be deployed and verified BEFORE the frontend ships (release ordering schema → backend → worker → verification → frontend). Nothing downstream will run. Configure the RAILWAY_TOKEN repository secret (a Railway PROJECT token for the production project) and re-run, or perform a manual backend deployment per docs/deployment/production.md, then re-run."
+          exit 1
+
+      - name: Deploy Railway api service
+        if: needs.credentials.outputs.has_railway == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          npm install --global @railway/cli@latest
+          # RAILWAY_TOKEN is a Railway PROJECT token bound to the production
+          # project; `--service` selects within it. The real service names —
+          # verified live with the project token on 2026-08-29 — are
+          # `WorkflowOS` (WORKFLOWOS_ROLE=api) and `WorkflowOS-Worker`
+          # (WORKFLOWOS_ROLE=worker). One codebase, two roles: the SAME
+          # repository backend/Dockerfile serves both roles; the role is
+          # selected by each service's WORKFLOWOS_ROLE variable.
+          #
+          # `railway up` uploads the checkout root; each service's build
+          # config (rootDirectory `backend` + Dockerfile) trims to
+          # backend/Dockerfile — proven live by the repo-root CLI deployments
+          # of 2026-08-29 (identical image digests).
+          #
+          # CLI uploads carry NO git context: RAILWAY_GIT_COMMIT_SHA is only
+          # injected for Git-connected deployments. The release SHA is
+          # therefore set as WORKFLOWOS_COMMIT_SHA on BOTH services — /health
+          # reports it as deployment.commitSha, which the backend-contract
+          # gate and backend-verification check. (--skip-deploys: the `up`
+          # below is the deploy; no extra restarts.)
+          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS" --skip-deploys
+          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS-Worker" --skip-deploys
+          railway up --ci --service "WorkflowOS" || {
+            echo "::error::Railway api-service deployment failed — see logs above."
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # Railway worker-role deployment — STRICT PIPELINE stage 2 (after the api
+  # role, whose startup runs the schema migrations the worker depends on).
+  # ---------------------------------------------------------------------------
+  railway-worker-deploy:
+    name: deploy railway backend (worker role)
+    runs-on: ubuntu-latest
+    needs: [railway-api-deploy]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: FAIL CLOSED — Railway credentials unavailable (defense in depth)
+        if: needs.credentials.outputs.has_railway != 'true'
+        run: |
+          echo "::error::RAILWAY_TOKEN is not configured (railway-api-deploy should already have failed the release — this guard exists so the ordering can never regress)."
+          exit 1
+
+      - name: Deploy Railway worker service
+        if: needs.credentials.outputs.has_railway == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --global @railway/cli@latest
+          railway up --ci --service "WorkflowOS-Worker" || {
+            echo "::error::Railway worker-service deployment failed — see logs above."
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # Live backend verification — STRICT PIPELINE stage 3: the deployed backend
+  # must report the EXACT release SHA and be fully ready (including the object
+  # store) before the frontend may ship. This is the enforcement point of the
+  # release-ordering guarantee.
+  # ---------------------------------------------------------------------------
+  backend-verification:
+    name: verify live backend (identity + readiness)
+    runs-on: ubuntu-latest
+    needs: [railway-worker-deploy]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Verify the live production backend
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PRODUCTION_API_URL}" ]; then
+            echo "::error::PRODUCTION_API_URL repository variable is not set — cannot verify the live backend contract."
+            exit 1
+          fi
+          # Identity: /health must report deployment.commitSha == RELEASE_SHA.
+          # (The deploy stages return when their build logs end; the rollout
+          # may still be converging, hence the retry loops.)
+          BACKEND_SHA=""
+          for _ in $(seq 1 30); do
+            HEALTH=$(curl -sS --max-time 15 "${PRODUCTION_API_URL}/health" || echo '{}')
+            BACKEND_SHA=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deployment",{}).get("commitSha",""))' 2>/dev/null || echo "")
+            if [ "$BACKEND_SHA" = "$RELEASE_SHA" ]; then
+              echo "backend identity verified: /health deployment.commitSha = $RELEASE_SHA"
+              break
+            fi
+            echo "waiting for the live backend to report the release SHA (got '${BACKEND_SHA:-none}')…"
+            sleep 10
+          done
+          if [ "$BACKEND_SHA" != "$RELEASE_SHA" ]; then
+            echo "::error::The production backend does not report the released commit SHA (got '${BACKEND_SHA:-none}'). RELEASE BLOCKED: the frontend must not ship against an unverified backend. Inspect the Railway deployment logs."
+            exit 1
+          fi
+          # Readiness: /health/ready must be 200 with EVERY dependency check
+          # ok — postgres, redis, AND the object store. A not-ready backend
+          # blocks the release (fail-closed), whatever the failing check is.
+          READY=""
+          for _ in $(seq 1 30); do
+            READY_CODE=$(curl -sS --max-time 15 -o /tmp/wfos-ready.json -w '%{http_code}' "${PRODUCTION_API_URL}/health/ready" || echo 000)
+            if [ "$READY_CODE" = "200" ]; then
+              READY=ok
+              break
+            fi
+            echo "waiting for backend readiness (HTTP $READY_CODE: $(head -c 300 /tmp/wfos-ready.json 2>/dev/null))…"
+            sleep 10
+          done
+          if [ "$READY" != "ok" ]; then
+            echo "::error::Backend readiness is not 200 — a dependency check is failing (postgres / redis / objectStore). RELEASE BLOCKED. Last response: $(head -c 400 /tmp/wfos-ready.json 2>/dev/null)"
+            exit 1
+          fi
+          echo "backend readiness verified: all dependency checks ok (postgres, redis, objectStore)"
+          cat /tmp/wfos-ready.json
+
+  # ---------------------------------------------------------------------------
+  # Production frontend deployment + live verification — STRICT PIPELINE stage
+  # 4: only after the backend is deployed AND verified live.
   # ---------------------------------------------------------------------------
   deploy-frontend:
     name: deploy vercel production
     runs-on: ubuntu-latest
-    needs: [backend-contract-gate, credentials]
+    needs: [backend-verification, credentials]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     outputs:
       deployment_url: ${{ steps.deploy.outputs.url }}
@@ -237,10 +403,11 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: No Vercel token configured — production deploy SKIPPED (visible)
+      - name: FAIL CLOSED — Vercel credentials unavailable
         if: needs.credentials.outputs.has_vercel != 'true'
         run: |
-          echo "::warning::VERCEL_TOKEN secret is not configured — production frontend deployment SKIPPED. This is an explicit skip, not a success claim. Deploy manually: vercel deploy ./frontend --prod (see docs/deployment/production.md)."
+          echo "::error::VERCEL_TOKEN is not configured. A normal production release FAILS CLOSED here (the backend is already deployed and verified; the frontend cannot ship without it). Configure the VERCEL_TOKEN repository secret and re-run, or deploy manually: vercel deploy ./frontend --prod (see docs/deployment/production.md), then re-run for the verification stages."
+          exit 1
 
       - name: Deploy Vercel production
         if: needs.credentials.outputs.has_vercel == 'true'
@@ -283,103 +450,15 @@ jobs:
           ./scripts/verify-cloud-deployment.sh
 
   # ---------------------------------------------------------------------------
-  # Railway backend deployment — gated on RAILWAY_TOKEN; visible skip otherwise.
-  # ---------------------------------------------------------------------------
-  railway-backend:
-    name: deploy railway backend (api + worker)
-    runs-on: ubuntu-latest
-    needs: [backend-contract-gate, credentials]
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: No Railway token configured — backend deploy SKIPPED (visible)
-        if: needs.credentials.outputs.has_railway != 'true'
-        run: |
-          echo "::warning::RAILWAY_TOKEN secret is not configured — automated Railway backend deployment SKIPPED. This is an explicit skip, not a success claim."
-          echo ""
-          echo "Manual backend deployment (preserves the modular monolith — the SAME"
-          echo "backend/Dockerfile serves both roles):"
-          echo "  1. Railway project → API service:   source = repository main, root dir backend, WORKFLOWOS_ROLE=api"
-          echo "     (Railway injects PORT; the image binds 0.0.0.0:\$PORT; migrations run on api-role startup)"
-          echo "  2. Railway project → Worker service: same repository + Dockerfile, WORKFLOWOS_ROLE=worker"
-          echo "  3. Verify: curl \$API_URL/health  (deployment.commitSha must equal the released SHA)"
-          echo "             curl \$API_URL/health/ready  (postgres/redis/objectStore all ok)"
-          echo "  See docs/deployment/production.md for the full variable set."
-          echo ""
-          echo "Automated deploys arm automatically once RAILWAY_TOKEN exists:"
-          echo "  railway up --service WorkflowOS        (the production project's api service)"
-          echo "  railway up --service WorkflowOS-Worker  (…and its worker service)"
-
-      - name: Deploy Railway backend (api + worker services)
-        if: needs.credentials.outputs.has_railway == 'true'
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RELEASE_SHA: ${{ github.sha }}
-          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PRODUCTION_API_URL}" ]; then
-            echo "::error::PRODUCTION_API_URL repository variable is not set — cannot verify the live backend contract after deployment."
-            exit 1
-          fi
-          npm install --global @railway/cli@latest
-          # RAILWAY_TOKEN is a Railway PROJECT token bound to the production
-          # project; `--service` selects within it. The real service names —
-          # verified live with the project token on 2026-08-29 — are
-          # `WorkflowOS` (WORKFLOWOS_ROLE=api) and `WorkflowOS-Worker`
-          # (WORKFLOWOS_ROLE=worker). One codebase, two roles: the repository's
-          # backend/Dockerfile builds both. `railway up` uploads the checkout
-          # root; each service's build config (rootDirectory `backend` +
-          # Dockerfile) trims to backend/Dockerfile — proven live by the
-          # repo-root CLI deployments of 2026-08-29 (identical image digests).
-          #
-          # CLI uploads carry NO git context: RAILWAY_GIT_COMMIT_SHA is only
-          # injected for Git-connected deployments. The release SHA is
-          # therefore set as WORKFLOWOS_COMMIT_SHA on both services — /health
-          # reports it as deployment.commitSha, which the backend-contract
-          # gate verifies on every subsequent release. (--skip-deploys: the
-          # `up` below is the deploy; no extra restarts.)
-          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS" --skip-deploys
-          railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS-Worker" --skip-deploys
-          echo "Deploying backend (role api)…"
-          railway up --ci --service "WorkflowOS" || {
-            echo "::error::Railway api-service deployment failed — see logs above."
-            exit 1
-          }
-          echo "Deploying backend (role worker)…"
-          railway up --ci --service "WorkflowOS-Worker" || {
-            echo "::error::Railway worker-service deployment failed — see logs above."
-            exit 1
-          }
-          # Post-deploy contract check: the live API must report the released
-          # SHA — the exact identity the backend-contract gate probes on every
-          # later release. (`up --ci` returns when the build logs end; the
-          # rollout may still be converging, hence the retry loop.)
-          BACKEND_SHA=""
-          for _ in $(seq 1 12); do
-            HEALTH=$(curl -sS --max-time 15 "${PRODUCTION_API_URL}/health" || echo '{}')
-            BACKEND_SHA=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deployment",{}).get("commitSha",""))' 2>/dev/null || echo "")
-            if [ "$BACKEND_SHA" = "$RELEASE_SHA" ]; then
-              echo "backend contract verified live: /health deployment.commitSha = $RELEASE_SHA"
-              break
-            fi
-            echo "waiting for the live backend to report the release SHA…"
-            sleep 10
-          done
-          if [ "$BACKEND_SHA" != "$RELEASE_SHA" ]; then
-            echo "::error::The production backend does not report the released commit SHA (got '${BACKEND_SHA:-none}'). The deployment-identity surface is not live — inspect the Railway deployment logs."
-            exit 1
-          fi
-
-  # ---------------------------------------------------------------------------
   # Deployment evidence — immutable per-release record (summary + artifact).
   # ---------------------------------------------------------------------------
   deployment-evidence:
     name: deployment evidence
     runs-on: ubuntu-latest
-    needs: [deploy-frontend, railway-backend]
+    # deploy-frontend is the LAST stage of the strict pipeline — needing it
+    # transitively requires every Railway stage and its verification to have
+    # succeeded.
+    needs: [deploy-frontend]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Record release evidence

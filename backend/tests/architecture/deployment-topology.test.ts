@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { parse as parseYaml } from 'yaml';
 import Fastify from 'fastify';
 import { healthRoutes } from '../../src/api/routes/health.route.js';
 import { createS3ObjectStoreFromEnv } from '../../src/platform/storage/s3-object-store.js';
@@ -46,6 +47,20 @@ import { createS3ObjectStoreFromEnv } from '../../src/platform/storage/s3-object
  *           (no silent degradation to filesystem/in-memory in production).
  *   DH-10 — No cloud-provider SDK enters the backend (the S3 adapter is a
  *           dependency-free SigV4 implementation inside the platform layer).
+ *
+ * REQUEST CHANGES remediation (2026-08-29 architect verdict) — the release
+ * DAG is additionally enforced as machine-checked structure:
+ *   RD-01 — The production release is a STRICT PIPELINE (gate → api deploy →
+ *           worker deploy → live verification → frontend deploy → evidence);
+ *           the pre-remediation CONCURRENT shape (frontend + backend stages
+ *           running in parallel after the gate) is a REJECTING violation.
+ *   RD-02 — Normal production releases FAIL CLOSED when Railway credentials
+ *           are absent (a visible-skip step is a REJECTING violation on the
+ *           production path).
+ *   RD-03 — The frontend deploy fails closed without VERCEL_TOKEN.
+ *   RD-04 — No production stage runs for pull_request events.
+ *   RD-05 — The live backend verification proves identity (commitSha ==
+ *           release SHA) AND full readiness (200, object store included).
  */
 
 const BACKEND_ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -174,7 +189,7 @@ describe('DEPLOYMENT HARDENING — release pipeline', () => {
     expect(commands.length, 'exactly one production deploy command (command form)').toBe(1);
     // …and the job containing it never runs for pull_request events.
     const deployJobStart = release.indexOf('deploy-frontend:');
-    const jobSlice = release.slice(deployJobStart, release.indexOf('railway-backend:'));
+    const jobSlice = release.slice(deployJobStart, release.indexOf('deployment-evidence:'));
     expect(jobSlice).toMatch(/if:\s*github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/);
   });
 
@@ -197,10 +212,11 @@ describe('DEPLOYMENT HARDENING — release pipeline', () => {
     expect(release).toMatch(/deployment\.commitSha/);
     // …requires ancestry…
     expect(release).toMatch(/git merge-base --is-ancestor/);
-    // …and the frontend deploy depends on the gate.
+    // …and the frontend deploy depends on the LIVE-VERIFIED backend stage
+    // (backend-verification), not merely on the ancestry precheck.
     const deployJobStart = release.indexOf('deploy-frontend:');
     const needsSlice = release.slice(deployJobStart, deployJobStart + 600);
-    expect(needsSlice).toMatch(/needs:.*backend-contract-gate/);
+    expect(needsSlice).toMatch(/needs:.*backend-verification/);
     // The architect-controlled exceptional escape hatch exists and is recorded.
     expect(release).toMatch(/skip_backend_gate/);
   });
@@ -213,13 +229,191 @@ describe('DEPLOYMENT HARDENING — release pipeline', () => {
     expect(deploy).not.toMatch(/\brailway up\b/);
   });
 
-  it('DH-04/DH-07 (discrimination): the release workflow skips visibly when credentials are absent', () => {
+  it('DH-04/DH-07 (discrimination): absent credentials are visible skips ONLY on the PR preview path', () => {
     const release = read('.github/workflows/release.yml');
     // Credential presence probe produces booleans only…
     expect(release).toMatch(/has_vercel/);
     expect(release).toMatch(/has_railway/);
-    // …and absent credentials produce an EXPLICIT skip warning, never a silent success.
+    // …and the PREVIEW stage (the only optional stage — a per-PR convenience
+    // that never touches production) skips VISIBLY when VERCEL_TOKEN is
+    // absent, never a silent success…
     expect(release).toMatch(/explicit skip, not a success claim/);
+    // …while EVERY production-path stage fails CLOSED on absent credentials
+    // (enforced structurally by the RD-02/RD-03 checks below): split the
+    // workflow at the production job headers and inspect each job BODY —
+    // none of them may contain a skip-instead-of-fail warning step.
+    const parts = release.split(/\n  (railway-api-deploy|railway-worker-deploy|deploy-frontend):/);
+    for (let i = 1; i < parts.length; i += 2) {
+      const jobName = parts[i];
+      const body = parts[i + 1] ?? '';
+      if (/::warning::[^\n]*SKIPPED/.test(body)) {
+        throw new Error(
+          `production-path job ${jobName} still contains a skip-instead-of-fail step:\n${body.slice(0, 200)}`,
+        );
+      }
+    }
+  });
+});
+
+// ===========================================================================
+// RD-* — release DAG enforcement (REQUEST CHANGES remediation, 2026-08-29)
+//
+// The architect verdict found the release DAG was NOT actually sequential:
+// deploy-frontend and the Railway stage both depended only on the
+// backend-contract gate (a real deployment race), and a normal production
+// release could proceed with Railway credentials absent (unsafe skip). These
+// checks parse the workflow STRUCTURE (not prose) and discriminate both
+// historical failure modes — the pre-remediation shapes are REJECTING
+// violations.
+// ===========================================================================
+
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+}
+interface WorkflowJob {
+  name?: string;
+  needs?: string[];
+  if?: string;
+  steps?: WorkflowStep[];
+}
+interface ReleaseWorkflow {
+  jobs: Record<string, WorkflowJob>;
+}
+
+function loadReleaseWorkflow(): ReleaseWorkflow {
+  return parseYaml(read('.github/workflows/release.yml')) as ReleaseWorkflow;
+}
+
+/** The required strict pipeline: stage → the job that must precede it. */
+const STRICT_PIPELINE: Array<[string, string]> = [
+  ['railway-api-deploy', 'backend-contract-gate'],
+  ['railway-worker-deploy', 'railway-api-deploy'],
+  ['backend-verification', 'railway-worker-deploy'],
+  ['deploy-frontend', 'backend-verification'],
+  ['deployment-evidence', 'deploy-frontend'],
+];
+
+/**
+ * A stage is properly sequenced when its `needs` includes its required
+ * predecessor (so it can never start before the predecessor finished) AND
+ * it does not run for pull_request events (production-path only).
+ */
+function pipelineViolations(
+  jobs: Record<string, WorkflowJob>,
+): string[] {
+  const violations: string[] = [];
+  for (const [stage, predecessor] of STRICT_PIPELINE) {
+    const job = jobs[stage];
+    if (!job) {
+      violations.push(`missing job: ${stage}`);
+      continue;
+    }
+    const needs = job.needs ?? [];
+    if (!needs.includes(predecessor)) {
+      violations.push(
+        `${stage} must need ${predecessor} (got: [${needs.join(', ')}]) — production stages must never run concurrently`,
+      );
+    }
+    if (/pull_request/.test(job.if ?? '')) {
+      violations.push(`${stage} must never run for pull_request events`);
+    }
+  }
+  return violations;
+}
+
+/**
+ * A fail-closed credential guard: the step that runs when the credential is
+ * ABSENT must exit non-zero with an ::error:: — a warning-only "visible
+ * skip" lets a production release proceed without the deploy it depends on.
+ */
+function isFailClosed(step: WorkflowStep | undefined): boolean {
+  if (!step) return false;
+  const run = step.run ?? '';
+  return /::error::/.test(run) && /\bexit 1\b/.test(run) && !/::warning::.*SKIPPED/.test(run);
+}
+
+function stepFor(jobs: Record<string, WorkflowJob>, job: string, condPrefix: string): WorkflowStep | undefined {
+  return (jobs[job]?.steps ?? []).find((s) => (s.if ?? '').startsWith(condPrefix));
+}
+
+describe('DEPLOYMENT HARDENING — release DAG enforcement (REQUEST CHANGES remediation)', () => {
+  it('RD-01: the production release is a STRICT pipeline (no concurrent production stages)', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    const violations = pipelineViolations(jobs);
+    expect(violations, violations.join('; ')).toEqual([]);
+  });
+
+  it('RD-01 (discrimination): the pre-remediation CONCURRENT topology is rejected', () => {
+    // Reconstruct the architect's finding: both deploy-frontend and a single
+    // railway-backend job hanging directly off the gate (parallel branches).
+    const oldShape: Record<string, WorkflowJob> = {
+      'backend-contract-gate': {},
+      'railway-backend': { needs: ['backend-contract-gate'] },
+      'deploy-frontend': { needs: ['backend-contract-gate', 'credentials'] },
+    };
+    const violations = pipelineViolations(oldShape);
+    expect(violations.length, 'the concurrent shape MUST be rejected').toBeGreaterThan(0);
+    expect(violations.join('; ')).toMatch(/railway-api-deploy/);
+    expect(violations.join('; ')).toMatch(/deploy-frontend must need backend-verification/);
+  });
+
+  it('RD-02: normal production releases FAIL CLOSED without Railway credentials', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    for (const job of ['railway-api-deploy', 'railway-worker-deploy']) {
+      const guard = stepFor(jobs, job, 'needs.credentials.outputs.has_railway !=');
+      expect(guard, `${job} must have a has_railway guard step`).toBeDefined();
+      expect(
+        isFailClosed(guard),
+        `${job}'s absent-credential step must exit 1 with ::error:: (fail-closed), not skip`,
+      ).toBe(true);
+    }
+  });
+
+  it('RD-02 (discrimination): a visible-skip step is REJECTED on the production path', () => {
+    // The pre-remediation shape: warning + success when Railway credentials
+    // were absent — a normal release could then ship the frontend against an
+    // undeployed backend.
+    const skipStep: WorkflowStep = {
+      name: 'No Railway token configured — backend deploy SKIPPED (visible)',
+      if: "needs.credentials.outputs.has_railway != 'true'",
+      run: 'echo "::warning::RAILWAY_TOKEN secret is not configured — automated Railway backend deployment SKIPPED. This is an explicit skip, not a success claim."',
+    };
+    expect(isFailClosed(skipStep), 'a warning-only skip must NOT count as fail-closed').toBe(false);
+  });
+
+  it('RD-03: the frontend deploy fails closed without VERCEL_TOKEN', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    const guard = stepFor(jobs, 'deploy-frontend', 'needs.credentials.outputs.has_vercel !=');
+    expect(guard, 'deploy-frontend must have a has_vercel guard step').toBeDefined();
+    expect(isFailClosed(guard), 'the absent-VERCEL_TOKEN step must exit 1 with ::error::').toBe(true);
+  });
+
+  it('RD-04: no production stage runs for pull_request events', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    for (const job of STRICT_PIPELINE.map(([s]) => s)) {
+      expect(
+        jobs[job]?.if ?? '',
+        `${job} must be gated on push/workflow_dispatch only`,
+      ).toMatch(/github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'/);
+    }
+  });
+
+  it("RD-05: backend-verification proves identity AND full readiness (including the object store)", () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    const verify = (jobs['backend-verification']?.steps ?? []).find((s) => (s.run ?? '').includes('/health'));
+    expect(verify, 'backend-verification must probe the live backend').toBeDefined();
+    const run = verify?.run ?? '';
+    // Identity: the live /health must report the release SHA…
+    expect(run).toMatch(/deployment\.commitSha/);
+    expect(run).toMatch(/RELEASE_SHA/);
+    expect(run).toMatch(/\$BACKEND_SHA" != "\$RELEASE_SHA"/);
+    // …and readiness must be REQUIRED (200 + every dependency check ok),
+    // not merely recorded.
+    expect(run).toMatch(/health\/ready/);
+    expect(run).toMatch(/READY_CODE" = "200"/);
+    expect(run).toMatch(/RELEASE BLOCKED/i);
   });
 });
 

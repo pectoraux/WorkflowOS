@@ -75,20 +75,60 @@ CORS_ORIGIN=https://app.yourdomain.com
 WORKFLOWOS_GITHUB_WEBHOOK_SECRET=<your-webhook-secret>
 ```
 
-## 3. Cloudflare R2 — object storage
+## 3. Object storage — private-network MinIO (production) / R2 (optional swap)
 
-1. Cloudflare Dashboard → R2 → Overview → Create bucket (e.g. `workflowos-prod`).
-2. Manage API Tokens → Create API Token → Object Read & Write → scope to bucket.
-3. Save:
-   - `R2_ACCESS_KEY_ID`
-   - `R2_SECRET_ACCESS_KEY`
-   - `R2_ACCOUNT_ID`
-   - `R2_BUCKET_NAME`
-   - `R2_ENDPOINT` = `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
+The production topology ships with **its own S3-compatible object store**: a
+private-network, volume-backed **MinIO** service inside the Railway project
+(`deploy/minio/` — pinned images, idempotent bucket bootstrap, no public
+exposure). The backend's dependency-free SigV4 adapter speaks path-style
+requests, which is MinIO's native model, so the SAME `ObjectStore` boundary
+serves both providers.
 
-> **Note:** The current production deployment uses filesystem object storage
-> (`OBJECT_STORAGE_DIR=/data/objects`). To use R2, set `OBJECT_STORAGE_PROVIDER=s3`
-> + the R2 credentials. The S3-compatible adapter is on the roadmap.
+**Why MinIO and not R2**: the previous production object-storage config was
+never real — placeholder credentials plus an invalid endpoint (a
+non-account-scoped `*.r2.cloudflarestorage.com` host) — so readiness stayed
+503 forever. A working store was provisioned inside the project the release
+pipeline can own end-to-end.
+
+**Live configuration** (set on both `WorkflowOS` and `WorkflowOS-Worker`):
+
+```
+OBJECT_STORAGE_PROVIDER=s3
+OBJECT_STORAGE_BUCKET=workflowos-prod          # created idempotently on boot
+OBJECT_STORAGE_ENDPOINT=http://minio.railway.internal:9000
+OBJECT_STORAGE_REGION=us-east-1
+OBJECT_STORAGE_ACCESS_KEY_ID=<MINIO_ROOT_USER>     # generated, never committed
+OBJECT_STORAGE_SECRET_ACCESS_KEY=<MINIO_ROOT_PASSWORD>
+```
+
+**Operating the MinIO service**:
+
+- Deploy/update: `cd deploy/minio && railway up --service MinIO`
+  (the service's code root is that directory; a repo-root upload fails
+  visibly by construction — there is no top-level Dockerfile).
+- Storage: the `minio-volume` Railway volume mounted at `/data` — durable
+  across redeploys.
+- Credentials: `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` service variables
+  (rotation = rotate the MinIO service vars AND the two app services'
+  `OBJECT_STORAGE_*` credentials together, then redeploy).
+- The bucket stays private; the service has NO public domain.
+
+**Swapping to Cloudflare R2** (unchanged procedure, kept for reference —
+use when a real R2 account exists):
+
+1. Cloudflare Dashboard → R2 → Overview → Create bucket
+   (`workflowos-prod`) → note the account-scoped S3 endpoint
+   (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com` — the account ID is on
+   the R2 overview page; an endpoint without it does not route).
+2. Manage API Tokens → Create API Token → Object Read & Write → scope to
+   the bucket.
+3. On BOTH Railway app services set `OBJECT_STORAGE_ENDPOINT` to the R2
+   endpoint, `OBJECT_STORAGE_REGION=auto`, and the R2 access key pair, then
+   redeploy. No code changes — the ObjectStore boundary is provider-neutral.
+
+> **Note:** The local docker-compose topology keeps the filesystem adapter
+> (`OBJECT_STORAGE_DIR=/data/objects`); the S3 adapter is the production
+> configuration (fail-closed on incomplete config).
 
 ## 4. GitHub App
 
@@ -295,20 +335,37 @@ destructive schema changes.
   VC-01..VC-06) + frontend typecheck + an ISOLATED Vercel preview whose
   `/api/*` is verified NOT to reach the production backend. PRs never deploy
   production Railway state.
-- **Push to main**: the **backend-contract gate** probes the live production
-  backend's `GET /health` deployment identity (`deployment.commitSha`) and
-  requires it to be a git ancestor of the release — a frontend release can
-  never assume a backend contract that is not yet available
-  (schema → backend → worker → frontend ordering). An architect-approved
-  exceptional transition can skip the gate via `workflow_dispatch` with
-  `skip_backend_gate=true` (recorded in the run log + evidence).
-- Then: `vercel deploy --prod` + live production verification
-  (`scripts/verify-cloud-deployment.sh`, `MODE=production`, `REQUIRE_READY=1`:
-  SPA shell, assets, deep links, `/api` rewrite, backend liveness/readiness,
-  authenticated read-only call through Browser → Vercel → Railway →
-  PostgreSQL), the Railway backend stage (gated on `RAILWAY_TOKEN`; skips
-  VISIBLY with manual steps when absent), and a per-release evidence record
-  (job summary + artifact).
+- **Push to main / workflow_dispatch** — the production release is a STRICT
+  PIPELINE (every stage `needs` its predecessor; no two production stages
+  ever run concurrently, and a missing credential FAILS the release instead
+  of skipping):
+
+  1. **backend-contract-gate** — the live backend's `GET /health`
+     `deployment.commitSha` must be a git ancestor of the release (an
+     architect-approved exceptional transition can skip ONLY this precheck
+     via `workflow_dispatch` with `skip_backend_gate=true`; recorded in the
+     run log + evidence).
+  2. **railway-api-deploy** — deploys the api role (`railway up --service
+     WorkflowOS`); schema migrations run on api-role startup; sets
+     `WORKFLOWOS_COMMIT_SHA=<release sha>` on both services so `/health`
+     reports the exact release.
+  3. **railway-worker-deploy** — deploys the worker role (`railway up
+     --service WorkflowOS-Worker`).
+  4. **backend-verification** — the LIVE backend must report the exact
+     release SHA (`/health deployment.commitSha`) AND be fully ready
+     (`/health/ready` 200 — postgres, redis, objectStore ALL ok).
+  5. **deploy-frontend** — `vercel deploy --prod` + live production
+     verification (`scripts/verify-cloud-deployment.sh`, `MODE=production`,
+     `REQUIRE_READY=1`: SPA shell, assets, deep links, `/api` rewrite,
+     backend liveness/readiness, authenticated read-only call through
+     Browser → Vercel → Railway → PostgreSQL).
+  6. **deployment-evidence** — per-release evidence record (job summary +
+     artifact).
+
+  The DAG structure itself is machine-checked in CI
+  (`backend/tests/architecture/deployment-topology.test.ts`, checks
+  RD-01..RD-05): the pre-remediation concurrent topology and the
+  visible-skip-instead-of-fail credential handling are REJECTING violations.
 
 `deploy.yml` remains the validation CI for the frozen LOCAL docker-compose
 topology — it never deploys to cloud providers and is not a second release
@@ -316,8 +373,9 @@ system.
 
 Required repository configuration:
 
-- secrets: `VERCEL_TOKEN`, `RAILWAY_TOKEN` (optional — enables automated
-  backend deploys)
+- secrets: `VERCEL_TOKEN`, `RAILWAY_TOKEN` (BOTH required for production
+  releases — a missing secret fails the release fail-closed; the Railway
+  secret must be a PROJECT token for the production project)
 - variables: `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `PRODUCTION_API_URL`,
   `PREVIEW_API_TARGET`
 
@@ -338,7 +396,7 @@ probe continues to verify actual reachability (put+get+delete probe).
 | `DATABASE_URL` | Railway (API + Worker) | Neon PostgreSQL connection string (authoritative) |
 | `REDIS_URL` | Railway (API + Worker) | Railway Redis internal URL (non-authoritative: queue/locks/cache) |
 | `OBJECT_STORAGE_PROVIDER` | Railway (API + Worker) | `s3` for the S3-compatible adapter (fail-closed on incomplete config) |
-| `OBJECT_STORAGE_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | Railway (API + Worker) | S3-compatible object storage (e.g. Cloudflare R2) |
+| `OBJECT_STORAGE_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | Railway (API + Worker) | S3-compatible object storage — production uses the private-network MinIO service (`http://minio.railway.internal:9000`); Cloudflare R2 is a drop-in swap |
 | `OBJECT_STORAGE_DIR` | Railway (API + Worker) | filesystem adapter directory (local/dev topology) |
 | `WORKFLOWOS_ROLE` | Railway | `api` or `worker` (same image, two roles) |
 | `PORT` | Railway (API) | provided by Railway; the image binds `0.0.0.0:$PORT` |
