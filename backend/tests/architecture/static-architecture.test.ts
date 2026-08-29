@@ -16959,7 +16959,14 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     const auditModule = readFileSync(join(DG_INTERNAL, 'merged-finalization.ts'), 'utf8');
     expect(auditModule).toMatch(/auditMergedFinalization/);
     expect(auditModule).toMatch(/Merge pull request #/);
-    expect(auditModule).toMatch(/\^\(WORK-\\d\{3\}\)\\b/);
+    // The PR #75 review: the architect-merge evidence matcher recognizes the
+    // SPECIFIC colon-separated convention (`WORK-NNN: title` — exactly what
+    // governance-model.json postMergeFinalization.enforcement and ADR-0007
+    // record), NOT every subject that begins with a work-order id — the
+    // WORK-052 post-merge finalization commit 1ccc45f ("WORK-052 post-merge
+    // corrective finalization — …", a state-only squash) is never merge
+    // evidence for its own work order.
+    expect(auditModule).toMatch(/\^\(WORK-\\d\{3\}\): /);
     // The PR #63 round-2 review: the ENTIRE mergedAs identity is validated —
     // the PR number against the authoritative PR identity (the declared pr),
     // not merely stored.
@@ -17077,6 +17084,14 @@ describe('WORK-052 invariants — Development Governance and Self-Hosting Contro
     expect(finalization).toMatch(/DISCRIMINATION \(the PR #63 round-2 review — fail closed\): a WORK-NNN-merged work order that declares NO pr cannot anchor its mergedAs\.pr provenance claim/);
     expect(finalization).toMatch(/an in-flight work order with NO merge evidence is NOT a gap/);
     expect(finalization).toMatch(/the REAL repository audits clean/);
+    // The PR #75 review — the evidence-classification correction: the
+    // discriminating regression is a mandated marker (a finalization/
+    // state-only commit beginning with WORK-NNN is NOT merge evidence), and
+    // the multi-evidence premise is limited to ACTUAL architect merges.
+    expect(finalization).toMatch(
+      /DISCRIMINATION \(the PR #75 review — evidence classification\): a post-merge FINALIZATION\/state-only commit beginning with WORK-NNN is NOT merge evidence/,
+    );
+    expect(finalization).toMatch(/a work order the architect ACTUALLY merged more than once/);
     const detectorTests = readFileSync(DG_DETECTOR_TESTS, 'utf8');
     expect(detectorTests).toMatch(/WORK-052 — the governance-manifest detector \(self-hosting boundary at the checkpoint substrate\)/);
     expect(detectorTests).toMatch(/W052-AC09 — a valid governance manifest at the bound revision PASSES with durable \/verification evidence/);

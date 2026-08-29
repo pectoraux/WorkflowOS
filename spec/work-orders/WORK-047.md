@@ -437,11 +437,71 @@ STOP and raise an Architecture Change Request if implementation requires:
   2 pre-existing warnings); static architecture 747/747 (main baseline
   736/736 + 11 new); the agent-intelligence suites 46/46 (21 integration +
   19 unit + 6 API) on real PostgreSQL 18 AND pglite; development-governance
-  50/51 (the 1 = the documented pre-existing merged-finalization stale
-  exact-equality pin — WORK-052 scope, failing identically on main's CI; the
-  WORK-046 finalization in this change FIXES the underlying audit gap, the
-  audit itself now passes 3/3); architecture-governance 40/40; FULL real-PG
-  18 sweep 110 files — 2413 passed / 1 failed (the same pre-existing);
+  50/51 (the 1 = the merged-finalization REAL-repository audit —
+  characterized at delivery time as a pre-existing stale expected-value pin,
+  a characterization the PR #75 architectural review CORRECTLY REJECTED and
+  this branch has since remediated: see the review remediation record below;
+  the WORK-046 finalization in this change FIXES the underlying WORK-046
+  audit gap, the audit itself now passes 3/3); architecture-governance 40/40;
+  FULL real-PG 18 sweep 110 files — 2413 passed / 1 failed (that audit);
   pglite full sweep 2369 passed / 44 skipped (real-PG-only) / 1 failed (the
   same); `governance:status` exit 0 and truthful (48 complete, WORK-047 in
   flight, merged finalized 3/3, frontier WORK-048).
+
+## Review remediation record (2026-08-29 — PR #75 REQUEST CHANGES)
+
+The architectural review of PR #75 approved the WORK-047 intelligence
+direction and ordered ONE narrow governance correction; remediated on the
+same branch (`feat/work-047-agent-intelligence`):
+
+- **The defect (as the review correctly characterized it)**: the
+  merged-finalization audit's architect-merge evidence matcher
+  (`ARCHITECT_MERGE_SUBJECT_RE = ^(WORK-\d{3})\b`) accepted ANY subject
+  beginning with a work-order id, so the WORK-052 post-merge finalization
+  commit `1ccc45f` ("WORK-052 post-merge corrective finalization — … (#63)",
+  the state-only squash of PR #63) was classified as a SECOND merge-evidence
+  commit for WORK-052 — conflating the actual architectural merge
+  (`47615c2`) with the post-merge state-only finalization that followed it.
+  This is a provenance/audit-model defect (the very commit that established
+  the finalization protocol misclassified as merge evidence for its own work
+  order), NOT a stale exact-equality pin — the delivery report's earlier
+  "pre-existing WORK-052-scope stale pin" characterization is withdrawn.
+- **The correction (extremely narrow)**: the matcher now recognizes the
+  SPECIFIC colon-separated architect-merge convention — `WORK-NNN: title`
+  (both actual architect squash merges follow it: `WORK-046: Multi-Agent
+  Delegation` at `1f2bef9`, `WORK-052: Development Governance & Self-Hosting
+  Control Plane` at `47615c2`), exactly as `governance-model.json`
+  `postMergeFinalization.enforcement` and ADR-0007 already record. Both
+  legitimate merge-evidence shapes are preserved: the classic
+  `Merge pull request #N from …` merge commit and the colon convention. A
+  subject that merely BEGINS with the id names the work order as a topic and
+  is not evidence.
+- **The discriminating regression** (merged-finalization suite, 10 → 11
+  tests): the REAL `1ccc45f` subject verbatim + generic state-only shapes
+  (`WORK-052 post-merge finalization — …`, `WORK-046 post-merge corrective
+  finalization — …`, `WORK-052 finalization`) are proven never to enter the
+  evidence (exact-equality on `byWorkOrder`), plus the audit-level proof
+  that a history containing ONLY a finalization commit does not bind the
+  work order as merged (under the loose matcher that exact history produced
+  a FALSE provenance gap against the truthful `47615c2` record). The
+  multi-evidence test premise was corrected (multiple evidence entries are
+  legitimate only for multiple ACTUAL architect merges — a finalization
+  squash is not among them). The static suite pins the tightened convention
+  and the new regression marker.
+- **What was NOT done**: the merged-finalization check was not weakened or
+  disabled (the matcher strictly NARROWS accepted evidence); no expected SHA
+  was hard-coded (the REAL-repository audit's exact-equality assertion was
+  already the truth — the matcher now classifies it); no WORK-047
+  intelligence code changed; no new feature scope.
+- **Verification (after the correction)**: typecheck 0 errors; lint 0
+  errors (the 2 pre-existing warnings); static architecture 747/747;
+  merged-finalization 11/11 (the REAL repository audits clean — WORK-052
+  evidence exactly `47615c2`); development-governance 52/52;
+  architecture-governance 40/40; FULL real-PG 18 sweep 110 files —
+  **2415 passed / 0 failed** (the first post-correction sweep run had one
+  timing-sensitive flake in the UNRELATED cross-mode-handoff relay test
+  R1-#2b — the same test that flaked once on the original PR #75 CI run and
+  passed on re-run there; it passes in isolation 44/44 and did not recur in
+  the clean sweep); pglite sweep 2371 passed / 44 skipped / 0 failed;
+  `governance:status` exit 0 and truthful (48 complete, WORK-047 in flight,
+  merged finalized 3/3, frontier WORK-048).
