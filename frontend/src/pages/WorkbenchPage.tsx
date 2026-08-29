@@ -15,6 +15,15 @@
  *   - renders failed requests as errors (never fabricated success);
  *   - re-derives everything from fresh responses on every refresh (stale UI
  *     state can never override server truth).
+ *
+ * READ-STATE MODEL (the architect's PR #76 review correction): every
+ * authoritative read settles into an explicit ReadState — loading / success /
+ * error (see lib/read-state.ts). A FAILED read can NEVER become an empty
+ * result: an execution/changes/verification/review/deployment/activity
+ * failure renders "… unavailable", never "No …"; a failed
+ * getNextWorkItem() renders "Next work item unavailable", never "No eligible
+ * next work item". success([]) (the authority genuinely answered "none") and
+ * error (the authority could not be reached) are always distinguishable.
  */
 import * as React from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -64,6 +73,7 @@ import { AuditEventItem } from '@/components/domain/audit-event-item';
 import { WorkGraphBoard } from '@/components/workbench/work-graph-board';
 import { countByState, deriveAttention } from '@/lib/work-graph';
 import { formatRelative, shortId, titleCase } from '@/lib/format';
+import { readLoading, settleRead, type ReadState } from '@/lib/read-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -127,6 +137,21 @@ function HealthChip({ label, status }: { label: string; status?: string }) {
   );
 }
 
+/** The explicit unavailable line for an inline (non-tab) failed read. */
+function UnavailableLine({
+  children,
+  testid,
+}: {
+  children: React.ReactNode;
+  testid?: string;
+}) {
+  return (
+    <div className="text-sm text-destructive" data-testid={testid}>
+      {children}
+    </div>
+  );
+}
+
 export default function WorkbenchPage() {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -134,35 +159,35 @@ export default function WorkbenchPage() {
   const tab: TabValue = tabParam && TABS.some((t) => t.value === tabParam) ? tabParam : 'overview';
 
   const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
   const [refreshingAt, setRefreshingAt] = React.useState<number | null>(null);
 
-  // Authoritative reads (never mutated here).
-  const [project, setProject] = React.useState<Project | null>(null);
-  const [graph, setGraph] = React.useState<WorkGraph | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = React.useState<ProjectRuntimeStatus | null>(null);
-  const [executions, setExecutions] = React.useState<ExecutionSummary[]>([]);
-  const [prAssociations, setPrAssociations] = React.useState<PrAssociation[]>([]);
-  const [verificationRuns, setVerificationRuns] = React.useState<VerificationRun[]>([]);
-  const [reviews, setReviews] = React.useState<Review[]>([]);
-  const [deployments, setDeployments] = React.useState<Deployment[]>([]);
-  const [auditEvents, setAuditEvents] = React.useState<AuditEvent[]>([]);
-  const [nextWorkItemId, setNextWorkItemId] = React.useState<string | null>(null);
-  const [planningRecs, setPlanningRecs] = React.useState<PlanningRecommendationItem[]>([]);
-  const [maintenanceHealth, setMaintenanceHealth] = React.useState<MaintenanceHealth | null>(null);
-  const [advisoryNote, setAdvisoryNote] = React.useState<string | null>(null);
-
-  const nodeById = React.useMemo(() => {
-    const m = new Map<string, WorkGraphNode>();
-    if (graph) for (const n of graph.nodes) m.set(n.id, n);
-    return m;
-  }, [graph]);
+  // Authoritative reads (never mutated here). Each read is an explicit
+  // ReadState: loading / success(data) / error. A failure can never become
+  // data — it renders as an explicit "… unavailable" error.
+  const [projectRead, setProjectRead] = React.useState<ReadState<Project>>(readLoading);
+  const [graphRead, setGraphRead] = React.useState<ReadState<WorkGraph>>(readLoading);
+  const [runtimeRead, setRuntimeRead] = React.useState<ReadState<ProjectRuntimeStatus>>(readLoading);
+  const [executionsRead, setExecutionsRead] = React.useState<ReadState<ExecutionSummary[]>>(readLoading);
+  const [changesRead, setChangesRead] = React.useState<ReadState<PrAssociation[]>>(readLoading);
+  const [verificationRead, setVerificationRead] = React.useState<ReadState<VerificationRun[]>>(readLoading);
+  const [reviewsRead, setReviewsRead] = React.useState<ReadState<Review[]>>(readLoading);
+  const [deploymentsRead, setDeploymentsRead] = React.useState<ReadState<Deployment[]>>(readLoading);
+  const [activityRead, setActivityRead] = React.useState<ReadState<AuditEvent[]>>(readLoading);
+  // The workflow authority's own next-item selection (null = it answered
+  // "none eligible"; error = it could NOT answer — these never conflate).
+  const [nextWorkItemRead, setNextWorkItemRead] = React.useState<ReadState<string | null>>(readLoading);
+  // success(null) = the project genuinely has no architecture version to
+  // inspect (a legitimate absence — NOT an error, and NOT "no records").
+  const [planningRead, setPlanningRead] = React.useState<ReadState<PlanningRecommendationItem[] | null>>(readLoading);
+  const [maintenanceRead, setMaintenanceRead] = React.useState<ReadState<MaintenanceHealth | null>>(readLoading);
 
   const loadAll = React.useCallback(() => {
     if (!projectId) return;
     setLoading(true);
-    setError(null);
-    setAdvisoryNote(null);
+
+    // Every authoritative read settles through settleRead: rejections become
+    // { status: 'error' } — there is NO .catch(() => null) / .catch(() => [])
+    // degradation anywhere on this page (the PR #76 review correction).
 
     // The version walk (the WorkItemsPage convention: first architecture →
     // frozen version, falling back to the first) feeds the maintenance +
@@ -174,71 +199,101 @@ export default function WorkbenchPage() {
         const versions = await architecture.listVersions(archs[0]!.id);
         const frozen = versions.find((v) => v.state === 'frozen') ?? versions[0];
         return frozen ?? null;
-      })
-      .catch(() => null);
+      });
 
     Promise.all([
-      projectsApi.get(projectId).catch(() => null),
-      workbenchApi.getWorkGraph(projectId).catch(() => null),
-      runtimeApi.getStatus(projectId).catch(() => null),
-      workbenchApi.listExecutions(projectId, 50).catch(() => []),
-      workbenchApi.listPrAssociations(projectId, 50).catch(() => []),
-      workbenchApi.listVerificationRuns(projectId, 50).catch(() => []),
-      workbenchApi.listReviews(projectId, 50).catch(() => []),
-      runtimeApi.listDeployments(projectId).catch(() => []),
-      audit.listForProject(projectId, { limit: 25 }).catch(() => []),
-    ])
-      .then(
-        ([
-          p,
-          g,
-          rs,
-          ex,
-          prs,
-          runs,
-          revs,
-          deps,
-          events,
-        ]) => {
-          setProject(p);
-          setGraph(g);
-          setRuntimeStatus(rs);
-          setExecutions(ex);
-          setPrAssociations(prs);
-          setVerificationRuns(runs);
-          setReviews(revs);
-          setDeployments(deps);
-          setAuditEvents(events);
-          setRefreshingAt(Date.now());
-          if (g === null) {
-            setAdvisoryNote('The work graph is unavailable for this project.');
-          }
-        },
-      )
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load the workbench'))
-      .finally(() => setLoading(false));
+      settleRead(projectsApi.get(projectId)),
+      settleRead(workbenchApi.getWorkGraph(projectId)),
+      settleRead(runtimeApi.getStatus(projectId)),
+      settleRead(workbenchApi.listExecutions(projectId, 50)),
+      settleRead(workbenchApi.listPrAssociations(projectId, 50)),
+      settleRead(workbenchApi.listVerificationRuns(projectId, 50)),
+      settleRead(workbenchApi.listReviews(projectId, 50)),
+      settleRead(runtimeApi.listDeployments(projectId)),
+      settleRead(audit.listForProject(projectId, { limit: 25 })),
+    ]).then(
+      ([
+        project,
+        graph,
+        runtime,
+        executions,
+        changes,
+        verification,
+        reviews,
+        deployments,
+        activity,
+      ]) => {
+        setProjectRead(project);
+        setGraphRead(graph);
+        setRuntimeRead(runtime);
+        setExecutionsRead(executions);
+        setChangesRead(changes);
+        setVerificationRead(verification);
+        setReviewsRead(reviews);
+        setDeploymentsRead(deployments);
+        setActivityRead(activity);
+        setRefreshingAt(Date.now());
+      },
+    );
 
-    // The next work item (the workflow authority's own selection).
-    workflowApi
-      .getNextWorkItem(projectId)
-      .then((r) => setNextWorkItemId(r.nextWorkItemId))
-      .catch(() => setNextWorkItemId(null));
+    // The next work item (the workflow authority's own selection). A FAILED
+    // query is an error — it must never render as "there is no next item".
+    settleRead(workflowApi.getNextWorkItem(projectId)).then((read) => {
+      setNextWorkItemRead(
+        read.status === 'success'
+          ? { status: 'success', data: read.data.nextWorkItemId }
+          : read,
+      );
+    });
 
-    // Planning + maintenance (version-scoped authorities).
-    versionWalk.then((version) => {
-      if (!version) {
-        setPlanningRecs([]);
-        setMaintenanceHealth(null);
+    // Planning + maintenance (version-scoped authorities). The walk's own
+    // outcome is preserved: an error is an error (both surfaces report the
+    // architecture authority as unreachable), and a successful walk with NO
+    // version is a legitimate absence (success(null)), never an error.
+    settleRead(versionWalk).then((versionRead) => {
+      if (versionRead.status === 'error') {
+        setMaintenanceRead({
+          status: 'error',
+          message: `Maintenance health unavailable — the architecture authority could not be reached (${versionRead.message}).`,
+        });
+        setPlanningRead({
+          status: 'error',
+          message: `Planner recommendations unavailable — the architecture authority could not be reached (${versionRead.message}).`,
+        });
         return;
       }
-      planning
-        .listRecommendations(projectId, version.id)
-        .then((recs) => setPlanningRecs(recs.filter((r) => !r.completed).slice(0, 5)))
-        .catch(() => setPlanningRecs([]));
-      maintenance
-        .getHealth(projectId, version.id)
-        .then((h) => setMaintenanceHealth(h))
-        .catch(() => setMaintenanceHealth(null));
+      if (versionRead.status === 'loading') return; // cannot occur (settleRead settles)
+      const version = versionRead.data;
+      if (!version) {
+        setMaintenanceRead({ status: 'success', data: null });
+        setPlanningRead({ status: 'success', data: null });
+        return;
+      }
+      settleRead(maintenance.getHealth(projectId, version.id)).then((healthRead) => {
+        setMaintenanceRead(
+          healthRead.status === 'error'
+            ? {
+                status: 'error',
+                message: `Maintenance health unavailable — the maintenance authority could not be reached (${healthRead.message}).`,
+              }
+            : healthRead, // success (or the impossible loading) — passed through
+        );
+      });
+      settleRead(planning.listRecommendations(projectId, version.id)).then((recsRead) => {
+        setPlanningRead(
+          recsRead.status === 'error'
+            ? {
+                status: 'error',
+                message: `Planner recommendations unavailable — the planner authority could not be reached (${recsRead.message}).`,
+              }
+            : recsRead.status === 'success'
+              ? {
+                  status: 'success',
+                  data: recsRead.data.filter((r) => !r.completed).slice(0, 5),
+                }
+              : recsRead, // 'loading' cannot occur (settleRead settles) — passed through
+        );
+      });
     });
   }, [projectId]);
 
@@ -246,17 +301,45 @@ export default function WorkbenchPage() {
     loadAll();
   }, [loadAll]);
 
+  // Success-unwrapped views (a failed/pending read yields null/[] here ONLY
+  // where the corresponding error/missing state is rendered separately).
+  const project = projectRead.status === 'success' ? projectRead.data : null;
+  const graph = graphRead.status === 'success' ? graphRead.data : null;
+  const graphUnavailable =
+    graphRead.status === 'error'
+      ? `The work graph is unavailable for this project (${graphRead.message}).`
+      : null;
+
+  const nodeById = React.useMemo(() => {
+    const m = new Map<string, WorkGraphNode>();
+    if (graph) for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph]);
+
+  // "What needs attention" is derived ONLY from reads that SUCCEEDED. When
+  // any contributing read failed, the empty conclusion is withheld — an
+  // incomplete assessment is reported instead ("I don't know" must not
+  // become "nothing needs attention").
   const attention = React.useMemo(
     () =>
       deriveAttention({
         graph,
-        executions,
-        verificationRuns,
-        reviews,
-        maintenanceHealth,
+        executions: executionsRead.status === 'success' ? executionsRead.data : [],
+        verificationRuns: verificationRead.status === 'success' ? verificationRead.data : [],
+        reviews: reviewsRead.status === 'success' ? reviewsRead.data : [],
+        maintenanceHealth: maintenanceRead.status === 'success' ? maintenanceRead.data : null,
       }),
-    [graph, executions, verificationRuns, reviews, maintenanceHealth],
+    [graph, executionsRead, verificationRead, reviewsRead, maintenanceRead],
   );
+  const attentionSurfaces: Array<{ name: string; failed: boolean; pending: boolean }> = [
+    { name: 'work graph', failed: graphRead.status === 'error', pending: graphRead.status === 'loading' },
+    { name: 'executions', failed: executionsRead.status === 'error', pending: executionsRead.status === 'loading' },
+    { name: 'verification', failed: verificationRead.status === 'error', pending: verificationRead.status === 'loading' },
+    { name: 'reviews', failed: reviewsRead.status === 'error', pending: reviewsRead.status === 'loading' },
+    { name: 'maintenance', failed: maintenanceRead.status === 'error', pending: maintenanceRead.status === 'loading' },
+  ];
+  const attentionFailed = attentionSurfaces.filter((s) => s.failed).map((s) => s.name);
+  const attentionPending = attentionSurfaces.some((s) => s.pending);
 
   const stateCounts = React.useMemo(
     () => (graph ? countByState(graph.nodes) : []),
@@ -294,10 +377,12 @@ export default function WorkbenchPage() {
         }
       />
 
-      {error && <ErrorState message={error} onRetry={loadAll} />}
-      {advisoryNote && (
-        <div className="rounded-md border border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
-          {advisoryNote}
+      {graphUnavailable && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-2 text-xs text-destructive"
+        >
+          {graphUnavailable}
         </div>
       )}
 
@@ -326,26 +411,34 @@ export default function WorkbenchPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
-                {attention.length === 0 ? (
+                {attention.map((item, idx) => (
+                  <RowCard
+                    key={`${item.kind}-${idx}`}
+                    to={item.href}
+                    title={item.label}
+                    meta={item.detail}
+                    badge={
+                      <Badge variant={item.kind === 'failed-verification' ? 'destructive' : 'secondary'}>
+                        {titleCase(item.kind)}
+                      </Badge>
+                    }
+                  />
+                ))}
+                {attentionFailed.length > 0 ? (
+                  // A failed contributing read makes the "nothing needs
+                  // attention" conclusion UNPROVABLE — report the gap.
+                  <div className="text-sm text-destructive" data-testid="attention-incomplete">
+                    Attention assessment incomplete — the following authority reads failed
+                    and could not be assessed: {attentionFailed.join(', ')}.
+                  </div>
+                ) : attention.length === 0 && attentionPending ? (
+                  <LoadingState label="Loading attention signals…" />
+                ) : attention.length === 0 ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <CircleCheckBig className="h-4 w-4 text-success" />
                     Nothing needs attention right now.
                   </div>
-                ) : (
-                  attention.map((item, idx) => (
-                    <RowCard
-                      key={`${item.kind}-${idx}`}
-                      to={item.href}
-                      title={item.label}
-                      meta={item.detail}
-                      badge={
-                        <Badge variant={item.kind === 'failed-verification' ? 'destructive' : 'secondary'}>
-                          {titleCase(item.kind)}
-                        </Badge>
-                      }
-                    />
-                  ))
-                )}
+                ) : null}
               </CardContent>
             </Card>
 
@@ -362,15 +455,21 @@ export default function WorkbenchPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-2">
-                  {graph === null ? (
-                    <div className="text-sm text-muted-foreground">Work graph unavailable.</div>
-                  ) : nextWorkItemId ? (
+                  {nextWorkItemRead.status === 'loading' ? (
+                    <LoadingState label="Loading the next eligible work item…" />
+                  ) : nextWorkItemRead.status === 'error' ? (
+                    // A FAILED authority query — never "no eligible item".
+                    <UnavailableLine testid="next-work-item-unavailable">
+                      Next work item unavailable — the workflow authority could not be
+                      reached ({nextWorkItemRead.message}).
+                    </UnavailableLine>
+                  ) : nextWorkItemRead.data ? (
                     <RowCard
-                      to={`/work-items/${nextWorkItemId}`}
+                      to={`/work-items/${nextWorkItemRead.data}`}
                       title={
-                        nodeById.get(nextWorkItemId)
-                          ? `${nodeById.get(nextWorkItemId)!.workItemId} — ${nodeById.get(nextWorkItemId)!.title}`
-                          : `Next work item ${shortId(nextWorkItemId)}`
+                        nodeById.get(nextWorkItemRead.data)
+                          ? `${nodeById.get(nextWorkItemRead.data)!.workItemId} — ${nodeById.get(nextWorkItemRead.data)!.title}`
+                          : `Next work item ${shortId(nextWorkItemRead.data)}`
                       }
                       meta="The workflow authority's next eligible item (dependencies satisfied, state ready)."
                       badge={<Badge variant="info">Next</Badge>}
@@ -380,15 +479,31 @@ export default function WorkbenchPage() {
                       No eligible next work item (the workflow authority recommends none).
                     </div>
                   )}
-                  {planningRecs.map((rec) => (
-                    <RowCard
-                      key={rec.workItemId}
-                      to={`/work-items/${rec.workItemId}`}
-                      title={`${rec.workItemHumanId} — ${rec.title}`}
-                      meta={rec.planner.whyNow || rec.planner.rationale}
-                      badge={<Badge variant="secondary">Planner</Badge>}
-                    />
-                  ))}
+                  {planningRead.status === 'loading' ? (
+                    <LoadingState label="Loading planner recommendations…" />
+                  ) : planningRead.status === 'error' ? (
+                    <UnavailableLine testid="planner-unavailable">
+                      {planningRead.message}
+                    </UnavailableLine>
+                  ) : planningRead.data === null ? (
+                    <div className="text-sm text-muted-foreground">
+                      No architecture version to plan against yet.
+                    </div>
+                  ) : planningRead.data.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">
+                      No open planner recommendations.
+                    </div>
+                  ) : (
+                    planningRead.data.map((rec) => (
+                      <RowCard
+                        key={rec.workItemId}
+                        to={`/work-items/${rec.workItemId}`}
+                        title={`${rec.workItemHumanId} — ${rec.title}`}
+                        meta={rec.planner.whyNow || rec.planner.rationale}
+                        badge={<Badge variant="secondary">Planner</Badge>}
+                      />
+                    ))
+                  )}
                 </CardContent>
               </Card>
 
@@ -403,22 +518,33 @@ export default function WorkbenchPage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-wrap gap-2">
-                  {runtimeStatus === null ? (
-                    <div className="text-sm text-muted-foreground">Runtime status unavailable.</div>
+                  {runtimeRead.status === 'loading' ? (
+                    <LoadingState label="Loading runtime status…" />
+                  ) : runtimeRead.status === 'error' ? (
+                    <UnavailableLine testid="runtime-unavailable">
+                      Runtime status unavailable — the runtime authority could not be
+                      reached ({runtimeRead.message}).
+                    </UnavailableLine>
                   ) : (
                     <>
-                      <HealthChip label="GitHub" status={runtimeStatus.github?.status} />
-                      <HealthChip label="Vercel" status={runtimeStatus.vercel?.status} />
-                      <HealthChip label="Architect" status={runtimeStatus.architect?.status} />
-                      <HealthChip label="Agent" status={runtimeStatus.agent?.status} />
+                      <HealthChip label="GitHub" status={runtimeRead.data.github?.status} />
+                      <HealthChip label="Vercel" status={runtimeRead.data.vercel?.status} />
+                      <HealthChip label="Architect" status={runtimeRead.data.architect?.status} />
+                      <HealthChip label="Agent" status={runtimeRead.data.agent?.status} />
                     </>
                   )}
-                  {deployments.length > 0 && (
+                  {deploymentsRead.status === 'success' && deploymentsRead.data.length > 0 && (
                     <RowCard
-                      title={`Latest deployment: ${titleCase(deployments[0]!.status)}`}
-                      meta={`${shortId(deployments[0]!.commitSha)} on ${deployments[0]!.branch ?? '—'} · ${formatRelative(deployments[0]!.createdAt)}`}
+                      title={`Latest deployment: ${titleCase(deploymentsRead.data[0]!.status)}`}
+                      meta={`${shortId(deploymentsRead.data[0]!.commitSha)} on ${deploymentsRead.data[0]!.branch ?? '—'} · ${formatRelative(deploymentsRead.data[0]!.createdAt)}`}
                       badge={<Badge variant="secondary">Deployment</Badge>}
                     />
+                  )}
+                  {deploymentsRead.status === 'error' && (
+                    <UnavailableLine testid="latest-deployment-unavailable">
+                      Latest deployment unavailable — the runtime authority could not be
+                      reached ({deploymentsRead.message}).
+                    </UnavailableLine>
                   )}
                 </CardContent>
               </Card>
@@ -434,10 +560,12 @@ export default function WorkbenchPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {stateCounts.length === 0 ? (
-                <div className="text-sm text-muted-foreground">
-                  {graph === null ? 'Work graph unavailable.' : 'No work items yet.'}
-                </div>
+              {graphRead.status === 'loading' ? (
+                <LoadingState label="Loading the work graph…" />
+              ) : graphRead.status === 'error' ? (
+                <UnavailableLine>Work graph unavailable (failed to load).</UnavailableLine>
+              ) : stateCounts.length === 0 ? (
+                <div className="text-sm text-muted-foreground">No work items yet.</div>
               ) : (
                 stateCounts.map(({ state, count }) => (
                   <button
@@ -460,10 +588,17 @@ export default function WorkbenchPage() {
               <CardDescription>The audit authority's event feed for this project.</CardDescription>
             </CardHeader>
             <CardContent className="flex max-h-96 flex-col gap-2 overflow-y-auto">
-              {auditEvents.length === 0 ? (
+              {activityRead.status === 'loading' ? (
+                <LoadingState label="Loading recent activity…" />
+              ) : activityRead.status === 'error' ? (
+                <UnavailableLine testid="activity-unavailable">
+                  Activity unavailable — the audit authority could not be reached
+                  ({activityRead.message}).
+                </UnavailableLine>
+              ) : activityRead.data.length === 0 ? (
                 <div className="text-sm text-muted-foreground">No recent activity recorded.</div>
               ) : (
-                auditEvents.slice(0, 8).map((event, idx) => (
+                activityRead.data.slice(0, 8).map((event, idx) => (
                   <AuditEventItem key={event.id ?? idx} event={event} />
                 ))
               )}
@@ -479,17 +614,21 @@ export default function WorkbenchPage() {
 
         {/* --- Work Graph --------------------------------------------------------- */}
         <TabsContent value="graph" className="flex flex-col gap-4">
-          {graph === null ? (
-            <ErrorState message="The work graph is unavailable for this project." onRetry={loadAll} />
-          ) : (
+          {graphRead.status === 'error' ? (
+            <ErrorState message={graphUnavailable ?? 'The work graph is unavailable.'} onRetry={loadAll} />
+          ) : graph ? (
             <WorkGraphBoard graph={graph} />
+          ) : (
+            <LoadingState label="Loading the work graph…" />
           )}
         </TabsContent>
 
         {/* --- Work ---------------------------------------------------------------- */}
         <TabsContent value="work" className="flex flex-col gap-4">
-          {graph === null ? (
-            <ErrorState message="The work graph is unavailable for this project." onRetry={loadAll} />
+          {graphRead.status === 'error' ? (
+            <ErrorState message={graphUnavailable ?? 'The work graph is unavailable.'} onRetry={loadAll} />
+          ) : !graph ? (
+            <LoadingState label="Loading work items…" />
           ) : graph.nodes.length === 0 ? (
             <EmptyState
               icon={Layers}
@@ -534,14 +673,22 @@ export default function WorkbenchPage() {
 
         {/* --- Executions --------------------------------------------------------- */}
         <TabsContent value="executions" className="flex flex-col gap-4">
-          {executions.length === 0 ? (
+          {executionsRead.status === 'error' ? (
+            <ErrorState
+              data-testid="executions-unavailable"
+              message={`Executions unavailable — the execution rollup could not be loaded (${executionsRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : executionsRead.status === 'loading' ? (
+            <LoadingState label="Loading executions…" />
+          ) : executionsRead.data.length === 0 ? (
             <EmptyState
               icon={Cpu}
               title="No executions"
               description="No execution records exist for this project yet (the /agents authority reports none)."
             />
           ) : (
-            executions.map((e) => (
+            executionsRead.data.map((e) => (
               <RowCard
                 key={e.executionId}
                 to={e.workItemId ? `/work-items/${e.workItemId}` : undefined}
@@ -564,14 +711,22 @@ export default function WorkbenchPage() {
 
         {/* --- Changes --------------------------------------------------------- */}
         <TabsContent value="changes" className="flex flex-col gap-4">
-          {prAssociations.length === 0 ? (
+          {changesRead.status === 'error' ? (
+            <ErrorState
+              data-testid="changes-unavailable"
+              message={`Changes unavailable — the changes rollup could not be loaded (${changesRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : changesRead.status === 'loading' ? (
+            <LoadingState label="Loading changes…" />
+          ) : changesRead.data.length === 0 ? (
             <EmptyState
               icon={GitPullRequest}
               title="No changes"
               description="No pull-request associations exist for this project yet (the GitHub-derived identity authority reports none)."
             />
           ) : (
-            prAssociations.map((pr) => (
+            changesRead.data.map((pr) => (
               <RowCard
                 key={pr.id}
                 to={`/work-items/${pr.workItemId}`}
@@ -592,14 +747,22 @@ export default function WorkbenchPage() {
 
         {/* --- Verification --------------------------------------------------------- */}
         <TabsContent value="verification" className="flex flex-col gap-4">
-          {verificationRuns.length === 0 ? (
+          {verificationRead.status === 'error' ? (
+            <ErrorState
+              data-testid="verification-unavailable"
+              message={`Verification runs unavailable — the verification rollup could not be loaded (${verificationRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : verificationRead.status === 'loading' ? (
+            <LoadingState label="Loading verification runs…" />
+          ) : verificationRead.data.length === 0 ? (
             <EmptyState
               icon={ShieldCheck}
               title="No verification runs"
               description="The /verification authority reports no runs for this project yet."
             />
           ) : (
-            verificationRuns.map((run) => {
+            verificationRead.data.map((run) => {
               const summary = run.summary as Record<string, unknown> | null;
               const pass = typeof summary?.criteriaPass === 'number' ? summary.criteriaPass : null;
               const fail = typeof summary?.criteriaFail === 'number' ? summary.criteriaFail : null;
@@ -625,14 +788,22 @@ export default function WorkbenchPage() {
 
         {/* --- Reviews --------------------------------------------------------- */}
         <TabsContent value="reviews" className="flex flex-col gap-4">
-          {reviews.length === 0 ? (
+          {reviewsRead.status === 'error' ? (
+            <ErrorState
+              data-testid="reviews-unavailable"
+              message={`Reviews unavailable — the reviews rollup could not be loaded (${reviewsRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : reviewsRead.status === 'loading' ? (
+            <LoadingState label="Loading reviews…" />
+          ) : reviewsRead.data.length === 0 ? (
             <EmptyState
               icon={Users}
               title="No reviews"
               description="The /reviews authority reports none for this project yet."
             />
           ) : (
-            reviews.map((review) => (
+            reviewsRead.data.map((review) => (
               <RowCard
                 key={review.id}
                 to={`/work-items/${review.workItemId}`}
@@ -642,7 +813,7 @@ export default function WorkbenchPage() {
                     {titleCase(review.source)}
                     {review.reviewer ? ` · ${review.reviewer}` : ''}
                     {review.summary ? ` · ${review.summary.slice(0, 100)}` : ''}
-                    {review.createdAt ? ` · ${formatRelative(review.createdAt)}` : ''}
+                    {review.createdAt ? ` · created ${formatRelative(review.createdAt)}` : ''}
                   </span>
                 }
                 badge={
@@ -655,14 +826,22 @@ export default function WorkbenchPage() {
 
         {/* --- Deployments --------------------------------------------------------- */}
         <TabsContent value="deployments" className="flex flex-col gap-4">
-          {deployments.length === 0 ? (
+          {deploymentsRead.status === 'error' ? (
+            <ErrorState
+              data-testid="deployments-unavailable"
+              message={`Deployments unavailable — the runtime authority could not be reached (${deploymentsRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : deploymentsRead.status === 'loading' ? (
+            <LoadingState label="Loading deployments…" />
+          ) : deploymentsRead.data.length === 0 ? (
             <EmptyState
               icon={Rocket}
               title="No deployments"
               description="The runtime authority reports no deployments for this project yet."
             />
           ) : (
-            deployments.map((d) => (
+            deploymentsRead.data.map((d) => (
               <RowCard
                 key={d.id}
                 title={
@@ -694,13 +873,21 @@ export default function WorkbenchPage() {
 
         {/* --- Maintenance --------------------------------------------------------- */}
         <TabsContent value="maintenance" className="flex flex-col gap-4">
-          {maintenanceHealth === null ? (
+          {maintenanceRead.status === 'error' ? (
+            <ErrorState
+              data-testid="maintenance-unavailable"
+              message={maintenanceRead.message}
+              onRetry={loadAll}
+            />
+          ) : maintenanceRead.status === 'loading' ? (
+            <LoadingState label="Loading maintenance health…" />
+          ) : maintenanceRead.data === null ? (
             <EmptyState
               icon={Stethoscope}
-              title="Maintenance health unavailable"
-              description="The maintenance authority could not be reached, or this project has no frozen architecture version to inspect (no data is invented)."
+              title="No architecture version"
+              description="This project has no architecture version to inspect yet — the maintenance authority is version-scoped (no data is invented)."
             />
-          ) : maintenanceHealth.totalSignals === 0 ? (
+          ) : maintenanceRead.data.totalSignals === 0 ? (
             <EmptyState
               icon={Stethoscope}
               title="No maintenance signals"
@@ -712,25 +899,25 @@ export default function WorkbenchPage() {
                 <CardHeader>
                   <CardTitle className="text-base">Maintenance health</CardTitle>
                   <CardDescription>
-                    {maintenanceHealth.totalSignals} signal
-                    {maintenanceHealth.totalSignals === 1 ? '' : 's'} (the maintenance authority's
+                    {maintenanceRead.data.totalSignals} signal
+                    {maintenanceRead.data.totalSignals === 1 ? '' : 's'} (the maintenance authority's
                     assessment of this architecture version).
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-wrap gap-2">
-                  {Object.entries(maintenanceHealth.bySeverity).map(([sev, count]) => (
+                  {Object.entries(maintenanceRead.data.bySeverity).map(([sev, count]) => (
                     <Badge key={sev} variant={sev === 'critical' || sev === 'high' ? 'destructive' : 'secondary'}>
                       {titleCase(sev)}: {count}
                     </Badge>
                   ))}
-                  {Object.entries(maintenanceHealth.byCategory).map(([cat, count]) => (
+                  {Object.entries(maintenanceRead.data.byCategory).map(([cat, count]) => (
                     <Badge key={cat} variant="secondary">
                       {titleCase(cat)}: {count}
                     </Badge>
                   ))}
                 </CardContent>
               </Card>
-              {maintenanceHealth.signals.map((s) => (
+              {maintenanceRead.data.signals.map((s) => (
                 <RowCard
                   key={s.workItemId}
                   to={`/work-items/${s.workItemId}`}
@@ -756,7 +943,15 @@ export default function WorkbenchPage() {
 
         {/* --- Activity --------------------------------------------------------- */}
         <TabsContent value="activity" className="flex flex-col gap-4">
-          {auditEvents.length === 0 ? (
+          {activityRead.status === 'error' ? (
+            <ErrorState
+              data-testid="activity-tab-unavailable"
+              message={`Activity unavailable — the audit authority could not be reached (${activityRead.message}).`}
+              onRetry={loadAll}
+            />
+          ) : activityRead.status === 'loading' ? (
+            <LoadingState label="Loading activity…" />
+          ) : activityRead.data.length === 0 ? (
             <EmptyState
               icon={ActivityIcon}
               title="No activity"
@@ -764,7 +959,7 @@ export default function WorkbenchPage() {
             />
           ) : (
             <div className="flex max-h-[32rem] flex-col gap-2 overflow-y-auto">
-              {auditEvents.map((event, idx) => (
+              {activityRead.data.map((event, idx) => (
                 <AuditEventItem key={event.id ?? idx} event={event} />
               ))}
             </div>

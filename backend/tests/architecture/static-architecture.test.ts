@@ -17725,12 +17725,14 @@ describe('WORK-048 invariants — Developer Workbench (consumer, never authority
   const WB_PAGE = join(FRONTEND_SRC, 'pages', 'WorkbenchPage.tsx');
   const WB_BOARD = join(FRONTEND_SRC, 'components', 'workbench', 'work-graph-board.tsx');
   const WB_LIB = join(FRONTEND_SRC, 'lib', 'work-graph.ts');
+  const WB_READ_STATE = join(FRONTEND_SRC, 'lib', 'read-state.ts');
+  const WB_PAGE_TESTS = join(FRONTEND_SRC, 'pages', 'WorkbenchPage.test.tsx');
   const WB_ADVISORY = join(FRONTEND_SRC, 'components', 'domain', 'advisory-card.tsx');
   const CLIENT_TS = join(FRONTEND_SRC, 'api', 'client.ts');
   const WORK_ORDER = join(BACKEND_ROOT, '..', 'spec', 'work-orders', 'WORK-048.md');
 
   // The WORK-048 frontend surfaces (the workbench page + components + helpers).
-  const WB_FRONTEND_FILES = [WB_PAGE, WB_BOARD, WB_LIB, WB_ADVISORY];
+  const WB_FRONTEND_FILES = [WB_PAGE, WB_BOARD, WB_LIB, WB_READ_STATE, WB_ADVISORY];
 
   // --- (a) the backend read model is READ-ONLY + server-authorized ----------
 
@@ -17930,5 +17932,65 @@ describe('WORK-048 invariants — Developer Workbench (consumer, never authority
     expect(appCode).toMatch(/\/projects\/:projectId\/workbench/);
     const shellCode = readFileSync(join(FRONTEND_SRC, 'components', 'shell', 'AppShell.tsx'), 'utf8');
     expect(shellCode).toMatch(/label: 'Workbench'/);
+  });
+
+  // --- (h) the architect's PR #76 review correction: a FAILED authority read
+  //         can NEVER become empty state (provenance must survive to the UI) --
+
+  it('ADVERSARIAL (PR #76 review correction): the Workbench page NEVER swallows a failed authority read into empty data (no .catch(() => null/[]) degradation)', () => {
+    const src = readFileSync(WB_PAGE, 'utf8');
+    // Code only (comments may cite the forbidden pattern documentarily).
+    const codeOnly = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    // The swallowing pattern the architect's review found is structurally
+    // GONE: no read on this page may degrade a rejection into null/[].
+    expect(codeOnly).not.toMatch(/\.catch\(\s*\(\s*\)\s*=>\s*null\s*\)/);
+    expect(codeOnly).not.toMatch(/\.catch\(\s*\(\s*\)\s*=>\s*\[\s*\]\s*\)/);
+    // Every authority read settles through the explicit read-state model.
+    expect(codeOnly).toMatch(/settleRead\(/);
+  });
+
+  it('the read-state model distinguishes loading / success / error — success([]) (a genuine empty answer) can never conflate with error', () => {
+    const src = readFileSync(WB_READ_STATE, 'utf8');
+    expect(src).toMatch(/'loading'/);
+    expect(src).toMatch(/'success'/);
+    expect(src).toMatch(/'error'/);
+    // settleRead maps rejections to { status: 'error' } — never to data.
+    expect(src).toMatch(/status: 'error'/);
+    // There is NO fallback-unwrap helper that could turn an error back into
+    // a fake empty/default value.
+    expect(src).not.toMatch(/fallback/);
+  });
+
+  it('the discriminating failure ≠ empty regressions are pinned by title in the frontend suite (the review correction\'s required proofs)', () => {
+    const tests = readFileSync(WB_PAGE_TESTS, 'utf8');
+    expect(tests).toMatch(/failure ≠ empty/);
+    expect(tests).toMatch(/PR #76 review correction/);
+    // The per-surface discrimination matrix: for each rollup, BOTH branches.
+    for (const [emptyTitle, unavailableText] of [
+      ['No executions', 'Executions unavailable'],
+      ['No changes', 'Changes unavailable'],
+      ['No verification runs', 'Verification runs unavailable'],
+      ['No reviews', 'Reviews unavailable'],
+      ['No deployments', 'Deployments unavailable'],
+      ['No activity', 'Activity unavailable'],
+    ] as const) {
+      expect(tests, `the empty branch for "${emptyTitle}"`).toMatch(
+        new RegExp(`emptyTitle: '${emptyTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`),
+      );
+      expect(tests, `the unavailable branch for "${unavailableText}"`).toMatch(
+        new RegExp(`unavailableText: /${unavailableText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/i`),
+      );
+    }
+    // The generated discriminating titles (the it.each cases).
+    expect(tests).toMatch(/when the authority returns an EMPTY list \(genuine empty, never an error\)/);
+    expect(tests).toMatch(/renders an explicit error — never "\$\{emptyTitle\}" — when the authority read FAILS/);
+    // The workflow authority's next-item selection: a FAILED query must
+    // never render as a false "none eligible".
+    expect(tests).toMatch(/getNextWorkItem: a FAILED read renders "Next work item unavailable" — never a false "none eligible"/);
+    expect(tests).toMatch(/getNextWorkItem: success\(null\) renders "No eligible next work item" \(the authority answered none\)/);
+    // The attention derivation withholds the all-clear when a feed failed.
+    expect(tests).toMatch(/a FAILED contributing read → "Attention assessment incomplete" — never a false all-clear/);
+    // The graph error is explicit (banner + ErrorState), never "No work items".
+    expect(tests).toMatch(/the work graph: a FAILED read renders the explicit unavailable error — never "No work items"/);
   });
 });

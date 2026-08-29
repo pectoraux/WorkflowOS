@@ -142,3 +142,68 @@ never labeled "pre-existing" without discrimination.
 WORK-049 (Project Health/Maintenance UX), WORK-050 (Unified Execution UX),
 Change Programs, runtime feedback, architecture fitness, adaptive assurance
 implementation, self-hosting automation, any new persistence or migration.
+
+## Review remediation record (2026-08-29 — PR #76 REQUEST CHANGES)
+
+The architectural review of PR #76 approved the WORK-048 direction (the thin
+read model, the server-side authorization ordering, the read-only frontend,
+the recommendation-as-recommendation semantics) and ordered ONE narrow
+frontend correction; remediated on the same branch
+(`feat/work-048-developer-workbench`):
+
+- **The defect (as the review correctly characterized it)**:
+  `WorkbenchPage.loadAll()` degraded EVERY failed authority read into data
+  (`projectsApi.get(...).catch(() => null)`,
+  `workbenchApi.listExecutions(...).catch(() => [])`, …) and the UI then
+  rendered those failures as legitimate empty state — an execution API
+  failure became "No executions", a PR-association failure became "No
+  changes", a verification failure became "No verification runs", a reviews
+  failure became "No reviews", deployments failed into the same empty state,
+  and a failed `getNextWorkItem()` became `nextWorkItemId = null`, rendered
+  as "No eligible next work item". This contradicted the Workbench's own
+  contract (adversarial #6/#7: failed requests never fabricate success;
+  missing data is unknown/unavailable, never invented) — provenance loss at
+  the presentation boundary: "I don't know" silently became "I know there
+  are zero records."
+- **The correction (narrow — no Workbench redesign)**: a read-state model
+  (`frontend/src/lib/read-state.ts`) gives every authoritative surface
+  exactly three outcomes — `loading` / `success(data)` / `error` — with
+  `success([])` (the authority genuinely answered "none") structurally
+  distinct from `error`. `loadAll()` settles every read through
+  `settleRead()`; the swallowing `.catch(() => null/[])` pattern is
+  structurally GONE from the page. Each rollup tab renders
+  loading → LoadingState, success-empty → the genuine "No …" EmptyState,
+  error → an explicit "… unavailable — <authority> could not be reached
+  (<reason>)" ErrorState with retry. The same three-way model governs the
+  work graph (error banner + ErrorState vs. "No work items"), the runtime
+  status, the maintenance health (error vs. the legitimate "No architecture
+  version" absence vs. "No maintenance signals"), the planner
+  recommendations, the audit activity, and the project identity. A failed
+  `getNextWorkItem()` renders "Next work item unavailable — the workflow
+  authority could not be reached" — never a false "none eligible". The
+  "What needs attention" derivation withholds the all-clear when any
+  contributing read failed ("Attention assessment incomplete — …") instead
+  of fabricating "Nothing needs attention right now."
+- **The discriminating regressions** (WorkbenchPage.test.tsx, 2 → 27 tests):
+  for each rollup surface BOTH branches are proven — `API returns []` →
+  "No executions" and `API throws` → "Executions unavailable" (and the
+  empty text provably absent) — for executions, changes, verification,
+  reviews, deployments, and activity; plus the graph, runtime, maintenance
+  (walk-error vs. no-version vs. health-error), planner, project,
+  next-work-item (success(null) vs. failure), and attention
+  (all-clear vs. incomplete) discriminations. Three new static architecture
+  invariants pin the correction structurally: no `.catch(() => null/[])`
+  degradation anywhere in the page, the read-state model's three states with
+  no fallback-unwrap helper, and the discriminating regression titles.
+- **Verification (all green)**: frontend typecheck 0 / lint 0 errors (1
+  pre-existing warning); frontend tests 67/67 (was 42); backend typecheck 0 /
+  lint 0 errors (2 pre-existing warnings); static architecture 764/764 (was
+  761); browser E2E work-048 5/5 on real PG — now ALSO proving in the real
+  browser that the unwired runtime authority's failures render as
+  "Deployments unavailable"/"Runtime status unavailable" ERRORS (not "No
+  deployments") and that tenant-isolation 403s render as "Executions
+  unavailable"/"Next work item unavailable" (provably never "No
+  executions"/"No eligible next work item"); existing e2e specs (work-027,
+  work-032) still green; FULL real-PG 18 sweep 111 files 2443/2443 (2440 +
+  the 3 new static invariants); pglite sweep 2399 passed / 0 failed / 44
+  real-PG-only skipped.

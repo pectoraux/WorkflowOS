@@ -8,17 +8,22 @@
  *
  * Flows proven:
  *   1. the Workbench overview renders (project identity, attention derived
- *      from the authoritative graph, explicit "unavailable" for the UNWIRED
- *      runtime authority — missing data is never invented);
+ *      from the authoritative graph, explicit "unavailable" ERRORS for the
+ *      UNWIRED runtime/planning authorities — a failed read is an error,
+ *      never an invented empty state);
  *   2. the Work Graph renders the fact-based groups (blocked / ready /
  *      completed) from the backend read model;
  *   3. the rollups render authoritative records (execution, PR identity,
- *      verification run, review);
+ *      verification run, review) — and the UNWIRED surfaces (deployments,
+ *      maintenance) render explicit "unavailable" ERRORS, never fake
+ *      "No …" empty states (the PR #76 review correction);
  *   4. the drill-down: Workbench → work item page → the WORK-048 sections
  *      (Objective, Dependencies, Merge Gates, the ADVISORY recommendation);
  *   5. browser-level tenant isolation: user A opening user B's project
  *      workbench sees ONLY the degraded "unavailable" states — zero project
- *      B data (authorization is server-side; the frontend has no authority).
+ *      B data (authorization is server-side; the frontend has no
+ *      authority) — and the failures render as ERRORS, provably never as
+ *      fabricated "No executions"-style empty states.
  */
 import { test, expect, type Page } from '@playwright/test';
 import { buildAuthStack, type TestAuthStack } from '../helpers/test-auth-stack.js';
@@ -307,8 +312,13 @@ test('the Workbench overview renders: project identity, attention from the autho
   await expect(page.getByText('WB-E2E-003 is blocked')).toBeVisible();
 
   // The health summary: the runtime authority is UNWIRED in this topology —
-  // the workbench says so explicitly (missing data is never invented).
-  await expect(page.getByText('Runtime status unavailable.')).toBeVisible();
+  // the workbench says so EXPLICITLY as an error (a failed read is an error,
+  // never an invented status — and never a fabricated empty state).
+  await expect(page.getByText(/Runtime status unavailable/i)).toBeVisible();
+
+  // The planner is likewise UNWIRED: an explicit unavailable error, never a
+  // silent "no recommendations" (the PR #76 review correction).
+  await expect(page.getByText(/Planner recommendations unavailable/i)).toBeVisible();
 
   // The work state counts (the workflow authority's own values).
   await expect(page.getByRole('button', { name: 'Ready' })).toBeVisible();
@@ -353,9 +363,21 @@ test('the rollups render the AUTHORITATIVE records (execution, GitHub-derived PR
   await page.getByRole('tab', { name: /Reviews/i }).click();
   await expect(page.getByText(/Review /).first()).toBeVisible();
 
-  // Deployments: the runtime authority is UNWIRED — explicit empty, never invented.
+  // Deployments: the runtime authority is UNWIRED — the read FAILS, so the
+  // tab renders the explicit "Deployments unavailable" ERROR. It must NOT
+  // render "No deployments": a failed read is never a genuine empty result
+  // (the PR #76 review correction).
   await page.getByRole('tab', { name: /Deployments/i }).click();
-  await expect(page.getByText('No deployments', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Deployments unavailable/i)).toBeVisible();
+  await expect(page.getByText('No deployments', { exact: true })).toHaveCount(0);
+
+  // Maintenance: the architecture walk SUCCEEDS (wired, frozen version) but
+  // the maintenance authority itself is UNWIRED — an explicit error naming
+  // the maintenance authority, never "No architecture version" and never a
+  // fabricated "no signals".
+  await page.getByRole('tab', { name: /Maintenance/i }).click();
+  await expect(page.getByText(/Maintenance health unavailable — the maintenance authority/i)).toBeVisible();
+  await expect(page.getByText('No architecture version', { exact: true })).toHaveCount(0);
 });
 
 test('the drill-down: Workbench → work item page → the WORK-048 sections (Objective, Dependencies, Merge Gates, ADVISORY recommendation)', async ({ page }) => {
@@ -394,4 +416,17 @@ test('BROWSER-LEVEL TENANT ISOLATION: user A opening user B\'s project workbench
   // No project B data ever renders (the SECRET item title must never appear).
   await expect(page.getByText('SECRET project B item')).toHaveCount(0);
   await expect(page.getByText('WB-B-E2E-001')).toHaveCount(0);
+
+  // THE PR #76 REVIEW CORRECTION, proven in the real browser: the 403s are
+  // ERRORS, never fabricated empty states. The executions rollup must say
+  // "Executions unavailable" — and must NOT say "No executions".
+  await page.getByRole('tab', { name: /Executions/i }).click();
+  await expect(page.getByText(/Executions unavailable/i)).toBeVisible();
+  await expect(page.getByText('No executions', { exact: true })).toHaveCount(0);
+
+  // The workflow authority's next-item query also 403s: an explicit
+  // "Next work item unavailable" — never a false "no eligible next item".
+  await page.getByRole('tab', { name: /Overview/i }).click();
+  await expect(page.getByText(/Next work item unavailable/i)).toBeVisible();
+  await expect(page.getByText(/No eligible next work item/i)).toHaveCount(0);
 });
