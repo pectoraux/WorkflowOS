@@ -31,12 +31,30 @@ async function main(): Promise<void> {
       ...(config.corsOrigin ? { corsOrigin: config.corsOrigin } : {}),
       // WORK-023: wire health/readiness deps (PostgreSQL, Redis, ObjectStore)
       // so /health/ready can verify connectivity to authoritative dependencies.
+      // DEPLOYMENT HARDENING: the same health deps carry the non-secret
+      // deployment identity (process role, container commit SHA, environment
+      // name). Railway injects RAILWAY_GIT_COMMIT_SHA / RAILWAY_ENVIRONMENT_NAME
+      // when deploying from a connected repository; other hosts may set
+      // WORKFLOWOS_COMMIT_SHA. Release verification + deployment evidence use
+      // this to correlate the live process with an exact repository revision.
       ...(app.deps.infrastructure
         ? {
             health: {
               database: app.deps.infrastructure.database,
               redis: app.deps.infrastructure.redis,
               objectStore: app.deps.infrastructure.objectStore,
+              deployment: {
+                role: config.role,
+                ...(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.WORKFLOWOS_COMMIT_SHA
+                  ? {
+                      commitSha:
+                        process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.WORKFLOWOS_COMMIT_SHA,
+                    }
+                  : {}),
+                ...(process.env.RAILWAY_ENVIRONMENT_NAME
+                  ? { environmentName: process.env.RAILWAY_ENVIRONMENT_NAME }
+                  : {}),
+              },
             },
           }
         : {}),

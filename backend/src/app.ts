@@ -171,7 +171,7 @@ import { createOpenAiCompatibleAdapterFromEnv } from './modules/llm/internal/ope
 import type { LlmProviderAdapter } from './modules/llm/internal/llm.types.js';
 import { createOpenAiAgentAdapterFromEnv } from './modules/agents/internal/openai-agent-adapter.js';
 import type { AgentProviderAdapter } from './modules/agents/internal/agent.types.js';
-import { createS3ObjectStoreFromEnv, type S3ObjectStore } from './platform/storage/s3-object-store.js';
+import { createS3ObjectStoreFromEnv } from './platform/storage/s3-object-store.js';
 import { DefaultProviderRegistry } from './platform/default-provider-registry.js';
 import { DefaultArchitectService } from './modules/llm/internal/architect-service.js';
 import type { ArchitectService } from '@modules/llm/index.js';
@@ -663,14 +663,25 @@ export async function buildApp(
   }
   let objectStore: ObjectStore;
   // PRODUCTION READINESS: S3-compatible object storage (Cloudflare R2).
-  // When OBJECT_STORAGE_PROVIDER=s3, use the S3 adapter. Otherwise fall back
-  // to filesystem (local dev) or in-memory (tests).
+  // When OBJECT_STORAGE_PROVIDER=s3, use the S3 adapter (fail-closed on
+  // incomplete configuration — see createS3ObjectStoreFromEnv). Otherwise
+  // fall back to filesystem (local dev) or in-memory (tests).
+  //
+  // DEPLOYMENT HARDENING: startup logs identify the ACTIVE adapter with its
+  // non-secret configuration (provider/bucket/endpoint-host for S3, directory
+  // for FsObjectStore). A misconfigured object store must be diagnosable from
+  // deploy logs alone — the readiness probe reports reachability, this log
+  // reports WHAT was configured. Never logs access keys or secrets.
   const s3Store = createS3ObjectStoreFromEnv();
   if (s3Store) {
     objectStore = s3Store;
-    logger.info('app.object_store.s3', { bucket: s3Store['config' as keyof S3ObjectStore] ? 'configured' : 'unknown' });
+    logger.info('app.object_store.active', s3Store.describe());
   } else if (config.objectStorageDir) {
     objectStore = new FsObjectStore(config.objectStorageDir);
+    logger.info('app.object_store.active', {
+      provider: 'fs',
+      directory: config.objectStorageDir,
+    });
   } else {
     objectStore = new InMemoryObjectStore();
     if (!options.queue) {

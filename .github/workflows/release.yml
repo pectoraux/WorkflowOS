@@ -1,0 +1,377 @@
+# WorkflowOS release pipeline (DEPLOYMENT HARDENING).
+#
+# THE release system for the cloud topology. The existing `deploy.yml`
+# remains the validation CI for the frozen LOCAL docker-compose topology;
+# this workflow releases and verifies the PRODUCTION topology:
+#
+#   Vercel (Vite SPA) ← /api/* rewrite ← Railway API (modular monolith,
+#   roles api + worker) ← PostgreSQL (authoritative) + Redis (non-authoritative)
+#   + Object storage (S3-compatible adapter through the ObjectStore boundary).
+#
+# Release sequencing (database schema → backend → worker → frontend) is
+# enforced by the `backend-contract-gate` job: the production frontend is only
+# deployed after the LIVE production backend reports (via GET /health
+# deployment identity) a commit that is an ancestor of the commit being
+# released. A frontend release can therefore never assume a backend contract
+# that is not yet deployed. Exceptional transitions (e.g. bootstrap after a
+# long backend freeze) can be approved by the architect through
+# workflow_dispatch with `skip_backend_gate=true` — the skip is recorded in
+# the run logs and the deployment evidence.
+#
+# Pull requests:
+#   - static checks: vercel configuration invariants + frontend typecheck
+#   - a Vercel PREVIEW deployment, verified to be ISOLATED from production
+#     (its /api/* must NOT reach the production backend — preview API_TARGET
+#     is a non-production canary; see frontend/vercel.ts)
+#   - PRs NEVER deploy into production Railway state.
+#
+# Push to main:
+#   - backend-contract-gate (see above)
+#   - deploy-frontend → `vercel deploy --prod` (gated on VERCEL_TOKEN)
+#   - verify-production → live verification against the real production URL
+#     (SPA shell, assets, deep links, /api rewrite, backend liveness +
+#     readiness, authenticated read-only call through the full
+#     Browser→Vercel→Railway→PostgreSQL path)
+#   - railway-backend → automated backend deployment (gated on RAILWAY_TOKEN;
+#     while the token is absent the job SKIPS VISIBLY with the manual deploy
+#     steps — it never silently pretends the backend was deployed)
+#   - deployment-evidence → immutable per-release evidence (job summary +
+#     artifact); the durable repository evidence lives under
+#     docs/deployment/evidence/ and is updated by delivery pull requests.
+#
+# Required repository configuration:
+#   secrets: VERCEL_TOKEN   (Vercel access token)
+#   secrets: RAILWAY_TOKEN  (Railway API token — OPTIONAL; enables automated
+#                             backend deploys; absent = visible skip)
+#   vars:    VERCEL_ORG_ID, VERCEL_PROJECT_ID, PRODUCTION_API_URL
+#
+# SECURITY: no credentials are committed in this file; all secrets arrive
+# through the GitHub Actions secret store.
+name: release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_backend_gate:
+        description: 'Skip the backend-contract gate (architect-approved exceptional transition)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Credential presence probe — makes gated stages skip VISIBLY (never
+  # silently). Booleans only; no secret values ever cross job boundaries.
+  # ---------------------------------------------------------------------------
+  credentials:
+    name: credential presence
+    runs-on: ubuntu-latest
+    outputs:
+      has_vercel: ${{ steps.probe.outputs.has_vercel }}
+      has_railway: ${{ steps.probe.outputs.has_railway }}
+    steps:
+      - name: Probe release credentials
+        id: probe
+        run: |
+          echo "has_vercel=${{ secrets.VERCEL_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+          echo "has_railway=${{ secrets.RAILWAY_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+      - name: Report
+        run: |
+          echo "Vercel token:  ${{ steps.probe.outputs.has_vercel == 'true' && 'present — Vercel stages ARMED' || 'ABSENT — Vercel stages will SKIP visibly' }}"
+          echo "Railway token: ${{ steps.probe.outputs.has_railway == 'true' && 'present — Railway stage ARMED' || 'ABSENT — Railway stage will SKIP visibly' }}"
+
+  # ---------------------------------------------------------------------------
+  # Static configuration checks — always run, no credentials required.
+  # ---------------------------------------------------------------------------
+  frontend-config:
+    name: frontend deployment config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Validate Vercel deployment configuration (VC-01..VC-05)
+        run: bun scripts/validate-vercel-config.ts
+
+      - name: Frontend typecheck (includes vercel.ts)
+        working-directory: frontend
+        run: bun run typecheck
+
+  # ---------------------------------------------------------------------------
+  # PR preview deployment — isolated from production by construction.
+  # ---------------------------------------------------------------------------
+  preview:
+    name: vercel preview (isolated)
+    runs-on: ubuntu-latest
+    needs: [frontend-config, credentials]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Deploy Vercel preview
+        if: needs.credentials.outputs.has_vercel == 'true'
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          # Preview deployments target the ISOLATION CANARY by default: a
+          # non-resolving host so /api/* can NEVER reach the production
+          # backend (fail-safe separation). Point PREVIEW_API_TARGET at a real
+          # preview backend when one exists.
+          PREVIEW_API_TARGET: ${{ vars.PREVIEW_API_TARGET }}
+        run: |
+          set -euo pipefail
+          npm install --global vercel@latest
+          API_TARGET="${PREVIEW_API_TARGET:-https://workflowos-preview-canary.invalid}" \
+          vercel deploy ./frontend \
+            --token "$VERCEL_TOKEN" \
+            --confirm 2>/dev/null | tail -n 1 > /tmp/preview-url.txt
+          URL=$(cat /tmp/preview-url.txt)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Preview deployed: $URL"
+
+      - name: Verify preview isolation (must NOT reach the production backend)
+        if: needs.credentials.outputs.has_vercel == 'true'
+        run: |
+          FRONTEND_URL="${{ steps.deploy.outputs.url }}" \
+          MODE=preview \
+          ./scripts/verify-cloud-deployment.sh
+
+      - name: No Vercel token configured — preview skipped (visible)
+        if: needs.credentials.outputs.has_vercel != 'true'
+        run: |
+          echo "::warning::VERCEL_TOKEN secret is not configured — Vercel preview deployment SKIPPED."
+          echo "The preview stage arms automatically once the secret exists. This is an explicit skip, not a success claim."
+
+  # ---------------------------------------------------------------------------
+  # Backend-contract gate — release sequencing enforcement (main only).
+  # ---------------------------------------------------------------------------
+  backend-contract-gate:
+    name: backend contract gate (release sequencing)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout (full history for ancestry check)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gate (backend must be an ancestor of the release)
+        env:
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+          SKIP_BACKEND_GATE: ${{ inputs.skip_backend_gate }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${SKIP_BACKEND_GATE}" = "true" ]; then
+            echo "::warning::backend-contract gate SKIPPED by explicit architect decision (workflow_dispatch skip_backend_gate=true). This skip is recorded in the run log and MUST be reflected in the deployment evidence."
+            exit 0
+          fi
+          if [ -z "${PRODUCTION_API_URL}" ]; then
+            echo "::error::PRODUCTION_API_URL repository variable is not set. It must hold the production Railway API origin (e.g. https://workflowos-production.up.railway.app)."
+            exit 1
+          fi
+          echo "Probing production backend: ${PRODUCTION_API_URL}/health"
+          HEALTH=$(curl -sS --max-time 30 "${PRODUCTION_API_URL}/health" || echo '{}')
+          echo "backend /health: ${HEALTH}"
+          BACKEND_SHA=$(echo "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("deployment",{}).get("commitSha",""))' 2>/dev/null || echo "")
+          if [ -z "${BACKEND_SHA}" ]; then
+            echo "::error::The production backend does not report a deployment commit SHA (it predates the deployment-identity surface, or /health is unreachable). RELEASE BLOCKED: a frontend release must not assume a backend contract that is not yet available. Deploy the Railway backend from current main first (see docs/deployment/production.md), or run this workflow from workflow_dispatch with skip_backend_gate=true as an architect-approved exceptional transition."
+            exit 1
+          fi
+          echo "backend commit: ${BACKEND_SHA}"
+          echo "release commit: ${RELEASE_SHA}"
+          if git cat-file -e "${BACKEND_SHA}"^{commit} 2>/dev/null; then
+            if git merge-base --is-ancestor "${BACKEND_SHA}" "${RELEASE_SHA}"; then
+              echo "GATE PASSED: backend ${BACKEND_SHA} is an ancestor of release ${RELEASE_SHA}."
+            else
+              echo "::error::GATE FAILED: backend ${BACKEND_SHA} is NOT an ancestor of release ${RELEASE_SHA} (the live backend contains changes the release does not include). Align the repository first."
+              exit 1
+            fi
+          else
+            echo "::error::GATE FAILED: backend commit ${BACKEND_SHA} is not present in this repository. The production backend must be deployed from this repository's main branch."
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Production frontend deployment + live verification (main only).
+  # ---------------------------------------------------------------------------
+  deploy-frontend:
+    name: deploy vercel production
+    runs-on: ubuntu-latest
+    needs: [backend-contract-gate, credentials]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      deployment_url: ${{ steps.deploy.outputs.url }}
+      deployment_id: ${{ steps.deploy.outputs.id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: No Vercel token configured — production deploy SKIPPED (visible)
+        if: needs.credentials.outputs.has_vercel != 'true'
+        run: |
+          echo "::warning::VERCEL_TOKEN secret is not configured — production frontend deployment SKIPPED. This is an explicit skip, not a success claim. Deploy manually: vercel deploy ./frontend --prod (see docs/deployment/production.md)."
+
+      - name: Deploy Vercel production
+        if: needs.credentials.outputs.has_vercel == 'true'
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          set -euo pipefail
+          npm install --global vercel@latest
+          # vercel.ts compiles at the deploy invocation and reads API_TARGET —
+          # the production origin comes from the PRODUCTION_API_URL variable
+          # (the same value the backend-contract gate probes).
+          API_TARGET="${PRODUCTION_API_URL}" \
+          vercel deploy ./frontend \
+            --prod \
+            --token "$VERCEL_TOKEN" \
+            --confirm 2>/dev/null | tail -n 1 > /tmp/prod-url.txt
+          URL=$(cat /tmp/prod-url.txt)
+          echo "Production deployed: $URL"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          # Resolve the deployment ID for the evidence record.
+          ID=$(vercel inspect "$URL" --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || echo "")
+          echo "id=${ID:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the live production deployment
+        if: needs.credentials.outputs.has_vercel == 'true'
+        env:
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          set -euo pipefail
+          API_KEY=$(grep -oE "wfos-demo-[a-z0-9-]+" backend/provision-key.ts | head -n 1 || echo "")
+          FRONTEND_URL="${{ steps.deploy.outputs.url }}" \
+          API_URL="${PRODUCTION_API_URL}" \
+          API_KEY="${API_KEY}" \
+          MODE=production \
+          REQUIRE_READY=1 \
+          ./scripts/verify-cloud-deployment.sh
+
+  # ---------------------------------------------------------------------------
+  # Railway backend deployment — gated on RAILWAY_TOKEN; visible skip otherwise.
+  # ---------------------------------------------------------------------------
+  railway-backend:
+    name: deploy railway backend (api + worker)
+    runs-on: ubuntu-latest
+    needs: [backend-contract-gate, credentials]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: No Railway token configured — backend deploy SKIPPED (visible)
+        if: needs.credentials.outputs.has_railway != 'true'
+        run: |
+          echo "::warning::RAILWAY_TOKEN secret is not configured — automated Railway backend deployment SKIPPED. This is an explicit skip, not a success claim."
+          echo ""
+          echo "Manual backend deployment (preserves the modular monolith — the SAME"
+          echo "backend/Dockerfile serves both roles):"
+          echo "  1. Railway project → API service:   source = repository main, root dir backend, WORKFLOWOS_ROLE=api"
+          echo "     (Railway injects PORT; the image binds 0.0.0.0:\$PORT; migrations run on api-role startup)"
+          echo "  2. Railway project → Worker service: same repository + Dockerfile, WORKFLOWOS_ROLE=worker"
+          echo "  3. Verify: curl \$API_URL/health  (deployment.commitSha must equal the released SHA)"
+          echo "             curl \$API_URL/health/ready  (postgres/redis/objectStore all ok)"
+          echo "  See docs/deployment/production.md for the full variable set."
+          echo ""
+          echo "Automated deploys arm automatically once RAILWAY_TOKEN exists:"
+          echo "  railway up --service workflowos-api   (or connect the repo in the Railway project)"
+
+      - name: Deploy Railway backend (api + worker services)
+        if: needs.credentials.outputs.has_railway == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install --global @railway/cli@latest
+          # One codebase, two roles: the repository's backend/Dockerfile is
+          # deployed to both Railway services; the role is selected by the
+          # service's WORKFLOWOS_ROLE variable. CLI `railway up` targets the
+          # linked service; CI links are provided through Railway project
+          # variables set at secret-configuration time.
+          echo "Deploying backend (role api)…"
+          railway up --ci --service workflowos-api || {
+            echo "::error::Railway api-service deployment failed — see logs above."
+            exit 1
+          }
+          echo "Deploying backend (role worker)…"
+          railway up --ci --service workflowos-worker || {
+            echo "::error::Railway worker-service deployment failed — see logs above."
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # Deployment evidence — immutable per-release record (summary + artifact).
+  # ---------------------------------------------------------------------------
+  deployment-evidence:
+    name: deployment evidence
+    runs-on: ubuntu-latest
+    needs: [deploy-frontend, railway-backend]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Record release evidence
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOYMENT_URL: ${{ needs.deploy-frontend.outputs.deployment_url }}
+          DEPLOYMENT_ID: ${{ needs.deploy-frontend.outputs.deployment_id }}
+          PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
+        run: |
+          mkdir -p evidence
+          cat > evidence/deployment-evidence.json <<EOF
+          {
+            "releasedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "releaseCommit": "${RELEASE_SHA}",
+            "frontend": {
+              "deploymentUrl": "${DEPLOYMENT_URL}",
+              "deploymentId": "${DEPLOYMENT_ID}"
+            },
+            "backend": {
+              "productionApiUrl": "${PRODUCTION_API_URL}",
+              "automatedDeploy": "see railway-backend job (visible skip when RAILWAY_TOKEN absent)"
+            },
+            "verification": "see deploy-frontend job (live production verification) and railway-backend job"
+          }
+          EOF
+          cat evidence/deployment-evidence.json >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "_Durable repository evidence: docs/deployment/evidence/ (updated by delivery pull requests)._"
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-evidence-${{ github.sha }}
+          path: evidence/
+          retention-days: 90

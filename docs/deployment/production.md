@@ -113,14 +113,46 @@ GITHUB_PRIVATE_KEY=<pem-content>
 
 ## 5. Vercel — frontend
 
-The frontend is already deployed to Vercel. Update its environment:
+The frontend deployment configuration is `frontend/vercel.ts` (programmatic
+configuration — DEPLOYMENT HARDENING). It is a Vite SPA build with:
 
-1. Vercel → your `frontend` project → Settings → Environment Variables.
-2. Set:
-   ```text
-   BACKEND_URL=https://api.yourdomain.com
-   ```
-3. Redeploy: `vercel --prod --token=<vercel-token>` from the `frontend/` directory.
+- `/api/(.*)` proxied to the environment-resolved `API_TARGET` origin, with
+  the `/api` prefix stripped (same contract as the docker-compose nginx
+  proxy and the vite dev-server proxy);
+- filesystem serving for static assets, plus an SPA fallback
+  (`/(.*)` → `/index.html`) for client-side routing deep links;
+- **no** backend business logic, **no** serverless API implementation, and
+  **no** secrets.
+
+### Environment separation (CRITICAL)
+
+The API proxy destination is resolved AT BUILD TIME from the per-environment
+`API_TARGET` project variable (fail-closed: a build without `API_TARGET`
+fails — it never silently deploys a mis-targeted proxy):
+
+- `API_TARGET` (**production**) = `https://workflowos-production.up.railway.app`
+- `API_TARGET` (**preview**) = `https://workflowos-preview-canary.invalid`
+  — a deliberately non-resolving canary so **preview deployments can never
+  reach the production backend** (fail-safe isolation). When a real preview
+  backend exists, point this variable at it.
+
+CLI deployments must export `API_TARGET` when invoking `vercel deploy`
+(the configuration compiles at the deploy invocation):
+
+```bash
+# production
+API_TARGET=https://workflowos-production.up.railway.app \
+  vercel deploy ./frontend --prod --token=<vercel-token>
+
+# preview (isolated)
+API_TARGET=https://workflowos-preview-canary.invalid \
+  vercel deploy ./frontend --token=<vercel-token>
+```
+
+The release pipeline (`release.yml`) sets these values from repository
+variables (`PRODUCTION_API_URL`, `PREVIEW_API_TARGET`) and VERIFIES the
+isolation after every preview deployment
+(`scripts/verify-cloud-deployment.sh` in `MODE=preview`).
 
 ## 6. Custom domains
 
@@ -148,8 +180,12 @@ Do NOT use `*` for authenticated production APIs.
 ## 8. Migrations
 
 The API role runs migrations on startup (the worker skips them to avoid races).
-When you deploy for the first time, the API will apply all 16 migrations
-automatically. To verify:
+Each migration applies in a transaction that also records it in
+`schema_migrations` — idempotent and safely retryable. When the API and
+worker start simultaneously (fresh environment), the worker does NOT crash:
+its outbox relay sweep and job handlers log errors and retry until the API
+finishes applying the schema (the WORK-034 durable-redelivery semantics; see
+the deployment-topology test suite). To verify:
 
 ```bash
 # After the API is running
@@ -222,12 +258,11 @@ curl -sS -H "x-api-key: $KEY" $API/projects/$PROJECT/audit
 
 ## 12. Rollback strategy
 
-- **Frontend (Vercel)**: Vercel keeps every deployment. Roll back via the
-  dashboard → Deployments → Promote previous.
-- **Backend (Railway)**: Railway keeps every deployment. Roll back via the
-  dashboard → Deployments → Redeploy previous.
-- **Database (Neon)**: Neon supports point-in-time recovery. Use the
-  Neon dashboard to restore to a previous timestamp if needed.
+See **`docs/deployment/rollback.md`** for the complete rollback playbook —
+including the Vercel promote/rollback procedure (exercised live against the
+production alias: deterministic switch with seconds-level propagation), the
+Railway redeploy path, and the migration-irreversibility policy for
+destructive schema changes.
 
 ## 13. Secret rotation
 
@@ -252,17 +287,63 @@ curl -sS -H "x-api-key: $KEY" $API/projects/$PROJECT/audit
 2. Update `DATABASE_URL` in Railway.
 3. Redeploy.
 
+## Release pipeline (CI/CD)
+
+`release.yml` is THE release system for the cloud topology:
+
+- **Pull requests**: static config checks (`scripts/validate-vercel-config.ts`,
+  VC-01..VC-06) + frontend typecheck + an ISOLATED Vercel preview whose
+  `/api/*` is verified NOT to reach the production backend. PRs never deploy
+  production Railway state.
+- **Push to main**: the **backend-contract gate** probes the live production
+  backend's `GET /health` deployment identity (`deployment.commitSha`) and
+  requires it to be a git ancestor of the release — a frontend release can
+  never assume a backend contract that is not yet available
+  (schema → backend → worker → frontend ordering). An architect-approved
+  exceptional transition can skip the gate via `workflow_dispatch` with
+  `skip_backend_gate=true` (recorded in the run log + evidence).
+- Then: `vercel deploy --prod` + live production verification
+  (`scripts/verify-cloud-deployment.sh`, `MODE=production`, `REQUIRE_READY=1`:
+  SPA shell, assets, deep links, `/api` rewrite, backend liveness/readiness,
+  authenticated read-only call through Browser → Vercel → Railway →
+  PostgreSQL), the Railway backend stage (gated on `RAILWAY_TOKEN`; skips
+  VISIBLY with manual steps when absent), and a per-release evidence record
+  (job summary + artifact).
+
+`deploy.yml` remains the validation CI for the frozen LOCAL docker-compose
+topology — it never deploys to cloud providers and is not a second release
+system.
+
+Required repository configuration:
+
+- secrets: `VERCEL_TOKEN`, `RAILWAY_TOKEN` (optional — enables automated
+  backend deploys)
+- variables: `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `PRODUCTION_API_URL`,
+  `PREVIEW_API_TARGET`
+
+## Object storage hardening
+
+`OBJECT_STORAGE_PROVIDER=s3` FAILS CLOSED: an incomplete S3 configuration
+(any of bucket/endpoint/access-key/secret-key missing) throws at startup
+instead of silently degrading to the filesystem/in-memory adapter. Startup
+logs identify the ACTIVE adapter with its non-secret configuration
+(`app.object_store.active`: provider/bucket/endpoint-host for S3) so a
+misconfigured store is diagnosable from deploy logs alone. The readiness
+probe continues to verify actual reachability (put+get+delete probe).
+
 ## Environment variables summary
 
 | Variable | Where | Description |
 |---|---|---|
-| `DATABASE_URL` | Railway (API + Worker) | Neon PostgreSQL connection string |
-| `REDIS_URL` | Railway (API + Worker) | Railway Redis internal URL |
-| `OBJECT_STORAGE_DIR` | Railway (API + Worker) | `/data/objects` |
-| `WORKFLOWOS_ROLE` | Railway | `api` or `worker` |
-| `PORT` | Railway (API) | `3001` |
+| `DATABASE_URL` | Railway (API + Worker) | Neon PostgreSQL connection string (authoritative) |
+| `REDIS_URL` | Railway (API + Worker) | Railway Redis internal URL (non-authoritative: queue/locks/cache) |
+| `OBJECT_STORAGE_PROVIDER` | Railway (API + Worker) | `s3` for the S3-compatible adapter (fail-closed on incomplete config) |
+| `OBJECT_STORAGE_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | Railway (API + Worker) | S3-compatible object storage (e.g. Cloudflare R2) |
+| `OBJECT_STORAGE_DIR` | Railway (API + Worker) | filesystem adapter directory (local/dev topology) |
+| `WORKFLOWOS_ROLE` | Railway | `api` or `worker` (same image, two roles) |
+| `PORT` | Railway (API) | provided by Railway; the image binds `0.0.0.0:$PORT` |
 | `HOST` | Railway | `0.0.0.0` |
 | `LOG_LEVEL` | Railway | `info` |
-| `CORS_ORIGIN` | Railway (API) | `https://app.yourdomain.com` |
+| `CORS_ORIGIN` | Railway (API) | the Vercel production origin |
 | `WORKFLOWOS_GITHUB_WEBHOOK_SECRET` | Railway (API + Worker) | GitHub webhook secret |
-| `BACKEND_URL` | Vercel | `https://api.yourdomain.com` |
+| `API_TARGET` | Vercel (per environment) | production: the Railway API origin; preview: the isolation canary |

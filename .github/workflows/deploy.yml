@@ -1,4 +1,12 @@
-# Deployment validation CI for WorkflowOS (WORK-023).
+# Deployment validation CI for the frozen LOCAL topology (WORK-023).
+#
+# ROLE (deployment hardening): this workflow validates that the repository's
+# docker-compose topology (web, api, worker, postgres, redis, object-storage
+# volume) remains reproducible in CI WITHOUT production credentials. It is
+# the local/compose leg of deployment assurance. The PRODUCTION cloud
+# topology (Vercel + Railway) is released and verified by `release.yml` —
+# this workflow deliberately does NOT deploy to any cloud provider, and it
+# is not a second release system.
 #
 # Builds the Docker images, starts the full docker-compose topology (web,
 # api, worker, postgres, redis, object-storage volume), and runs the

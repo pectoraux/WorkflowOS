@@ -8,6 +8,15 @@ import type { DatabaseClient, ObjectStore, Redis } from '@platform/index.js';
  * process is running. Used for deployment liveness checks and as a smoke test
  * in the integration test suite.
  *
+ * DEPLOYMENT HARDENING: when deployment identity is wired (deps.deployment),
+ * liveness ALSO reports the non-secret deployment identity — process role,
+ * the git commit the container was built from (RAILWAY_GIT_COMMIT_SHA on
+ * Railway; null when the platform does not provide one), and the hosting
+ * environment name (RAILWAY_ENVIRONMENT_NAME). This lets the release
+ * pipeline and the deployment evidence record correlate a live deployment
+ * with an exact repository revision WITHOUT exposing any secret. Consumers
+ * must treat the extra fields as optional (older deployments omit them).
+ *
  * `GET /health/ready` — readiness probe (WORK-023). Verifies that the process
  * can reach its authoritative dependencies:
  *   - PostgreSQL (SELECT 1)
@@ -30,6 +39,18 @@ export interface HealthRouteDeps {
   redis?: Redis;
   /** ObjectStore for the readiness put+get check. Optional. */
   objectStore?: ObjectStore;
+  /** Non-secret deployment identity for liveness reporting. Optional. */
+  deployment?: HealthDeploymentIdentity;
+}
+
+/** Non-secret deployment identity surfaced by the liveness probe. */
+export interface HealthDeploymentIdentity {
+  /** Process role (`api` | `worker` | `all`). */
+  role: string;
+  /** Git commit the container was built from, when the platform provides it. */
+  commitSha?: string;
+  /** Hosting environment name (e.g. Railway environment), when provided. */
+  environmentName?: string;
 }
 
 interface CheckResult {
@@ -86,9 +107,23 @@ export async function healthRoutes(
   app: FastifyInstance,
   deps: HealthRouteDeps = {},
 ): Promise<void> {
-  // Liveness — always returns ok if the process is running.
+  // Liveness — always returns ok if the process is running. Deployment
+  // identity (role/commitSha/environmentName) is included when wired so
+  // release verification can correlate the live process with a revision.
   app.get('/health', async () => {
-    return { status: 'ok' };
+    if (deps.deployment) {
+      return {
+        status: 'ok' as const,
+        deployment: {
+          role: deps.deployment.role,
+          ...(deps.deployment.commitSha ? { commitSha: deps.deployment.commitSha } : {}),
+          ...(deps.deployment.environmentName
+            ? { environmentName: deps.deployment.environmentName }
+            : {}),
+        },
+      };
+    }
+    return { status: 'ok' as const };
   });
 
   // Readiness — verifies connectivity to PostgreSQL, Redis, ObjectStore.

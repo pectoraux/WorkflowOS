@@ -41,6 +41,20 @@ export class S3ObjectStore implements ObjectStore {
     this.config = config;
   }
 
+  /**
+   * Non-secret configuration summary for startup logs and deployment
+   * evidence. NEVER includes the access key or secret key.
+   */
+  describe(): { provider: 's3'; bucket: string; endpointHost: string; region: string } {
+    let endpointHost = 'unresolvable';
+    try {
+      endpointHost = new URL(this.config.endpoint).host;
+    } catch {
+      // Keep the placeholder — an invalid endpoint is itself diagnostic.
+    }
+    return { provider: 's3', bucket: this.config.bucket, endpointHost, region: this.config.region };
+  }
+
   async put(input: PutObjectInput): Promise<PutObjectResult> {
     const key = this.generateKey();
     const digest = createHash('sha256').update(input.body).digest('hex');
@@ -155,7 +169,18 @@ export class S3ObjectStore implements ObjectStore {
 
 /**
  * Create an S3-compatible ObjectStore from environment variables.
- * Returns undefined when OBJECT_STORAGE_PROVIDER != "s3".
+ *
+ * Returns `undefined` when OBJECT_STORAGE_PROVIDER is not "s3" (other
+ * providers handle object storage).
+ *
+ * DEPLOYMENT HARDENING (fail-closed): when OBJECT_STORAGE_PROVIDER=s3 but any
+ * required variable is missing, this function THROWS instead of silently
+ * returning `undefined`. The previous behavior let a typo in one env var name
+ * silently degrade production object storage to the filesystem or in-memory
+ * adapter — losing evidence artifacts without any startup signal. Object
+ * storage is an authoritative dependency of the verification boundary, so an
+ * incomplete S3 configuration must stop the process at startup (visible in
+ * deploy logs) rather than degrade durability invisibly.
  */
 export function createS3ObjectStoreFromEnv(): S3ObjectStore | undefined {
   if (process.env.OBJECT_STORAGE_PROVIDER !== 's3') return undefined;
@@ -164,8 +189,25 @@ export function createS3ObjectStoreFromEnv(): S3ObjectStore | undefined {
   const region = process.env.OBJECT_STORAGE_REGION ?? 'auto';
   const accessKeyId = process.env.OBJECT_STORAGE_ACCESS_KEY_ID;
   const secretAccessKey = process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY;
-  if (!bucket || !endpoint || !accessKeyId || !secretAccessKey) {
-    return undefined;
+  if (
+    bucket === undefined ||
+    endpoint === undefined ||
+    accessKeyId === undefined ||
+    secretAccessKey === undefined
+  ) {
+    const missing = [
+      bucket === undefined && 'OBJECT_STORAGE_BUCKET',
+      endpoint === undefined && 'OBJECT_STORAGE_ENDPOINT',
+      accessKeyId === undefined && 'OBJECT_STORAGE_ACCESS_KEY_ID',
+      secretAccessKey === undefined && 'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+    ].filter((v): v is string => Boolean(v));
+    throw new Error(
+      `OBJECT_STORAGE_PROVIDER=s3 but required environment variable(s) missing: ${missing.join(', ')}. ` +
+        'Refusing to start with an incomplete S3 object-store configuration (fail-closed): ' +
+        'a partially-configured S3 store previously fell back to the filesystem/in-memory adapter, ' +
+        'silently losing production evidence durability. Set all OBJECT_STORAGE_* variables or ' +
+        'unset OBJECT_STORAGE_PROVIDER to use another adapter.',
+    );
   }
   return new S3ObjectStore({ bucket, endpoint, region, accessKeyId, secretAccessKey });
 }
