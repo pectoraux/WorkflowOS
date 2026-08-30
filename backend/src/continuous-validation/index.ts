@@ -53,6 +53,16 @@ export {
   bindTestIdentity,
   SYNTHETIC_IDENTITY_PROVIDERS,
 } from './internal/test-identity.js';
+export {
+  // Task 5 — validation-run admission (the composition gate)
+  admitValidationRun,
+  VALIDATION_ADMISSION_ERROR_CODES,
+} from './internal/run-admission.js';
+export type {
+  ValidationRunRequest,
+  ValidationRunAdmission,
+  ValidationAdmissionErrorCode,
+} from './internal/run-admission.js';
 export type {
   EffectPolicy,
   ValidationMode,
