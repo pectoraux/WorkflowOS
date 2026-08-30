@@ -24,6 +24,25 @@ import {
   DefaultAuthorizationService,
   ApiKeyCredentialProvisioner,
 } from './modules/auth/internal/authorization-service.js';
+import { PgSessionService } from './modules/auth/internal/pg-session-service.js';
+import {
+  PgServiceAccountRepository,
+  PgCapabilityPermissionRepository,
+} from './modules/auth/internal/pg-service-account-repository.js';
+import { PgUserIdentityRepository, PgUserPasswordRepository } from './modules/auth/internal/pg-user-identity-repository.js';
+import { EmailAuthProvider } from './modules/auth/internal/email-auth-provider.js';
+import { IdentityResolver } from './modules/auth/internal/identity-resolver.js';
+import { RequestAuthenticator } from './modules/auth/internal/request-authenticator.js';
+import {
+  GoogleOidcProvider,
+  GitHubOAuthProvider,
+  fetchOAuthHttpClient,
+} from './modules/auth/internal/oauth-provider.js';
+import type {
+  SessionService,
+  ServiceAccountRepository,
+  OAuthProvider,
+} from '@modules/auth/index.js';
 import type { UserRepository } from '@modules/users/index.js';
 import { PgUserRepository } from './modules/users/internal/pg-user-repository.js';
 import type {
@@ -394,6 +413,18 @@ export interface AppDeps {
   authorizationService?: AuthorizationService;
   /** WORK-002: API-key credential provisioner. Present when a database is configured. */
   apiKeyProvisioner?: ApiKeyCredentialProvisioner;
+  /** WORK-074: server-side session service. Present when a database is configured. */
+  sessionService?: SessionService;
+  /** WORK-074: service-account repository (machine principals). Present when a database is configured. */
+  serviceAccountRepository?: ServiceAccountRepository;
+  /** WORK-074: identity resolver (AUTH-AC-01 generalized to OIDC). Present when a database is configured. */
+  identityResolver?: IdentityResolver;
+  /** WORK-074: email/password auth provider. Present when a database is configured. */
+  emailAuthProvider?: EmailAuthProvider;
+  /** WORK-074: request authenticator (session + API key → Principal). Present when a database is configured. */
+  requestAuthenticator?: RequestAuthenticator;
+  /** WORK-074: OAuth providers keyed by name (google/github). Present when env configures them. */
+  oauthProviders?: Record<string, OAuthProvider>;
   /** WORK-002: user repository. Present when a database is configured. */
   userRepository?: UserRepository;
   /** WORK-002: organization repository. Present when a database is configured. */
@@ -783,6 +814,13 @@ export async function buildApp(
   let authProvider: AuthProvider | undefined;
   let authorizationService: AuthorizationService | undefined;
   let apiKeyProvisioner: ApiKeyCredentialProvisioner | undefined;
+  // WORK-074 runtime identity state.
+  let sessionService: SessionService | undefined;
+  let serviceAccountRepository: ServiceAccountRepository | undefined;
+  let identityResolver: IdentityResolver | undefined;
+  let emailAuthProvider: EmailAuthProvider | undefined;
+  let requestAuthenticator: RequestAuthenticator | undefined;
+  let oauthProviders: Record<string, OAuthProvider> | undefined;
   let userRepository: UserRepository | undefined;
   let organizationRepository: OrganizationRepository | undefined;
   let membershipRepo: MembershipRepository | undefined;
@@ -1153,14 +1191,87 @@ export async function buildApp(
         governedPullRequests,
       );
     }
-    authProvider = new ApiKeyAuthProvider(database, secretStore);
+    const apiKeyAuthProvider = new ApiKeyAuthProvider(database, secretStore);
+    authProvider = apiKeyAuthProvider;
+    // WORK-074: the capability → permission repository (machine-principal path).
+    const capabilityPermissionRepo = new PgCapabilityPermissionRepository(database);
     authorizationService = new DefaultAuthorizationService(
       membershipRepo,
       rolePermissionRepo,
       projectRepository,
       projectAccessRepo,
+      capabilityPermissionRepo,
     );
     apiKeyProvisioner = new ApiKeyCredentialProvisioner(database);
+
+    // -----------------------------------------------------------------------
+    // WORK-074: the identity & access runtime (the runtime of WORK-063's spec).
+    // Sessions, service accounts, identity linking, email/password, OAuth/OIDC
+    // providers, and the request authenticator that resolves a session cookie
+    // OR an API key to a Principal (human OR machine). All behind the existing
+    // /auth boundary; no second authorization authority.
+    // -----------------------------------------------------------------------
+    sessionService = new PgSessionService(database);
+    serviceAccountRepository = new PgServiceAccountRepository(database);
+    const userIdentityRepository = new PgUserIdentityRepository(database);
+    const userPasswordRepository = new PgUserPasswordRepository(database);
+    identityResolver = new IdentityResolver(userRepository, userIdentityRepository);
+    emailAuthProvider = new EmailAuthProvider(
+      userRepository,
+      userIdentityRepository,
+      userPasswordRepository,
+    );
+    requestAuthenticator = new RequestAuthenticator(
+      apiKeyAuthProvider,
+      sessionService,
+      userRepository,
+      serviceAccountRepository,
+    );
+
+    // OAuth/OIDC providers — constructed ONLY when the operator configured the
+    // corresponding env vars. The client_secret stays in the SecretStore (env)
+    // and is used only for the token-exchange POST. When env vars are absent,
+    // the provider is not registered and its /auth/login/<provider> route
+    // returns 503 (the email path remains the customer-facing default).
+    const oauthProvidersMap: Record<string, OAuthProvider> = {};
+    const googleClientId = process.env.WORKFLOWOS_GOOGLE_OAUTH_CLIENT_ID;
+    const googleSecretRef = process.env.WORKFLOWOS_GOOGLE_OAUTH_CLIENT_SECRET_REF
+      ?? 'WORKFLOWOS_GOOGLE_OAUTH_CLIENT_SECRET';
+    if (googleClientId) {
+      oauthProvidersMap['google'] = new GoogleOidcProvider(
+        {
+          clientId: googleClientId,
+          clientSecretRef: googleSecretRef,
+          authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+          tokenUrl: 'https://oauth2.googleapis.com/token',
+          userinfoUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
+          scope: 'openid email profile',
+        },
+        secretStore,
+        fetchOAuthHttpClient(),
+      );
+    }
+    const githubClientId = process.env.WORKFLOWOS_GITHUB_OAUTH_CLIENT_ID;
+    const githubSecretRef = process.env.WORKFLOWOS_GITHUB_OAUTH_CLIENT_SECRET_REF
+      ?? 'WORKFLOWOS_GITHUB_OAUTH_CLIENT_SECRET';
+    if (githubClientId) {
+      oauthProvidersMap['github'] = new GitHubOAuthProvider(
+        {
+          clientId: githubClientId,
+          clientSecretRef: githubSecretRef,
+          authorizeUrl: 'https://github.com/login/oauth/authorize',
+          tokenUrl: 'https://github.com/login/oauth/access_token',
+          userinfoUrl: 'https://api.github.com/user',
+          scope: 'read:user user:email',
+        },
+        secretStore,
+        fetchOAuthHttpClient(),
+      );
+    }
+    if (Object.keys(oauthProvidersMap).length > 0) {
+      oauthProviders = oauthProvidersMap;
+    }
+
 
     // -----------------------------------------------------------------------
     // WORK-026 (SUB-F): composition-root wiring for /runtime, /github
@@ -2097,6 +2208,13 @@ export async function buildApp(
       authProvider,
       authorizationService,
       apiKeyProvisioner,
+      // WORK-074 runtime identity deps.
+      sessionService,
+      serviceAccountRepository,
+      identityResolver,
+      emailAuthProvider,
+      requestAuthenticator,
+      oauthProviders,
       userRepository,
       organizationRepository,
       membershipRepository: membershipRepo,

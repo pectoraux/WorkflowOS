@@ -262,7 +262,7 @@ interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const { clearApiKey } = useAuth();
+  const { logout } = useAuth();
   const navigate = useNavigate();
   const { projectId: _pid = "" } = useParams<{ projectId: string }>();
   
@@ -311,7 +311,7 @@ export function AppShell({ children }: AppShellProps) {
   const { items: crumbs } = useBreadcrumbs();
 
   const handleSignOut = () => {
-    clearApiKey();
+    void logout();
     navigate('/');
   };
 

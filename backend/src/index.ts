@@ -41,7 +41,50 @@ async function main(): Promise<void> {
           }
         : {}),
       ...(app.deps.authProvider && app.deps.userRepository
-        ? { auth: { authProvider: app.deps.authProvider, userRepository: app.deps.userRepository } }
+        ? {
+            auth: {
+              authProvider: app.deps.authProvider,
+              userRepository: app.deps.userRepository,
+              // WORK-074: the canonical request authenticator (session cookie
+              // OR API key → Principal). Present when the runtime is wired.
+              ...(app.deps.requestAuthenticator
+                ? { requestAuthenticator: app.deps.requestAuthenticator }
+                : {}),
+            },
+          }
+        : {}),
+      // WORK-074: the identity & access runtime routes (login/signup/callback/
+      // logout/me/service-accounts). Wired when the runtime deps are present.
+      ...(app.deps.sessionService &&
+      app.deps.emailAuthProvider &&
+      app.deps.identityResolver &&
+      app.deps.serviceAccountRepository &&
+      app.deps.apiKeyProvisioner &&
+      app.deps.organizationRepository &&
+      app.deps.membershipRepository &&
+      app.deps.authorizationService
+        ? {
+            authRuntime: {
+              sessionService: app.deps.sessionService,
+              emailProvider: app.deps.emailAuthProvider,
+              identityResolver: app.deps.identityResolver,
+              userRepository: app.deps.userRepository!,
+              organizationRepository: app.deps.organizationRepository,
+              membershipRepository: app.deps.membershipRepository,
+              serviceAccountRepository: app.deps.serviceAccountRepository,
+              apiKeyProvisioner: app.deps.apiKeyProvisioner,
+              apiKeySecretStoreRef: (keyId: string) =>
+                `WFOS_SA_KEY_${keyId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`,
+              secretsEnv: {
+                getSecret: (key: string) => Promise.resolve(process.env[key] ?? null),
+              },
+              ...(app.deps.oauthProviders ? { oauthProviders: app.deps.oauthProviders } : {}),
+              publicBaseUrl: process.env.WORKFLOWOS_PUBLIC_BASE_URL,
+              cookieSecure: process.env.CORS_ORIGIN?.startsWith('https://') ?? false,
+              authorizationService: app.deps.authorizationService,
+              ...(app.deps.auditService ? { auditWriter: app.deps.auditService } : {}),
+            },
+          }
         : {}),
       ...(app.deps.authorizationService &&
       app.deps.projectRepository &&

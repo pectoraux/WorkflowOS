@@ -46,7 +46,10 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<Respon
   if (apiKey) {
     headers['x-api-key'] = apiKey;
   }
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  // WORK-074: send the session cookie (credentials: 'include') so the
+  // backend's server-side session resolves the human principal. This is
+  // alongside the x-api-key header (automation path) — both first-class.
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' });
   if (res.status === 401) {
     throw new ApiError(401, 'Authentication required');
   }
@@ -103,6 +106,19 @@ async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 
 // --- Auth ---
 
+export interface AuthMe {
+  kind: 'human' | 'machine';
+  user?: PublicUserShape;
+  serviceAccount?: { id: string; name: string; organizationId: string; capabilities: string[] };
+}
+
+interface PublicUserShape {
+  id: string;
+  externalId: string;
+  displayName: string;
+  email: string | null;
+}
+
 export const auth = {
   setApiKey(key: string): void {
     localStorage.setItem('wfos_api_key', key);
@@ -117,6 +133,45 @@ export const auth = {
     const k = getApiKey();
     if (!k) return '';
     return k.length > 10 ? `${k.slice(0, 6)}…${k.slice(-3)}` : '••••';
+  },
+  /** WORK-074: fetch the current principal from /auth/me (session cookie). */
+  async me(): Promise<AuthMe | null> {
+    try {
+      const body = await apiGet<AuthMe>(`/auth/me`);
+      return body;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return null;
+      throw err;
+    }
+  },
+  /** WORK-074: email/password signup → session cookie set by the backend. */
+  async signupWithEmail(email: string, password: string, displayName?: string): Promise<PublicUserShape> {
+    const body = await apiPost<{ user: PublicUserShape }>(`/auth/signup/email`, {
+      email, password, displayName,
+    });
+    return body.user;
+  },
+  /** WORK-074: email/password login → session cookie set by the backend. */
+  async loginWithEmail(email: string, password: string): Promise<PublicUserShape> {
+    const body = await apiPost<{ user: PublicUserShape }>(`/auth/login/email`, {
+      email, password,
+    });
+    return body.user;
+  },
+  /** WORK-074: revoke the session + clear the cookie. */
+  async logout(): Promise<void> {
+    await apiPost<void>(`/auth/logout`);
+  },
+  /**
+   * WORK-074: redirect the browser to the OAuth/OIDC provider login. The
+   * backend sets the session cookie on the callback and redirects to '/'.
+   * The provider name ('google' | 'github') maps to the backend route.
+   */
+  loginWithProvider(provider: 'google' | 'github'): void {
+    // The /auth/login/<provider> route is NOT under /api (it's a top-level
+    // redirect); the Vite/nginx proxy strips /api for API calls, but the
+    // OAuth redirect goes directly to the backend origin.
+    window.location.href = `/api/auth/login/${provider}`;
   },
 };
 

@@ -45,6 +45,7 @@ import {
   maintenanceRoutes,
   type MaintenanceRouteDeps,
 } from './routes/maintenance.route.js';
+import { authRoutes, type AuthRouteDeps } from './routes/auth.route.js';
 
 /**
  * Build the Fastify application. Takes injected dependencies so tests can
@@ -157,6 +158,12 @@ export interface ServerDeps extends JobsRouteDeps {
    *  mutates workflow / verification / review state, NEVER starts execution,
    *  NEVER selects a provider. */
   maintenance?: MaintenanceRouteDeps;
+  /** WORK-074: the identity & access runtime routes (login/signup/callback/
+   *  logout/me/service-accounts). Registered when the runtime is wired.
+   *  These routes are NOT behind the protected-route gate (the login surface
+   *  is the one place unauthenticated requests are expected); the auth plugin
+   *  still resolves a Principal when a session/credential is present. */
+  authRuntime?: AuthRouteDeps;
 }
 
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
@@ -190,6 +197,14 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   }
   await healthRoutes(app, deps.health ?? {});
   await jobsRoutes(app, deps);
+  // WORK-074: register the identity & access runtime routes (the login
+  // surface). These are the customer-facing authentication endpoints. They
+  // are registered WITHOUT requiring the protected-route gate (the auth
+  // plugin resolves a Principal when a session/credential is present, but the
+  // login routes themselves accept unauthenticated requests).
+  if (deps.authRuntime) {
+    await authRoutes(app, deps.authRuntime);
+  }
   if (deps.auth && deps.projects) {
     await projectsRoutes(app, deps.projects);
   }

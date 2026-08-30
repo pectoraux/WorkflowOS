@@ -8,10 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { LoadingState } from '@/components/domain/loading-state';
 import { ErrorState } from '@/components/domain/error-state';
 import { EmptyState } from '@/components/domain/empty-state';
-import { auth, projects, organizations, type Project } from '@/api/client';
+import { projects, organizations, type Project } from '@/api/client';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function ProjectListPage() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [showCreate, setShowCreate] = useState(false);
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,7 +43,7 @@ export default function ProjectListPage() {
           </div>
           <span className="font-semibold">WorkflowOS</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => auth.clearApiKey()}>
+        <Button variant="ghost" size="sm" onClick={() => { void logout(); }}>
           Sign Out
         </Button>
       </header>

@@ -146,6 +146,42 @@ export interface AuthorizationService {
     permission: string;
     organizationId: string;
   }): Promise<OrganizationAuthorizationDecision>;
+
+  /**
+   * WORK-074: decide whether a MACHINE principal (a scoped service-account
+   * credential) may exercise `permission` on `resource`.
+   *
+   * This is the SAME {@link AuthorizationService} — machine principals ENTER
+   * the one authorization chain through the capability → permission mapping
+   * (the machine analog of role → permission). There is no parallel
+   * authorization mechanism (WORK-063 invariant #13).
+   *
+   * Decision chain for machines:
+   *   service account → org ownership of the project (tenant isolation,
+   *     AUTHZ-AC-02 for machines) → capability → permission mapping →
+   *     requested permission in the resolved set
+   *
+   * Fail closed: a capability not granted (or not in the credential's
+   * effective scope) is denied with a typed denial (WORK-063 invariant #6).
+   */
+  authorizeMachine(input: {
+    serviceAccount: import('./identity-runtime.types.js').ServiceAccount;
+    capabilities: readonly string[];
+    permission: string;
+    resource: ProtectedResource;
+  }): Promise<AuthorizationDecision>;
+
+  /**
+   * WORK-074: the organization-level machine authorization (the analog of
+   * {@link authorizeForOrganization} for machine principals). Same capability
+   * → permission path, scoped to the service account's own organization.
+   */
+  authorizeMachineForOrganization(input: {
+    serviceAccount: import('./identity-runtime.types.js').ServiceAccount;
+    capabilities: readonly string[];
+    permission: string;
+    organizationId: string;
+  }): Promise<OrganizationAuthorizationDecision>;
 }
 
 /**

@@ -23,9 +23,16 @@ import BenchmarkTrialPage from './pages/BenchmarkTrialPage';
 import ExecutionPreferencesPage from './pages/ExecutionPreferencesPage';
 
 export default function App() {
-  const { hasApiKey } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
 
-  if (!hasApiKey) {
+  // While the initial /auth/me check is in flight, render nothing (avoid a
+  // LoginPage flash for an already-authenticated session). The canonical
+  // auth-state source resolves synchronously on mount.
+  if (loading) {
+    return null;
+  }
+
+  if (!isAuthenticated) {
     return (
       <Routes>
         <Route path="*" element={<LoginPage />} />

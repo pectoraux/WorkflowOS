@@ -11218,7 +11218,7 @@ describe('WORK-040 invariants — Continuous Development Planner (planner capabi
     // The planner evidence lives in the existing Work Item metadata.planner
     // JSONB; no planner-owned table exists.
     const last = migrations[migrations.length - 1];
-    expect(last, 'WORK-040 adds no migration (the last migration is the WORK-062 orchestration substrate ledger 0058 — after the WORK-046 delegation coordination ledger 0057 and the merged WORK-051 migrations 0052–0056: /architecture-owned assertion storage 0052, /verification orchestration identity 0053, the governed impact declaration 0054, /workflows governed PR intents 0055 + the adoption origin 0056; no planner-owned table)').toMatch(/^0058_/);
+    expect(last, 'WORK-040 adds no migration (the last migration is the WORK-074 identity-runtime migration 0059 — added by WORK-074, the runtime of WORK-063 spec, AFTER the WORK-062 orchestration substrate ledger 0058, the WORK-046 delegation coordination ledger 0057, and the merged WORK-051 migrations 0052–0056; WORK-040 itself added no planner-owned table)').toMatch(/^0059_/);
     // The planner domain must NOT define any CREATE TABLE.
     const files = listTsFiles(DP_DIR);
     expect(files.length, 'src/development-planner/ must contain implementation files').toBeGreaterThan(0);
@@ -17855,13 +17855,14 @@ describe('WORK-047 invariants — Agent Intelligence (advisory/ranking only, nev
     expect(repoCode).toMatch(/JOIN wfos_delegation_plans p ON p\.id = u\.plan_id/);
     expect(repoCode).toMatch(/WHERE ar\.project_id = \$1/);
     // NO new tables: the domain declares NO migration of its own — the last
-    // migration is the WORK-062 orchestration substrate ledger 0058 (the
-    // WORK-046 delegation ledger 0057 predates it); nothing beyond it.
+    // migration is the WORK-074 identity-runtime migration 0059 (added by
+    // WORK-074, the runtime of WORK-063's spec, AFTER the WORK-062 orchestration
+    // substrate ledger 0058); nothing beyond it from THIS work order.
     const migrations = readdirSync(join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations'))
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    expect(migrations[migrations.length - 1]).toMatch(/^0058_/);
-    expect(migrations.some((m) => m.startsWith('0059'))).toBe(false);
+    expect(migrations[migrations.length - 1]).toMatch(/^0059_/);
+    expect(migrations.some((m) => m.startsWith('0060'))).toBe(false);
   });
 
   // --- (f) DETERMINISM — the documented constants + the total-order tie-break --
@@ -18427,13 +18428,15 @@ describe('WORK-049 invariants — Project Health and Maintenance UX (consumer, n
 
   it('WORK-049 adds NO backend route (the api routes directory is unchanged by the health UX — frontend-only scope)', () => {
     const routesDir = join(BACKEND_ROOT, 'src', 'api', 'routes');
-    // The exact route set as WORK-048 left it: 32 route files, no additions.
+    // The route set as WORK-048 left it (32) + WORK-074's auth.route.ts (the
+    // identity & access runtime routes — a distinct, architect-gated Work
+    // Order). WORK-049 itself added no backend route (frontend-only scope).
     // (health.route.ts is WORK-001/023's PLATFORM liveness/readiness probe —
     // it predates WORK-049 and is NOT a project-health read model.)
     const routeFiles = readdirSync(routesDir).filter((f) => f.endsWith('.route.ts')).sort();
     expect(routeFiles).toEqual([
       'agent-intelligence.route.ts', 'agent-policy.route.ts', 'agent-roles.route.ts', 'agent.route.ts',
-      'architect.route.ts', 'architecture.route.ts', 'audit.route.ts', 'benchmark.route.ts',
+      'architect.route.ts', 'architecture.route.ts', 'audit.route.ts', 'auth.route.ts', 'benchmark.route.ts',
       'companion.route.ts', 'delegation.route.ts', 'development-planner.route.ts',
       'execution-policy.route.ts', 'execution-routing.route.ts', 'execution.route.ts',
       'github-provisioning.route.ts', 'github-webhook.route.ts', 'health.route.ts',
@@ -18641,10 +18644,12 @@ describe('WORK-050 invariants — Unified Execution UX (consumer, never authorit
 
   it('the backend surface is exactly TWO new read-only GET endpoints in the EXISTING route files (no new route files, GET-only, project-authorized)', () => {
     const routesDir = join(BACKEND_ROOT, 'src', 'api', 'routes');
-    // The route FILE set is unchanged (32 files — WORK-050 adds endpoints to
-    // the existing execution + delegation route files, never new files).
+    // The route FILE set as WORK-050 left it (32) + WORK-074's auth.route.ts
+    // (the identity & access runtime routes — a distinct, architect-gated Work
+    // Order). WORK-050 itself added endpoints to the existing execution +
+    // delegation route files, never new files.
     const routeFiles = readdirSync(routesDir).filter((f) => f.endsWith('.route.ts')).sort();
-    expect(routeFiles.length).toBe(32);
+    expect(routeFiles.length).toBe(33);
     expect(routeFiles).toContain('execution.route.ts');
     expect(routeFiles).toContain('delegation.route.ts');
     expect(routeFiles).toContain('work-items.route.ts');
@@ -18808,8 +18813,11 @@ describe('WORK-064 invariants — Continuous Product Validation (the domain/mode
 
   it('no migration or table creates a validation evidence/journey/run store (NO schema migration is authorized by WORK-064)', () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
-    // The migration set is unchanged from the pre-WORK-064 baseline (58):
-    expect(migrationFiles).toHaveLength(58);
+    // The migration set is the pre-WORK-064 baseline (58) + WORK-074's
+    // identity-runtime migration 0059 (the runtime of WORK-063's spec — a
+    // distinct, architect-gated Work Order). WORK-064 itself authorized NO
+    // schema migration.
+    expect(migrationFiles).toHaveLength(59);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(
