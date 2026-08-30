@@ -4,7 +4,7 @@ Status: in flight (activated 2026-08-30 by the architect — the implementation
 instruction after the approved implementation plan merged to main as
 `4018f42`; the activation is recorded in
 `spec/development-state/program-state.json`, branch
-`feat/work-064-continuous-validation`). The implementation delivers the
+`feat/work-064-continuous-validation`, implementation PR #86). The implementation delivers the
 domain/model authority at `backend/src/continuous-validation/` (the
 application-layer pattern, NOT an 18th frozen module): the closed
 vocabularies (EffectPolicy × ValidationMode × ValidationTrigger × typed

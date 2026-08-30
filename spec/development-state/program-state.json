@@ -1490,6 +1490,7 @@
         "WORK-063"
       ],
       "branch": "feat/work-064-continuous-validation",
+      "pr": 86,
       "workOrder": "spec/work-orders/WORK-064.md",
       "origin": "architect",
       "surfaces": {
