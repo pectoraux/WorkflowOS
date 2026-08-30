@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
+import { existsSync } from 'node:fs';
 import { chromium, type Browser } from 'playwright';
 
 /**
@@ -101,9 +102,27 @@ let browser: Browser | null = null;
 let driver: PlaywrightBrowserDriver | null = null;
 let verification: FakeVerificationService | null = null;
 let agent: DefaultBrowserValidationAgent | null = null;
+
+// Determine SYNCHRONOUSLY at module load whether the chromium binary is
+// installed. `it.skipIf(skipped)` evaluates its condition eagerly at test
+// registration (before beforeAll runs), so a runtime-only flag set in
+// beforeAll would NOT skip the tests — they'd run with a null agent and
+// fail. The chromium executablePath() returns the expected binary location;
+// if it throws or the file does not exist, skip the suite (the backend CI
+// workflow does not run `playwright install`; the dedicated e2e workflows do).
 let skipped = false;
+let chromiumExecutablePath = '';
+try {
+  chromiumExecutablePath = chromium.executablePath();
+} catch {
+  skipped = true;
+}
+if (!skipped && !existsSync(chromiumExecutablePath)) {
+  skipped = true;
+}
 
 beforeAll(async () => {
+  if (skipped) return;
   // 1. Launch a tiny HTTP server on an ephemeral port.
   server = createServer((_req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -115,14 +134,14 @@ beforeAll(async () => {
     baseUrl = `http://127.0.0.1:${addr.port}`;
   }
 
-  // 2. Launch a real Chromium browser. If the binary is unavailable, skip the
-  //    suite (CI installs it; local dev may not). The agent's fail-closed
-  //    semantics are proven by the unit tests regardless.
+  // 2. Launch a real Chromium browser. If the binary is unavailable at runtime
+  //    (a race with the synchronous check above), skip the suite. The agent's
+  //    fail-closed semantics are proven by the unit tests regardless.
   try {
     browser = await chromium.launch({ headless: true });
   } catch (err) {
     skipped = true;
-    console.warn('[WORK-065 real-browser] chromium unavailable — skipping:', (err as Error).message);
+    console.warn('[WORK-065 real-browser] chromium launch failed — skipping:', (err as Error).message);
     return;
   }
   driver = new PlaywrightBrowserDriver({ browser });
