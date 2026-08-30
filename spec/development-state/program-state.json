@@ -3,7 +3,7 @@
   "schemaVersion": 1,
   "artifact": "workflowos-development-state/program-state",
   "protocol": "WORK-052 parallel implementation protocol (docs/adr/ADR-0003-parallel-protocol-surface-declaration.md)",
-  "asOf": "2026-08-30T07:45:00Z",
+  "asOf": "2026-08-30T08:05:00Z",
   "governing": {
     "architectureVersion": "v1.0",
     "architectureVersionState": "frozen",
@@ -1399,6 +1399,7 @@
         "WORK-046"
       ],
       "branch": "feat/work-062-durable-orchestration-substrate",
+      "pr": 82,
       "workOrder": "spec/work-orders/WORK-062.md",
       "origin": "architect",
       "surfaces": {
