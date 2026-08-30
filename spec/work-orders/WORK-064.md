@@ -1,13 +1,46 @@
 # WORK-064 — Continuous Product Validation
 
-Status: planned.
+Status: in flight (activated 2026-08-30 by the architect — the implementation
+instruction after the approved implementation plan merged to main as
+`4018f42`; the activation is recorded in
+`spec/development-state/program-state.json`, branch
+`feat/work-064-continuous-validation`). The implementation delivers the
+domain/model authority at `backend/src/continuous-validation/` (the
+application-layer pattern, NOT an 18th frozen module): the closed
+vocabularies (EffectPolicy × ValidationMode × ValidationTrigger × typed
+outcomes), fail-closed Environment × EffectPolicy admission (FORBIDDEN never
+admits in production; PRE_MERGE only behind the architect-approved safe
+mechanism), TestIdentity binding as an ADAPTER over the existing `/auth`
+`AuthenticatedPrincipal` (machine-credential providers only — the closed
+`apikey` set today, extended by WORK-063's future runtime; human principals
+rejected; NO issuance path), ValidationRun admission composing
+identity + environment + policy + mode/trigger constraints (POST_RELEASE
+requires an explicit caller-supplied releaseRef — no release authority
+exists in the repository yet; CONTINUOUS requires explicit configuration —
+no autonomous scheduling), typed observations/outcomes with the full
+run → journey → step → environment provenance chain (a missing observation
+is an EXPLICIT validation_failure, never healthy — mutation-killing
+discriminations pinned), evidence mapping into the EXISTING `/verification`
+authority through its public `attachEvidence` boundary (claim authority,
+server-side classification — NO parallel evidence store), the
+ValidationRunRepository PORT with the documented IN-MEMORY adapter (NO
+schema migration is authorized — durable validation state is an explicit
+future ACR-gated decision; migrations stay at 58), and the
+DefaultContinuousValidationService composed in `buildApp` + exposed on
+AppDeps for FUTURE consumers (WORK-065 browser agent, WORK-066 scheduler —
+NOT implemented here). Verification on the branch: WORK-064 suite 119/119;
+static architecture 804/804 (13 WORK-064 boundary invariants);
+development-governance 66/66; architecture-governance 40/40; full backend
+regression 2617 passed / 0 failed; typecheck/lint clean (backend + frontend).
+Architectural rulings documented in
+`docs/superpowers/notes/2026-08-30-work-064-repository-mapping.md`.
 
 Issued by: the research-driven v1.1 evolution (the continuous product
 validation roadmap — the closed-loop software engineering control system
 extension to v1.1). This Work Order establishes the continuous product
-validation domain model — it does NOT implement runtime code. Activation
-requires the architect's authorization and is recorded in
-`spec/development-state/program-state.json` (this change records none).
+validation domain model. Activation requires the architect's authorization
+and is recorded in `spec/development-state/program-state.json` (the
+activation was recorded 2026-08-30 — see the status header above).
 
 Dependencies: WORK-048 (Developer Workbench — the user-facing surface whose
 journeys are validated), WORK-050 (Unified Execution UX — the unified
