@@ -67,6 +67,34 @@ pre-correction pin asserting the wrong every-expectation semantics was
 inverted); the full WORK-064/governance/static/regression verification was
 re-run on the correction head.
 
+PR #86 re-review correction (2026-08-30, the architect's REQUEST CHANGES on
+the corrected implementation — ONE remaining integrity gap in the same
+finalization boundary, NOTHING else changed: no new authority, no
+migration, no WORK-065+ scope):
+
+3. **Derived match integrity** — after corrections 1–2, the finalizer
+   verified the canonical expectation but still determined success from
+   the caller-supplied `result.matched`. The finalizer now derives the
+   match itself — `evaluateObservation(canonicalExpected, actual)`, the
+   authoritative deterministic evaluator — and the success-criteria
+   evaluation reads the DERIVED value, never the assertion. The supplied
+   `result.matched` is treated as an ASSERTED value that must equal the
+   derived value and otherwise is rejected (typed
+   `FINALIZE_MATCH_ASSERTION_MISMATCH`): an executor submitting
+   `expected = canonical, actual = incorrect, matched: true` can no longer
+   fabricate a healthy result (and `actual = correct, matched: false` can
+   no longer fabricate a failure). Honest executors are unaffected — every
+   legitimate result constructor already derives `matched` through
+   `evaluateObservation`.
+
+Discriminating regressions added in
+`backend/tests/continuous-validation/outcome-provenance.test.ts` (§8, the
+four required directions + two supporting: 4 of the 6 FAIL on the
+pre-correction head `71f9e18` — proven both ways); the full
+WORK-064/governance/static/regression verification was re-run on the
+correction head (WORK-064 suite 135/135; static architecture 804/804;
+governance suites 125/125; full backend regression 2633 passed / 0 failed).
+
 Issued by: the research-driven v1.1 evolution (the continuous product
 validation roadmap — the closed-loop software engineering control system
 extension to v1.1). This Work Order establishes the continuous product
