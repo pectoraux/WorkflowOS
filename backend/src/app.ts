@@ -1,4 +1,5 @@
 import type { Logger, Queue, WorkerHostOptions, EchoJobOptions, Infrastructure, ObjectStore, DatabaseClient, SecretStore } from '@platform/index.js';
+import { mkdirSync } from 'node:fs';
 import {
   InMemoryQueue,
   RedisQueue,
@@ -147,6 +148,7 @@ import type { AuditService } from '@modules/audit/index.js';
 import { DefaultNotificationService, createNotificationJobHandler } from './modules/notifications/internal/notification-service.js';
 import type { NotificationService } from '@modules/notifications/index.js';
 import type { AppConfig } from './config.js';
+import { DEFAULT_DEV_DATABASE_DIR } from './config.js';
 import { DefaultWorkflowEngine } from './modules/workflows/internal/workflow-engine.js';
 import type { WorkflowEngine } from '@modules/workflows/index.js';
 import { DefaultWorkflowOrchestrator, createConvergenceJobHandler } from './modules/workflows/internal/workflow-orchestrator.js';
@@ -714,7 +716,11 @@ export async function buildApp(
       await runMigrations(database, logger);
     }
   } else if (config.devRuntime === 'pglite') {
-    const devDatabaseDir = config.devDatabaseDir ?? '.workflowos-dev-data/pglite';
+    const devDatabaseDir = config.devDatabaseDir ?? DEFAULT_DEV_DATABASE_DIR;
+    // WORK-071: PGlite does not create parent directories — ensure the dev
+    // data directory exists so the DEFAULT location (a nested path under the
+    // backend root) works on a clean checkout.
+    mkdirSync(devDatabaseDir, { recursive: true });
     database = await createPgliteDatabaseClient(devDatabaseDir);
     ownsDatabase = true;
     logger.warn('app.database.dev_runtime', {

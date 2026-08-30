@@ -225,6 +225,27 @@ describe('WORK-071 — Local Development Runtime Substrate', () => {
     it('the dev database directory exists on the local filesystem (PGlite persisted, not in-memory)', () => {
       expect(existsSync(devDataDir)).toBe(true);
     });
+
+    it('the DEFAULT dev data directory (a nested path) works on a clean checkout (parent dirs created)', async () => {
+      // Regression: PGlite does not create parent directories — the default
+      // `.workflowos-dev-data/pglite` nested path must be created by the
+      // composition root, exactly as a clean local developer experiences it
+      // (no WORKFLOWOS_DEV_DATABASE_DIR set, cwd = the backend root).
+      const defaultDir = join(import.meta.dirname, '..', '..', '..', '.workflowos-dev-data', 'pglite');
+      rmSync(join(import.meta.dirname, '..', '..', '..', '.workflowos-dev-data'), { recursive: true, force: true });
+      const app = await buildApp(
+        devRuntimeConfig({ devRuntime: 'pglite' }),
+        { startWorker: false },
+      );
+      try {
+        expect(existsSync(defaultDir)).toBe(true);
+        const org = await app.deps.organizationRepository!.create({ name: 'Default Dir Org' });
+        expect(org.id).toBeTruthy();
+      } finally {
+        await app.stop();
+        rmSync(join(import.meta.dirname, '..', '..', '..', '.workflowos-dev-data'), { recursive: true, force: true });
+      }
+    });
   });
 
   // =========================================================================
