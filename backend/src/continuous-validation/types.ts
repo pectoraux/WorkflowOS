@@ -439,6 +439,28 @@ export interface ValidationRun {
   readonly completedAt: string | null;
 }
 
+/**
+ * The persistence port for validation runs.
+ *
+ * ARCHITECTURAL RULING (the repository mapping note §3 + the design doc §8):
+ * repository inspection proved NO existing table represents validation state,
+ * and NO schema migration is authorized by WORK-064's current scope. The
+ * domain therefore stays at the existing persistence boundary: this PORT with
+ * an IN-MEMORY implementation. Durable validation state requires an ACR or
+ * an architect-authorized scope extension. The port is the future binding
+ * point for that decision — NOT a parallel evidence/identity store.
+ */
+export interface ValidationRunRepository {
+  /**
+   * Store a run. Idempotent for identical records (same-key convergence);
+   * a same-id/different-content create is a typed conflict. Rejects
+   * secret-shaped fields at the boundary (defense in depth).
+   */
+  create(run: ValidationRun): Promise<ValidationRun>;
+  /** Read a run by id. Returns null when absent — never a fabricated run. */
+  getById(id: string): Promise<ValidationRun | null>;
+}
+
 // ============================================================================
 // §9  The typed domain error
 // ============================================================================
@@ -457,6 +479,9 @@ export const CONTINUOUS_VALIDATION_ERROR_CODES = [
   'FINALIZE_RUN_ALREADY_COMPLETED',
   'FINALIZE_JOURNEY_MISMATCH',
   'FINALIZE_EXECUTION_ERROR_INVALID',
+  // Persistence port (Task 8)
+  'VALIDATION_RUN_CONFLICT',
+  'VALIDATION_RUN_SECRET_REJECTED',
 ] as const;
 export type ContinuousValidationErrorCode = (typeof CONTINUOUS_VALIDATION_ERROR_CODES)[number];
 

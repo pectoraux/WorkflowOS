@@ -81,6 +81,10 @@ export type {
   ValidationEvidenceReference,
   MapValidationOutcomeToVerificationInput,
 } from './internal/evidence-mapping.js';
+export {
+  // Task 8 — the persistence port (in-memory adapter; NO migration authorized)
+  InMemoryValidationRunRepository,
+} from './internal/in-memory-validation-run-repository.js';
 export type {
   EffectPolicy,
   ValidationMode,
@@ -110,5 +114,6 @@ export type {
   ValidationOutcome,
   ValidationRun,
   ValidationRunStatus,
+  ValidationRunRepository,
   ContinuousValidationErrorCode,
 } from './types.js';

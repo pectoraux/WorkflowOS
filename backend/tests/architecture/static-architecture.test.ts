@@ -18801,16 +18801,21 @@ describe('WORK-064 invariants — Continuous Product Validation (the domain/mode
     }
   });
 
-  it('the module declares no evidence/journey/run REPOSITORY (persistence stays behind the port; the in-memory adapter is the repository boundary)', () => {
+  it('the module declares NO durable repository (no Pg*/DB access) — the documented in-memory adapter is the ONLY repository implementation (Task 8 ruling)', () => {
+    const inMemoryRepo = join(CV_INTERNAL, 'in-memory-validation-run-repository.ts');
+    expect(existsSync(inMemoryRepo), 'the documented in-memory adapter must exist').toBe(true);
+    const inMemorySrc = stripCodeComments(readFileSync(inMemoryRepo, 'utf8'));
+    expect(inMemorySrc).toMatch(/class\s+InMemoryValidationRunRepository\s+implements\s+ValidationRunRepository/);
+    expect(inMemorySrc).toMatch(/Map<string, ValidationRun>/);
     for (const { path, src } of readCvFiles()) {
       const stripped = stripCodeComments(src);
       expect(
-        !/class\s+\w*(Evidence|Journey|Run|Observation)\w*Repository/i.test(stripped),
-        `${relative(BACKEND_ROOT, path)} must not declare a persistence repository class`,
+        !/class\s+Pg\w*/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not declare a PostgreSQL repository class`,
       ).toBe(true);
       expect(
-        !stripped.includes('DbQuery') && !stripped.includes('db.query'),
-        `${relative(BACKEND_ROOT, path)} must not query a database directly`,
+        !stripped.includes('DbQuery') && !stripped.includes('db.query') && !stripped.includes('DatabaseClient'),
+        `${relative(BACKEND_ROOT, path)} must not touch a database (durable validation state requires an ACR — Task 8 ruling)`,
       ).toBe(true);
     }
   });
