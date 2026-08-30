@@ -636,14 +636,44 @@ jobs:
           URL=$(cat /tmp/prod-url.txt)
           echo "Production deployed: $URL"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
-          # Resolve the Vercel deployment ID for the identity record — the
-          # deployment-evidence job FAILS on an empty ID, so resolve with a
-          # fallback: `vercel inspect` on the URL, else the project's most
-          # recent production deployment.
-          ID=$(vercel inspect "$URL" --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || true)
+          # Resolve the Vercel deployment ID for the identity record from the
+          # Vercel API: match the EXACT deployment URL this run created (no
+          # timing assumptions), falling back to the newest production
+          # deployment, then to `vercel inspect`. The deployment-evidence job
+          # FAILS on an empty ID, so resolution must be authoritative.
+          # (Live run 33282851275 found the CLI-only path insufficient:
+          # `vercel inspect` on the URL printed no dpl_ id, and
+          # `vercel ls <dir>` takes a PROJECT NAME, not a directory.)
+          URL_HOST=$(echo "$URL" | sed -E 's|^https?://||; s|/$||')
+          export URL_HOST VERCEL_TOKEN VERCEL_PROJECT_ID
+          ID=$(curl -sS --max-time 30 -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v6/deployments?projectId=${VERCEL_PROJECT_ID}&target=production&limit=20" \
+            | python3 -c "
+          import datetime, json, os, sys
+          try:
+              deployments = json.load(sys.stdin).get('deployments') or []
+          except Exception:
+              deployments = []
+          target = os.environ.get('URL_HOST', '').rstrip('/')
+          # Primary: the EXACT deployment URL this run created.
+          for d in deployments:
+              url = str(d.get('url') or '').rstrip('/')
+              if url and (url == target or 'https://' + url == target):
+                  print(d.get('uid') or '')
+                  sys.exit(0)
+          # Fallback: a production deployment created within the last 5
+          # minutes (this run's). NEVER an older one — a stale identity
+          # would be worse evidence than a failed resolution.
+          now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+          for d in deployments:
+              created = d.get('created') or 0
+              if now - float(created) <= 300:
+                  print(d.get('uid') or '')
+                  sys.exit(0)
+          ")
           if [ -z "$ID" ]; then
-            echo "inspect did not yield a dpl_ id — falling back to vercel ls"
-            ID=$(vercel ls ./frontend --prod --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || true)
+            echo "API match did not yield a dpl_ id — falling back to vercel inspect"
+            ID=$(vercel inspect "$URL" --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || true)
           fi
           if [ -z "$ID" ]; then
             echo "::error::Could not resolve the Vercel deployment ID for $URL — the deployment identity cannot be recorded."
