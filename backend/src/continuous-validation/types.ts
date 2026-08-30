@@ -206,8 +206,12 @@ export type ObservationMatcher =
   | { readonly kind: 'status_code'; readonly status: number };
 
 /**
- * What a run expects to observe at a step. An observation that does not match
- * its expectation is a validation failure — never a silent pass.
+ * What a run expects to observe at a step. An expectation that is not
+ * matched is never a silent pass: when a run fails, every unmet expectation
+ * is recorded with full provenance, and whether an unmet expectation fails
+ * the RUN is decided by the journey's declared success criteria
+ * (`SuccessCriterion.requiresObservationIds` — the set that determines
+ * health; expectations outside it are observational).
  */
 export interface ExpectedObservation {
   readonly id: string;
@@ -227,7 +231,10 @@ export interface ValidationStep {
 
 /**
  * A condition the run must satisfy to be recorded healthy. Satisfied iff
- * EVERY referenced expected observation matched.
+ * EVERY referenced expected observation matched. The union of all criteria's
+ * `requiresObservationIds` is the set that determines run health — an
+ * expectation not referenced by any criterion is observational and does not
+ * fail the run.
  */
 export interface SuccessCriterion {
   readonly id: string;
@@ -339,7 +346,10 @@ export interface RecordObservationInput {
 /**
  * The evaluated pairing of an expected observation with the actual captured
  * observation (null when missing). Produced by the evaluation boundary and
- * consumed by finalization.
+ * consumed by finalization. The `expected` MUST quote the journey's canonical
+ * declaration exactly (structural equality on id/stepId/kind/description/
+ * matcher): finalization verifies it against the journey — a variant with
+ * the same id but a different matcher can never produce a healthy result.
  */
 export interface ObservationResult {
   readonly expected: ExpectedObservation;
@@ -476,6 +486,7 @@ export const CONTINUOUS_VALIDATION_ERROR_CODES = [
   // Observation/outcome boundaries (Task 6)
   'OBSERVATION_PROVENANCE_INVALID',
   'FINALIZE_RESULTS_FOREIGN',
+  'FINALIZE_EXPECTATION_CANONICAL_MISMATCH',
   'FINALIZE_RUN_ALREADY_COMPLETED',
   'FINALIZE_JOURNEY_MISMATCH',
   'FINALIZE_EXECUTION_ERROR_INVALID',

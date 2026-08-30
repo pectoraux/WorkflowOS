@@ -9,6 +9,14 @@ import { describe, it, expect } from 'vitest';
  * THE INVARIANT: a validation failure is never silently discarded, never
  * converted into a false healthy state, and never directly converted into an
  * ungoverned code change. A missing observation is an EXPLICIT failure.
+ *
+ * PR #86 REVIEW CORRECTIONS (the architect's audit, 2026-08-30) — §6 + §7
+ * below carry the discriminating regressions:
+ *   1. canonical expectation integrity — a result must quote the journey's
+ *      canonical expectation EXACTLY (id/stepId/kind/description/matcher);
+ *   2. success-criteria semantics — SuccessCriterion.requiresObservationIds
+ *      is the declared set that determines health; an observational
+ *      expectation not required by any criterion does not fail the run.
  */
 import {
   defineValidationJourney,
@@ -458,7 +466,11 @@ describe('WORK-064 no-false-healthy — the mutation-killing discriminations', (
    * weakens it (e.g. finalizing healthy on "no results" or skipping missing
    * observations), these tests fail — the regression suite is the proof.
    */
-  it('healthy is ONLY reachable when EVERY journey expectation has a matched result', () => {
+  it('healthy is ONLY reachable when every CRITERION-REQUIRED observation has a matched result', () => {
+    // In this fixture BOTH expectations are required by declared criteria
+    // (criterion-heading requires obs-heading; criterion-session requires
+    // obs-session-status) — so the no-false-healthy core is exercised at
+    // full strength: all four failure shapes must NOT be healthy.
     const matchedHeading = matchedResult(
       headingExpected,
       observation('o-1', headingExpected, 'Sign in to WorkflowOS'),
@@ -493,77 +505,358 @@ describe('WORK-064 no-false-healthy — the mutation-killing discriminations', (
     expect(completed.outcome?.kind).toBe('healthy');
   });
 
-  it('a run whose criteria are ALL satisfied but with an extra unmatched expectation is NOT healthy', () => {
-    // Craft a results set where criterion observations match but the journey
-    // declares an expectation with no result (the criterion references a
-    // subset). Missing expectation → failure.
-    const threeObsJourney = defineValidationJourney({
-      id: 'journey-three-obs',
-      name: 'three observations, two criteria',
-      identityRequirement: 'unauthenticated',
-      allowedModes: ['PRE_MERGE'],
-      effectPolicy: 'READ_ONLY',
-      steps: [
-        {
-          id: 'step-1',
-          name: 'step one',
-          expectedObservations: [
-            { id: 'obs-a', stepId: 'step-1', kind: 'dom', description: 'a', matcher: { kind: 'exists' } },
-            { id: 'obs-b', stepId: 'step-1', kind: 'dom', description: 'b', matcher: { kind: 'exists' } },
-          ],
-        },
-        {
-          id: 'step-2',
-          name: 'step two',
-          expectedObservations: [
-            { id: 'obs-c', stepId: 'step-2', kind: 'dom', description: 'c', matcher: { kind: 'exists' } },
-          ],
-        },
+  it('a REQUIRED observation with no matched result keeps the run a validation_failure (the criteria are the health contract)', () => {
+    // The opposite-direction mutation kill for the PR #86 correction: health
+    // may NEVER become "criteria ignored" — a required observation that is
+    // missing or unmatched fails the run exactly as before.
+    const shapes: readonly (readonly ObservationResult[])[] = [
+      [], // nothing observed — every criterion unsatisfied
+      [matchedResult(headingExpected, observation('o-1', headingExpected, 'Sign in to WorkflowOS'))], // one required observation missing
+      [
+        matchedResult(headingExpected, observation('o-1', headingExpected, 'Sign in to WorkflowOS')),
+        matchedResult(sessionExpected, observation('o-2', sessionExpected, 500)), // required observation mismatched
       ],
-      successCriteria: [
-        { id: 'crit-1', description: 'a and b', requiresObservationIds: ['obs-a', 'obs-b'] },
+      [
+        matchedResult(headingExpected, observation('o-1', headingExpected, 'Sign in to WorkflowOS')),
+        matchedResult(sessionExpected, null), // required observation explicitly missing
+      ],
+    ];
+    for (const results of shapes) {
+      const completed = finalizeValidationRun({ run: admittedRun, journey, results });
+      expect(completed.outcome?.kind).not.toBe('healthy');
+      expect(completed.outcome?.kind).toBe('validation_failure');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6 PR #86 review correction 1 — canonical expectation integrity
+//    (finalizeValidationRun must resolve/compare against the CANONICAL journey
+//    expectation; the id alone proves nothing)
+// ---------------------------------------------------------------------------
+
+describe('WORK-064 canonical expectation integrity — a result quotes its journey expectation EXACTLY (PR #86 review correction 1)', () => {
+  /** Catch a finalize call and return the typed error's code (null when none thrown). */
+  function finalizeCode(results: readonly ObservationResult[]): string | null {
+    try {
+      finalizeValidationRun({ run: admittedRun, journey, results });
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationDomainError);
+      return (error as ValidationDomainError).code;
+    }
+  }
+
+  /**
+   * The architect's exact attack shape: a future executor retains the
+   * expectation ID but alters the matcher, claims `matched: true`, and
+   * fabricates a healthy result. On the pre-correction code this finalized
+   * HEALTHY — the discriminator for the fix.
+   */
+  it('a result with the RIGHT id but an ALTERED MATCHER and matched:true is REJECTED — no executor-supplied matcher can produce health', () => {
+    const tampered: ExpectedObservation = {
+      ...headingExpected,
+      // NOT the canonical { kind: 'equals', value: 'Sign in to WorkflowOS' }:
+      matcher: { kind: 'equals', value: 'Welcome back' },
+    };
+    const tamperedResult: ObservationResult = {
+      expected: tampered,
+      actual: observation('o-1', headingExpected, 'Welcome back'),
+      matched: true, // the false claim the pre-correction code trusted
+      provenance: {
+        runId: admittedRun.id,
+        journeyId: journey.id,
+        stepId: 'step-open-sign-in',
+        environmentId: previewEnv.id,
+        observedAt,
+      },
+    };
+    expect(
+      finalizeCode([
+        tamperedResult,
+        matchedResult(sessionExpected, observation('o-2', sessionExpected, 401)),
+      ]),
+    ).toBe('FINALIZE_EXPECTATION_CANONICAL_MISMATCH');
+  });
+
+  it('a weakened matcher (exists instead of the canonical equals) is rejected even with a non-matching actual', () => {
+    const weakened: ExpectedObservation = {
+      ...headingExpected,
+      matcher: { kind: 'exists' }, // strictly weaker than the canonical equals matcher
+    };
+    const weakenedResult: ObservationResult = {
+      expected: weakened,
+      actual: observation('o-1', headingExpected, 'Completely wrong heading'),
+      matched: true, // true under the WEAKENED matcher — the fabricated match
+      provenance: {
+        runId: admittedRun.id,
+        journeyId: journey.id,
+        stepId: 'step-open-sign-in',
+        environmentId: previewEnv.id,
+        observedAt,
+      },
+    };
+    expect(finalizeCode([weakenedResult])).toBe('FINALIZE_EXPECTATION_CANONICAL_MISMATCH');
+  });
+
+  it('an altered stepId, kind, or description is rejected — the WHOLE canonical shape is verified', () => {
+    const base = matchedResult(
+      headingExpected,
+      observation('o-1', headingExpected, 'Sign in to WorkflowOS'),
+    );
+    const variants: ExpectedObservation[] = [
+      { ...headingExpected, stepId: 'step-load-session' }, // wrong step
+      { ...headingExpected, kind: 'network' }, // wrong kind
+      { ...headingExpected, description: 'a different description' }, // wrong description
+      { ...headingExpected, matcher: { kind: 'contains_text', text: 'Sign in' } }, // different matcher kind
+    ];
+    for (const variant of variants) {
+      const result: ObservationResult = { ...base, expected: variant };
+      expect(finalizeCode([result])).toBe('FINALIZE_EXPECTATION_CANONICAL_MISMATCH');
+    }
+  });
+
+  it('a structurally EQUAL clone of the canonical expectation is accepted — the check is canonical SHAPE, not reference identity', () => {
+    // A future executor may legitimately deep-copy the journey's expectation
+    // (e.g. after persisting/reloading the declaration): structural equality
+    // with the canonical declaration is the contract, not object identity.
+    const clone: ExpectedObservation = {
+      ...headingExpected,
+      matcher: { ...headingExpected.matcher } as typeof headingExpected.matcher,
+    };
+    const clonedResult: ObservationResult = {
+      expected: clone,
+      actual: observation('o-1', headingExpected, 'Sign in to WorkflowOS'),
+      matched: true,
+      provenance: {
+        runId: admittedRun.id,
+        journeyId: journey.id,
+        stepId: 'step-open-sign-in',
+        environmentId: previewEnv.id,
+        observedAt,
+      },
+    };
+    const completed = finalizeValidationRun({
+      run: admittedRun,
+      journey,
+      results: [
+        clonedResult,
+        matchedResult(sessionExpected, observation('o-2', sessionExpected, 401)),
       ],
     });
-    const run = admitValidationRun({
-      journey: threeObsJourney,
-      identitySource: unauthenticated,
-      environment: previewEnv,
-      mode: 'PRE_MERGE',
-      trigger: 'PR',
-      runId: 'run-three-obs',
-    }).run as ValidationRun;
-    const expectedA = threeObsJourney.steps[0]?.expectedObservations[0] as ExpectedObservation;
-    const expectedB = threeObsJourney.steps[0]?.expectedObservations[1] as ExpectedObservation;
-    const resultFor = (expected: ExpectedObservation): ObservationResult => ({
+    expect(completed.outcome?.kind).toBe('healthy');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §7 PR #86 review correction 2 — success-criteria health semantics
+//    (SuccessCriterion.requiresObservationIds is the declared set that
+//    determines health; non-required expectations are OBSERVATIONAL)
+// ---------------------------------------------------------------------------
+
+describe('WORK-064 success-criteria semantics — requiresObservationIds determines health (PR #86 review correction 2)', () => {
+  /**
+   * A three-observation journey: obs-a and obs-b are REQUIRED by the declared
+   * criterion; obs-c is OBSERVATIONAL (declared, captured, but not required
+   * by any success criterion). Its matcher is `equals` so it can genuinely
+   * be unmatched while having a captured actual.
+   */
+  const threeObsJourney = defineValidationJourney({
+    id: 'journey-three-obs',
+    name: 'three observations, one criterion',
+    identityRequirement: 'unauthenticated',
+    allowedModes: ['PRE_MERGE'],
+    effectPolicy: 'READ_ONLY',
+    steps: [
+      {
+        id: 'step-1',
+        name: 'step one',
+        expectedObservations: [
+          { id: 'obs-a', stepId: 'step-1', kind: 'dom', description: 'a', matcher: { kind: 'exists' } },
+          { id: 'obs-b', stepId: 'step-1', kind: 'dom', description: 'b', matcher: { kind: 'exists' } },
+        ],
+      },
+      {
+        id: 'step-2',
+        name: 'step two',
+        expectedObservations: [
+          {
+            id: 'obs-c',
+            stepId: 'step-2',
+            kind: 'dom',
+            description: 'the observational marketing banner text',
+            matcher: { kind: 'equals', value: 'Ship with confidence' },
+          },
+        ],
+      },
+    ],
+    successCriteria: [
+      { id: 'crit-1', description: 'a and b render', requiresObservationIds: ['obs-a', 'obs-b'] },
+    ],
+  });
+
+  const threeObsRun = admitValidationRun({
+    journey: threeObsJourney,
+    identitySource: unauthenticated,
+    environment: previewEnv,
+    mode: 'PRE_MERGE',
+    trigger: 'PR',
+    runId: 'run-three-obs',
+  }).run as ValidationRun;
+
+  const expectedA = threeObsJourney.steps[0]?.expectedObservations[0] as ExpectedObservation;
+  const expectedB = threeObsJourney.steps[0]?.expectedObservations[1] as ExpectedObservation;
+  const expectedC = threeObsJourney.steps[1]?.expectedObservations[0] as ExpectedObservation;
+
+  function threeObsResult(
+    expected: ExpectedObservation,
+    value: unknown,
+    matched: boolean,
+  ): ObservationResult {
+    return {
       expected,
       actual: recordObservation({
         id: `o-${expected.id}`,
         kind: expected.kind,
-        value: null,
+        value,
         provenance: {
-          runId: run.id,
+          runId: threeObsRun.id,
           journeyId: threeObsJourney.id,
           stepId: expected.stepId,
           environmentId: previewEnv.id,
           observedAt,
         },
       }),
-      matched: true,
+      matched,
       provenance: {
-        runId: run.id,
+        runId: threeObsRun.id,
         journeyId: threeObsJourney.id,
         stepId: expected.stepId,
         environmentId: previewEnv.id,
         observedAt,
       },
-    });
-    // obs-c has NO result: both criteria are satisfiable from obs-a/obs-b,
-    // but the journey's full expectation set is unmet → NOT healthy.
+    };
+  }
+
+  it('criteria fully satisfied + a MISSING observational expectation → HEALTHY (an observational expectation does not fail the run)', () => {
+    // obs-c has NO result at all: the declared criterion is fully satisfied
+    // from obs-a/obs-b, and obs-c is required by no criterion — the run is
+    // healthy. (This inverts the pre-correction pin: the old code failed
+    // this run on the unmet raw expectation count.)
     const completed = finalizeValidationRun({
-      run,
+      run: threeObsRun,
       journey: threeObsJourney,
-      results: [resultFor(expectedA), resultFor(expectedB)],
+      results: [
+        threeObsResult(expectedA, null, true),
+        threeObsResult(expectedB, null, true),
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('healthy');
+    if (completed.outcome?.kind === 'healthy') {
+      expect(completed.outcome.satisfiedCriteria).toEqual(['crit-1']);
+    }
+    // The captured actuals are preserved:
+    expect(completed.observations).toHaveLength(2);
+  });
+
+  it('criteria fully satisfied + an UNMATCHED observational observation → HEALTHY, the captured actual preserved with full provenance', () => {
+    // obs-c IS captured but does not match its expectation: still healthy
+    // (obs-c is observational), and the actual observation is preserved —
+    // nothing is silently dropped.
+    const completed = finalizeValidationRun({
+      run: threeObsRun,
+      journey: threeObsJourney,
+      results: [
+        threeObsResult(expectedA, null, true),
+        threeObsResult(expectedB, null, true),
+        threeObsResult(expectedC, 'A completely different banner', false),
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('healthy');
+    expect(completed.observations).toHaveLength(3);
+    const banner = completed.observations.find((o) => o.id === 'o-obs-c');
+    expect(banner?.value).toBe('A completely different banner');
+    expect(banner?.provenance).toMatchObject({
+      runId: 'run-three-obs',
+      journeyId: 'journey-three-obs',
+      stepId: 'step-2',
+      environmentId: 'env-preview',
+    });
+  });
+
+  it('an unmet REQUIRED observation → validation_failure with the failure record (the criteria remain the health contract)', () => {
+    // obs-b (REQUIRED by crit-1) has no result: the criterion is unsatisfied
+    // → the run fails, exactly as the no-false-healthy core demands.
+    const completed = finalizeValidationRun({
+      run: threeObsRun,
+      journey: threeObsJourney,
+      results: [threeObsResult(expectedA, null, true)],
     });
     expect(completed.outcome?.kind).toBe('validation_failure');
+    if (completed.outcome?.kind === 'validation_failure') {
+      const requiredFailure = completed.outcome.failures.find((f) => f.expected.id === 'obs-b');
+      expect(requiredFailure).toBeDefined();
+      expect(requiredFailure?.actual).toBeNull(); // the explicit missing record
+      expect(requiredFailure?.provenance.stepId).toBe('step-1');
+    }
+  });
+
+  it('a failing run records EVERY unmet expectation — required AND observational — with full provenance', () => {
+    // Same failing shape as above, with obs-c ALSO unmatched: the failures
+    // array carries both (the required failure AND the observational miss) —
+    // an unmet observational expectation is never silently discarded when
+    // the run is already failing.
+    const completed = finalizeValidationRun({
+      run: threeObsRun,
+      journey: threeObsJourney,
+      results: [
+        threeObsResult(expectedA, null, true),
+        threeObsResult(expectedC, 'A completely different banner', false),
+        // obs-b (required) missing:
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('validation_failure');
+    if (completed.outcome?.kind === 'validation_failure') {
+      expect(completed.outcome.failures.map((f) => f.expected.id).sort()).toEqual([
+        'obs-b',
+        'obs-c',
+      ]);
+    }
+  });
+
+  it('a hand-crafted journey with NO success criteria is rejected at the finalize boundary — health is never vacuous', () => {
+    // defineValidationJourney forbids this shape at declaration; the finalize
+    // boundary re-asserts it (defense in depth): with criteria-driven health,
+    // an empty criteria set would otherwise make ANY run vacuously healthy.
+    const noCriteriaJourney: ValidationJourney = { ...threeObsJourney, successCriteria: [] };
+    let caught: unknown;
+    try {
+      finalizeValidationRun({ run: threeObsRun, journey: noCriteriaJourney, results: [] });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ValidationDomainError);
+    expect((caught as ValidationDomainError).code).toBe('VALIDATION_JOURNEY_INVALID');
+  });
+
+  it('a hand-crafted criterion referencing an UNKNOWN observation is rejected at the finalize boundary', () => {
+    const ghostCriterionJourney: ValidationJourney = {
+      ...threeObsJourney,
+      successCriteria: [
+        {
+          id: 'crit-ghost',
+          description: 'references an observation the journey does not declare',
+          requiresObservationIds: ['obs-ghost'],
+        },
+      ],
+    };
+    let caught: unknown;
+    try {
+      finalizeValidationRun({ run: threeObsRun, journey: ghostCriterionJourney, results: [] });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ValidationDomainError);
+    expect((caught as ValidationDomainError).code).toBe('VALIDATION_JOURNEY_INVALID');
   });
 });

@@ -10,13 +10,32 @@
  *
  *   executionError → effect_policy_violation | environment_error (typed,
  *                    provenance preserved — never healthy);
- *   otherwise      → every journey expectation must have a MATCHED result;
- *                    any missing or unmatched expectation is an explicit
- *                    validation_failure record (actual: null for missing);
- *   healthy        → ONLY when every expectation matched AND therefore every
- *                    declared success criterion is satisfied.
+ *   otherwise      → health is determined by the DECLARED SUCCESS CRITERIA
+ *                    (the model contract, PR #86 review correction 2): a
+ *                    criterion is satisfied iff EVERY observation it
+ *                    requires has a matched result, and the run is healthy
+ *                    iff EVERY declared criterion is satisfied. Any
+ *                    required observation missing or unmatched is an
+ *                    explicit validation_failure record (actual: null for
+ *                    missing). An expectation NOT required by any criterion
+ *                    is OBSERVATIONAL: an unmet observational expectation
+ *                    never fails the run and never flips health — when the
+ *                    run does fail, it is still recorded with full
+ *                    provenance (nothing is silently dropped), and when the
+ *                    run is healthy its captured actual is preserved in the
+ *                    run's observations;
+ *   canonical      → every result's `expected` must quote the journey's
+ *                    canonical declaration EXACTLY (deep structural
+ *                    equality on id/stepId/kind/description/matcher — PR
+ *                    #86 review correction 1): a future executor cannot
+ *                    retain an expectation's id while altering its matcher
+ *                    and claiming `matched: true` — health can never be
+ *                    derived from an executor-supplied expectation.
  *
- * There is NO code path from an absent/invalid observation to `healthy`.
+ * There is NO code path from an absent/invalid/unrequired-by-criteria
+ * observation to a false `healthy` state: the criteria are the declared
+ * health contract, and the expectations they require are verified against
+ * the canonical journey declaration.
  */
 import type {
   ExecutionError,
@@ -30,6 +49,7 @@ import type {
   ValidationRun,
 } from '../types.js';
 import { ValidationDomainError } from '../types.js';
+import { deepEquals } from './observation.js';
 
 /** The finalization input. */
 export interface FinalizeValidationRunInput {
@@ -37,7 +57,11 @@ export interface FinalizeValidationRunInput {
   readonly run: ValidationRun;
   /** The journey the run executes (must match run.journeyId). */
   readonly journey: ValidationJourney;
-  /** The evaluated observation results (must reference the journey's expectations). */
+  /**
+   * The evaluated observation results. Each result must reference the
+   * journey's expectations — quoting the canonical declaration EXACTLY
+   * (verified by structural equality; variants are rejected).
+   */
   readonly results: readonly ObservationResult[];
   /** An execution-level error reported by the executor, if any. */
   readonly executionError?: ExecutionError;
@@ -60,8 +84,11 @@ function journeyExpectations(journey: ValidationJourney): Map<string, ExpectedOb
  * Finalize a validation run: derive the typed outcome, preserve every
  * failure with full provenance, and return the immutable completed run.
  * Throws a typed {@link ValidationDomainError} on structural violations
- * (already-completed run, journey mismatch, foreign results, duplicated
- * results, provenance mismatch, invalid executionError).
+ * (already-completed run, journey mismatch, a journey whose success
+ * criteria are malformed at this boundary — health must never be vacuous,
+ * foreign results, duplicated results, a result whose expectation does not
+ * quote the canonical journey declaration, provenance mismatch, invalid
+ * executionError).
  */
 export function finalizeValidationRun(input: FinalizeValidationRunInput): ValidationRun {
   const { run, journey, results } = input;
@@ -79,9 +106,44 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
     );
   }
 
-  // Validate the results: every result must reference a journey expectation
-  // with provenance matching THIS run.
   const expectations = journeyExpectations(journey);
+
+  // The criteria-driven health determination (below) requires the declared
+  // success criteria to be well-formed AT THIS BOUNDARY too (defense in
+  // depth — defineValidationJourney enforces the same rules at declaration):
+  // a journey with NO criteria would make health vacuous, and a criterion
+  // referencing an unknown observation would be unsatisfiable without any
+  // failure record. Neither may reach the determination.
+  if (!Array.isArray(journey.successCriteria) || journey.successCriteria.length === 0) {
+    throw new ValidationDomainError(
+      'VALIDATION_JOURNEY_INVALID',
+      `journey ${journey.id} declares no success criteria — health is undecidable (a valid journey declares at least one)`,
+    );
+  }
+  for (const criterion of journey.successCriteria) {
+    if (
+      !criterion ||
+      !Array.isArray(criterion.requiresObservationIds) ||
+      criterion.requiresObservationIds.length === 0
+    ) {
+      throw new ValidationDomainError(
+        'VALIDATION_JOURNEY_INVALID',
+        `journey ${journey.id}: success criterion ${criterion?.id ?? '(unknown)'} must require at least one declared observation`,
+      );
+    }
+    for (const observationId of criterion.requiresObservationIds) {
+      if (!expectations.has(observationId)) {
+        throw new ValidationDomainError(
+          'VALIDATION_JOURNEY_INVALID',
+          `journey ${journey.id}: success criterion ${criterion.id} references unknown observation ${observationId}`,
+        );
+      }
+    }
+  }
+
+  // Validate the results: every result must reference a journey expectation
+  // (quoting its CANONICAL declaration exactly) with provenance matching
+  // THIS run.
   const seenExpectationIds = new Set<string>();
   for (const result of results) {
     const expected = result.expected as ExpectedObservation | undefined;
@@ -89,6 +151,20 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
       throw new ValidationDomainError(
         'FINALIZE_RESULTS_FOREIGN',
         `a result references an expectation that is not in journey ${journey.id} (${JSON.stringify(expected?.id ?? null)})`,
+      );
+    }
+    // PR #86 review correction 1 — canonical expectation integrity: the id
+    // alone proves nothing. The supplied expectation must be structurally
+    // EQUAL to the canonical journey declaration (id, stepId, kind,
+    // description, matcher): a variant with the same id but a different
+    // matcher (or any other altered field) is rejected — it could otherwise
+    // claim `matched: true` against a weakened expectation and fabricate a
+    // healthy result.
+    const canonical = expectations.get(expected.id) as ExpectedObservation;
+    if (!deepEquals(result.expected, canonical)) {
+      throw new ValidationDomainError(
+        'FINALIZE_EXPECTATION_CANONICAL_MISMATCH',
+        `the result for ${expected.id} does not quote the canonical expectation declared by journey ${journey.id} — an executor-supplied expectation variant can never produce health`,
       );
     }
     if (seenExpectationIds.has(expected.id)) {
@@ -158,9 +234,9 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
       .map((result) => result.actual)
       .filter((actual): actual is ValidationObservation => actual !== null);
   } else {
-    // The failure-recording path: every journey expectation must have a
-    // MATCHED result. Missing → explicit failure (actual: null). Unmatched →
-    // explicit failure with the actual observation.
+    // The failure-recording path: every journey expectation without a
+    // MATCHED result is recorded as an explicit failure (actual: null for
+    // missing) — nothing is silently dropped.
     const failures: ValidationFailure[] = [];
     const matchedById = new Map<string, ObservationResult>();
     for (const result of results) {
@@ -190,16 +266,36 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
       .map((result) => result.actual)
       .filter((actual): actual is ValidationObservation => actual !== null);
 
-    if (failures.length > 0) {
-      // A failure is NEVER silently discarded and NEVER healthy.
+    // PR #86 review correction 2 — success-criteria semantics: the declared
+    // criteria (NOT the raw expectation count) determine health. A criterion
+    // is satisfied iff EVERY observation it requires has a matched result;
+    // the run is healthy iff EVERY declared criterion is satisfied. An
+    // expectation not required by any criterion is OBSERVATIONAL: an unmet
+    // observational expectation never fails the run (its record only appears
+    // when the run is already failing — full provenance, no silent drop).
+    const requiredObservationIds = new Set<string>();
+    for (const criterion of journey.successCriteria) {
+      for (const observationId of criterion.requiresObservationIds) {
+        requiredObservationIds.add(observationId);
+      }
+    }
+    const requiredFailure = failures.some((failure) =>
+      requiredObservationIds.has(failure.expected.id),
+    );
+
+    if (requiredFailure) {
+      // A REQUIRED observation is missing or unmatched — the run is a
+      // validation_failure. A failure is NEVER silently discarded and NEVER
+      // healthy; every unmet expectation (required AND observational) is
+      // recorded with full provenance.
       outcome = Object.freeze({
         kind: 'validation_failure',
         provenance: runProvenance,
         failures: Object.freeze(failures),
       });
     } else {
-      // Every expectation matched → every declared criterion is satisfied
-      // (criteria reference journey expectations by construction).
+      // Every declared criterion is satisfied → healthy. satisfiedCriteria
+      // lists every declared criterion (healthy requires ALL of them).
       outcome = Object.freeze({
         kind: 'healthy',
         provenance: runProvenance,
