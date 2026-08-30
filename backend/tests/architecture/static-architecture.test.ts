@@ -19348,3 +19348,328 @@ describe('WORK-071 invariants — the local development runtime substrate', () =
     expect(src).toMatch(/local development/i);
   });
 });
+// WORK-065 — Synthetic Browser Validation Agent (the execution mechanism, not authority)
+// ============================================================================
+
+describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execution mechanism, not authority)', () => {
+  const BV_DIR = join(BACKEND_ROOT, 'src', 'browser-validation');
+  const BV_INTERNAL = join(BV_DIR, 'internal');
+  const BV_TYPES = join(BV_DIR, 'types.ts');
+  const BV_BARREL = join(BV_DIR, 'index.ts');
+  const BV_BROWSER_ACTION = join(BV_INTERNAL, 'browser-action.ts');
+  const BV_EFFECT_POLICY_ENFORCEMENT = join(BV_INTERNAL, 'effect-policy-enforcement.ts');
+  const BV_PLAN = join(BV_INTERNAL, 'plan.ts');
+  const BV_OBSERVATION_CAPTURE = join(BV_INTERNAL, 'observation-capture.ts');
+  const BV_AGENT = join(BV_INTERNAL, 'agent.ts');
+  const BV_PLAYWRIGHT_DRIVER = join(BV_INTERNAL, 'playwright-browser-driver.ts');
+  const APP_TS = join(BACKEND_ROOT, 'src', 'app.ts');
+  const MIGRATIONS_DIR = join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations');
+
+  function readBvFiles(): { path: string; src: string }[] {
+    if (!existsSync(BV_DIR)) return [];
+    const out: { path: string; src: string }[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const stat = statSync(full);
+        if (stat.isDirectory()) walk(full);
+        else if (entry.endsWith('.ts')) {
+          out.push({ path: full, src: readFileSync(full, 'utf8') });
+        }
+      }
+    };
+    walk(BV_DIR);
+    return out;
+  }
+
+  function stripCodeComments(src: string): string {
+    return src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  }
+
+  // --- (a) the domain exists + is NOT a frozen module -----------------------
+
+  it('the browser-validation domain exists at src/browser-validation/ (index.ts + types.ts + internal/) and is NOT an 18th frozen module', () => {
+    expect(existsSync(BV_DIR), 'src/browser-validation/ must exist').toBe(true);
+    expect(existsSync(BV_BARREL), 'src/browser-validation/index.ts must exist').toBe(true);
+    expect(existsSync(BV_TYPES), 'src/browser-validation/types.ts must exist').toBe(true);
+    expect(existsSync(BV_INTERNAL), 'src/browser-validation/internal/ must exist').toBe(true);
+    for (const file of [
+      BV_BROWSER_ACTION,
+      BV_EFFECT_POLICY_ENFORCEMENT,
+      BV_PLAN,
+      BV_OBSERVATION_CAPTURE,
+      BV_AGENT,
+      BV_PLAYWRIGHT_DRIVER,
+    ]) {
+      expect(existsSync(file), `${relative(BACKEND_ROOT, file)} must exist`).toBe(true);
+    }
+    expect(existsSync(join(MODULES_DIR, 'browser-validation'))).toBe(false);
+    expect(FROZEN_MODULE_NAMES, 'browser-validation must not be a frozen module').not.toContain(
+      '/browser-validation',
+    );
+    expect(FROZEN_MODULE_NAMES, 'the frozen module set is unchanged (17)').toHaveLength(17);
+  });
+
+  // --- (b) consumes ONLY the existing authorities through their barrels -----
+
+  it('the domain imports only allowed surfaces: relative continuous-validation, @platform/* (tools + logger), @modules/auth + @modules/verification barrels, playwright (driver adapter only), node:*', () => {
+    const files = readBvFiles();
+    expect(files.length).toBeGreaterThan(0);
+    for (const { path, src } of files) {
+      const stripped = stripCodeComments(src);
+      const importLines = stripped.match(/from\s+'[^']+'/g) ?? [];
+      for (const importLine of importLines) {
+        const target = importLine.replace(/^from\s+'/, '').replace(/'$/, '');
+        if (target.startsWith('.')) continue; // intra-domain relative imports
+        const isPlaywrightDriver = path === BV_PLAYWRIGHT_DRIVER;
+        expect(
+          target.startsWith('@platform/') ||
+            target.startsWith('@modules/auth/index.js') ||
+            target.startsWith('@modules/verification/index.js') ||
+            target.startsWith('node:') ||
+            // playwright is the ONE browser-automation library, allowed ONLY in
+            // the driver adapter (the explicit boundary):
+            (isPlaywrightDriver && target === 'playwright'),
+          `${relative(BACKEND_ROOT, path)} imports forbidden surface '${target}' (allowed: @platform/*, @modules/auth barrel, @modules/verification barrel, node:*, playwright [driver adapter only])`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // --- (c) NO second browser automation framework ---------------------------
+
+  it('NO second browser automation framework: playwright appears ONLY in the driver adapter; no puppeteer/CDP anywhere in the domain', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      if (path === BV_PLAYWRIGHT_DRIVER) {
+        // The driver adapter is the ONE place playwright may appear:
+        expect(stripped).toMatch(/from\s+'playwright'/);
+        continue;
+      }
+      expect(
+        !/puppeteer|chrome-devtools-protocol|cdp|chromium\b/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import a second browser framework`,
+      ).toBe(true);
+      expect(
+        !/from\s+'playwright'/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import playwright directly (only the driver adapter may)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (d) consumes the WORK-064 domain authority (never reimplements it) --
+
+  it('the domain CONSUMES the WORK-064 continuous-validation authority (never reimplements admission/finalization/evidence-mapping)', () => {
+    const agentSrc = stripCodeComments(readFileSync(BV_AGENT, 'utf8'));
+    expect(agentSrc).toMatch(/ContinuousValidationService/);
+    expect(agentSrc).toMatch(/admitRun/);
+    expect(agentSrc).toMatch(/completeRun/);
+    expect(agentSrc).toMatch(/mapOutcomeToVerification/);
+    // The domain does NOT reimplement the admission/finalization vocabulary:
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/class\s+\w*(Admission|Finaliz)\w*/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not reimplement the WORK-064 admission/finalization boundary`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (e) consumes the existing BrowserDriver port (WORK-036) -------------
+
+  it('the domain consumes the EXISTING BrowserDriver port (WORK-036) — no second browser abstraction', () => {
+    const agentSrc = stripCodeComments(readFileSync(BV_AGENT, 'utf8'));
+    expect(agentSrc).toMatch(/BrowserDriver/);
+    // The port is imported from the existing platform/tools boundary. The
+    // barrel (index.ts) re-exports it from ./types.js; types.ts re-exports it
+    // from @platform/tools/browser-tool-executor.js; internal files import it
+    // from @platform/tools/browser-tool-executor.js or ../types.js.
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      if (/BrowserDriver/.test(stripped)) {
+        expect(
+          /@platform\/tools\/browser-tool-executor\.js/.test(stripped) ||
+            /from\s+'\.\.\/types\.js'/.test(stripped) ||
+            /from\s+'\.\/types\.js'/.test(stripped),
+          `${relative(BACKEND_ROOT, path)} references BrowserDriver — it must import the existing @platform/tools/browser-tool-executor port (WORK-036), not declare a second one`,
+        ).toBe(true);
+      }
+    }
+    // types.ts re-exports BrowserDriver from the platform barrel (the single
+    // source of truth — no second port declaration):
+    const typesSrc = stripCodeComments(readFileSync(BV_TYPES, 'utf8'));
+    expect(typesSrc).toMatch(/export type \{[^}]*BrowserDriver[^}]*\} from '@platform\/tools\/browser-tool-executor\.js'/);
+  });
+
+  // --- (f) NO second identity authority (binds, never mints) ---------------
+
+  it('the domain owns NO identity issuance: it presents a TestIdentitySource to the WORK-064 admission boundary and mints nothing', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/\b(provisionApiKey|mintToken|issueCredential|createUser|upsertUser|registerUser|impersonate)\b/.test(
+          stripped,
+        ),
+        `${relative(BACKEND_ROOT, path)} must not carry an identity-issuance surface`,
+      ).toBe(true);
+      expect(
+        !/@modules\/auth\/internal/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import /auth internals (barrel only)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (g) NO second verification authority --------------------------------
+
+  it('the domain owns NO formal evidence evaluation: no criterion mapping, no evaluation, no /requirements touch, no parallel evidence store', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/evaluateCriterion|mapEvidenceToCriterion|persistEvaluations|CriterionEvidenceMapping/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry verification-authority operations`,
+      ).toBe(true);
+      expect(
+        !/@modules\/requirements/.test(stripped) && !/@modules\/work-items/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the requirements/work-items authorities`,
+      ).toBe(true);
+      expect(
+        !/@modules\/verification\/internal/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import /verification internals (barrel only)`,
+      ).toBe(true);
+      expect(
+        !/new\s+Pg\w*Evidence/i.test(stripped) && !/INSERT\s+INTO/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not construct a parallel evidence store`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (h) NO code mutation, no PR merge/approval, no workflow mutation -----
+
+  it('the domain mutates no code, merges/approves no PRs, and transitions no workflow state', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/simple-git|child_process|execSync|spawnSync|writeFileSync|appendFileSync|rmSync|mkdirSync/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not mutate the filesystem or spawn processes`,
+      ).toBe(true);
+      expect(
+        !/@modules\/github/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the /github authority (no PR operations)`,
+      ).toBe(true);
+      expect(
+        !/@modules\/workflows/.test(stripped) && !/@modules\/reviews/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the workflow/review authorities`,
+      ).toBe(true);
+      expect(
+        !/(mergePullRequest|approveReview|transitionWorkflow|createPullRequest)\s*\(/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry PR/workflow mutation operations`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (i) NO autonomous scheduling (WORK-066 owns triggers) ---------------
+
+  it('the domain schedules NOTHING: no timers, no queues, no cron, no autonomous loops', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/setInterval|setTimeout|cron|schedule\w*Job|enqueue\w*Job|WorkerHost/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not schedule autonomously (WORK-066 owns triggers)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (j) NO signal/Work-item creation, NO progressive release (WORK-067..070) --
+
+  it('the domain creates NO Engineering Signals, NO Work Items, and makes NO progressive-release decisions', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/(createEngineeringSignal|emitSignal|createWorkItem|proposeWorkItem)\s*\(/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not create signals or Work Items (WORK-067/068 own those flows)`,
+      ).toBe(true);
+      expect(
+        !/(canaryRollout|progressiveRelease|haltRollout|continueRollout|recoverRollout)/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry progressive-release decisions (WORK-069)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (k) NO durable persistence / migration (the run repo is in WORK-064) -
+
+  it('the domain declares NO durable repository (no Pg*/DB access) and NO migration is authorized by WORK-065', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/class\s+Pg\w*/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not declare a PostgreSQL repository class`,
+      ).toBe(true);
+      expect(
+        !stripped.includes('DbQuery') && !stripped.includes('db.query') && !stripped.includes('DatabaseClient'),
+        `${relative(BACKEND_ROOT, path)} must not touch a database (durable validation state is the WORK-064 in-memory boundary; an ACR is required for durability)`,
+      ).toBe(true);
+    }
+    // The migration set is unchanged (WORK-065 authorizes NO migration):
+    const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
+    expect(migrationFiles).toHaveLength(58);
+    for (const name of migrationFiles) {
+      const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
+      expect(
+        !/browser_validation|browser_agent|validation_browser/i.test(sql),
+        `migration ${name} must not create a WORK-065 browser-validation store`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (l) NO secrets in the browser-validation domain ---------------------
+
+  it('the domain persists no credentials/tokens/cookies (metadata only)', () => {
+    for (const { path, src } of readBvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/(apiKey|api_key|rawKey|password|cookie|bearerToken|secretRef)\s*:/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry credential fields`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (m) the effect-policy enforcement is pinned in source ----------------
+
+  it('the effect-policy enforcement gate is pinned: FORBIDDEN rejects every action; mutation under READ_ONLY is rejected; cross-tenant ISOLATED_MUTATION is rejected', () => {
+    const enforcementSrc = stripCodeComments(readFileSync(BV_EFFECT_POLICY_ENFORCEMENT, 'utf8'));
+    // FORBIDDEN rejects every action:
+    expect(enforcementSrc).toMatch(/policy === 'FORBIDDEN'/);
+    // Mutation under READ_ONLY is rejected:
+    expect(enforcementSrc).toMatch(/policy === 'READ_ONLY'/);
+    // Cross-tenant ISOLATED_MUTATION is rejected:
+    expect(enforcementSrc).toMatch(/policy === 'ISOLATED_MUTATION'/);
+    expect(enforcementSrc).toMatch(/identity\.tenantId/);
+    expect(enforcementSrc).toMatch(/environment\.isolatedTenantId/);
+    // The action classification is the closed set:
+    const actionSrc = stripCodeComments(readFileSync(BV_BROWSER_ACTION, 'utf8'));
+    expect(actionSrc).toMatch(/case 'navigate'/);
+    expect(actionSrc).toMatch(/case 'extract'/);
+    expect(actionSrc).toMatch(/case 'screenshot'/);
+    expect(actionSrc).toMatch(/case 'click'/);
+    expect(actionSrc).toMatch(/case 'type'/);
+    expect(actionSrc).toMatch(/return 'read'/);
+    expect(actionSrc).toMatch(/return 'mutation'/);
+  });
+
+  // --- (n) the app.ts wiring is pinned (composition root) -------------------
+
+  it('app.ts constructs DefaultBrowserValidationAgent from the WORK-064 service + the existing BrowserDriver port and exposes it on AppDeps', () => {
+    const appSrc = readFileSync(APP_TS, 'utf8');
+    expect(appSrc).toMatch(/from\s+'\.\/browser-validation\/index\.js'/);
+    expect(appSrc).toMatch(/DefaultBrowserValidationAgent/);
+    expect(appSrc).toMatch(/browserValidationAgent\?:\s*BrowserValidationAgent/);
+    expect(appSrc).toMatch(/new DefaultBrowserValidationAgent\(/);
+    // The agent consumes the WORK-064 service (composition over reimplementation):
+    expect(appSrc).toMatch(/continuousValidationService:\s*continuousValidationService!/);
+    // The BrowserDriver port is NOT constructed in app.ts with a concrete driver
+    // today (production fails closed; the driver adapter is the future binding
+    // point). The wiring must NOT launch a browser unguarded:
+    expect(appSrc).not.toMatch(/new PlaywrightBrowserDriver\(/);
+  });
+});
+

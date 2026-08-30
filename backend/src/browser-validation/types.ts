@@ -53,8 +53,8 @@ import type {
   ValidationMode,
   ValidationRun,
   ValidationTrigger,
-} from '../continuous-validation/types.js';
-import type { ValidationEvidenceReference } from '../continuous-validation/internal/evidence-mapping.js';
+  ValidationEvidenceReference,
+} from '../continuous-validation/index.js';
 
 // ============================================================================
 // §1  The browser action vocabulary (the execution contract)
@@ -289,9 +289,6 @@ export type {
 
 // Re-export the ContinuousValidationService contract so consumers depend on
 // ONE surface (the browser agent's barrel). The agent does NOT own this type
-// — it consumes it.
-export type { ContinuousValidationService } from '../continuous-validation/internal/continuous-validation-service.js';
-
-// Re-export the /verification evidence reference type (produced by the
-// WORK-064 evidence-mapping boundary the agent calls).
-export type { ValidationEvidenceReference } from '../continuous-validation/internal/evidence-mapping.js';
+// — it consumes it. (The browser-validation barrel re-exports both this and
+// ValidationEvidenceReference directly from the continuous-validation barrel.)
+export type { ContinuousValidationService } from '../continuous-validation/index.js';

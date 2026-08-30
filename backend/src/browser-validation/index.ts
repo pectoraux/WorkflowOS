@@ -96,6 +96,8 @@ export type {
   BrowserActionResult,
   BrowserExtractionResult,
   BrowserScreenshotResult,
-  ContinuousValidationService,
-  ValidationEvidenceReference,
 } from './types.js';
+// The agent CONSUMES these authority types (WORK-064 + the EXISTING
+// BrowserDriver port, WORK-036). Re-export from the source barrels so
+// consumers depend on ONE surface (the browser agent's barrel), not two.
+export type { ContinuousValidationService, ValidationEvidenceReference } from '../continuous-validation/index.js';

@@ -29,8 +29,8 @@ import type {
   ObservationResult,
   ValidationJourney,
   ValidationObservation,
-} from '../../continuous-validation/types.js';
-import { recordObservation, evaluateObservation } from '../../continuous-validation/internal/observation.js';
+} from '../../continuous-validation/index.js';
+import { recordObservation, evaluateObservation } from '../../continuous-validation/index.js';
 import type { BrowserAction } from '../types.js';
 import { describeAction } from './browser-action.js';
 
@@ -243,4 +243,4 @@ export function buildObservationResults(
 }
 
 /** Re-export the deterministic evaluator (consumed by tests). */
-export { evaluateObservation } from '../../continuous-validation/internal/observation.js';
+export { evaluateObservation } from '../../continuous-validation/index.js';

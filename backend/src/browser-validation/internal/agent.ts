@@ -38,8 +38,7 @@
  *   - partial execution             → completed with captured observations +
  *                                    failures for every unmet expectation.
  */
-import type { ContinuousValidationService } from '../../continuous-validation/internal/continuous-validation-service.js';
-import type { ValidationRun, ExecutionError } from '../../continuous-validation/types.js';
+import type { ContinuousValidationService, ValidationRun, ExecutionError } from '../../continuous-validation/index.js';
 import type { BrowserDriver } from '@platform/tools/browser-tool-executor.js';
 import type {
   BrowserValidationOutcome,

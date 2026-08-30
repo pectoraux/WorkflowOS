@@ -31,8 +31,7 @@
  * by the corresponding test, and the test FAILS when the enforcement is
  * removed (see tests/browser-validation/effect-policy-enforcement.test.ts).
  */
-import type { EffectPolicy, Environment, TestIdentityBinding } from '../../continuous-validation/types.js';
-import type { ExecutionError } from '../../continuous-validation/types.js';
+import type { EffectPolicy, Environment, TestIdentityBinding, ExecutionError } from '../../continuous-validation/index.js';
 import type { BrowserAction } from '../types.js';
 import { classifyActionEffect, describeAction } from './browser-action.js';
 
