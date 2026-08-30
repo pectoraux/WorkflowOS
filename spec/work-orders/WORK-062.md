@@ -1,12 +1,11 @@
 # WORK-062 — Durable Multi-Agent Orchestration Substrate
 
-Status: planned.
+Status: in flight (activated 2026-08-30 by the architect; implementation
+branch `feat/work-062-durable-orchestration-substrate` — the activation is
+recorded in `spec/development-state/program-state.json`).
 
 Issued by: the 2026-08-30 governance correction (the execution-substrate
-architecture decision). This Work Order establishes the next governed
-capability — it does NOT implement runtime code. Activation requires the
-architect's authorization and is recorded in
-`spec/development-state/program-state.json` (this change records none).
+architecture decision — merged as `9aadd50` via PR #80).
 
 Dependencies: WORK-046 (Multi-Agent Delegation — the delegation authority this
 substrate sits underneath). Downstream: WORK-061 (Self-Hosting Conformance and
