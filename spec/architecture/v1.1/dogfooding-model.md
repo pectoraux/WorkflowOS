@@ -78,8 +78,11 @@ products.
 ## 4. The dogfood execution policy (operational)
 
 The first official dogfood run begins only after the normal
-authentication path is functional (WORK-063, Identity and Access Layer —
-proposed in PR #81). The demo API key is NOT the permanent customer
+authentication path is functional (WORK-074, Identity & Access Runtime
+Activation — the runtime implementation of WORK-063's spec; WORK-063
+itself is the SPEC-ONLY architecture decision merged as `8dac9c4` via
+PR #81 — see §8 and §8.1 for the gate and the spec/runtime separation).
+The demo API key is NOT the permanent customer
 login mechanism and must not be encoded into the ValidationJourney
 contract as if it were.
 

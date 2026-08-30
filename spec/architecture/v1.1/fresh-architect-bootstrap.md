@@ -197,8 +197,8 @@ Read `spec/development-state/frontier-state.json` → `plannedNext` and
 As of this writing (the 2026-08-30 governance state + the v1.1 continuous
 product validation roadmap):
 
-- 54 Work Orders are `complete` (WORK-001..045, WORK-046..052, WORK-062,
-  and WORK-063) — all with merge evidence.
+- 55 Work Orders are `complete` (WORK-001..045, WORK-046..052, WORK-062,
+  WORK-063, and WORK-064) — all with merge evidence.
 - WORK-062 (Durable Multi-Agent Orchestration Substrate) is `complete`
   (activated 2026-08-30; merged by the architect as `f0855d2` via PR #82
   on 2026-08-30, squash-merged at the approved review-remediated head

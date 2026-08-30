@@ -93,9 +93,10 @@ required:
   accounts, no session lifecycle, no Workbench login changes, and no removal
   of the demo key from the runtime; the required proofs above remain the
   obligations of the future runtime implementation (architect-gated)."
-- `spec/development-state/frontier-state.json` records: "the runtime identity
-  layer remains UNIMPLEMENTED (architect-gated future work); dogfooding has
-  NOT started."
+- `spec/development-state/frontier-state.json` records: "The runtime identity
+  layer specified by WORK-063 remains UNIMPLEMENTED (the architect-gated
+  runtime activation is WORK-074, PLANNED); dogfooding was ATTEMPTED on
+  2026-08-30 and STOPPED at onboarding."
 - The dogfooding experiment (2026-08-30) confirmed empirically: the LoginPage
   exposes ONLY an API-key input; there is NO Google/GitHub/email login surface;
   the runtime identity layer is UNIMPLEMENTED (finding F-1).
