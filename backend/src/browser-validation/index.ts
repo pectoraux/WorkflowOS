@@ -1,0 +1,94 @@
+/**
+ * WORK-065 — Synthetic Browser Validation Agent (public barrel).
+ *
+ * The synthetic browser validation agent lives at `src/browser-validation/`
+ * (application-layer capability OUTSIDE src/modules/ — the §34 benchmark /
+ * execution-policy / orchestration / agent-roles / continuous-validation
+ * precedent; NOT the 18th frozen module) and CONSUMES the existing
+ * authorities:
+ *
+ *   - validation domain: `../continuous-validation/` (admission, finalization,
+ *     evidence mapping — the WORK-064 authority this agent executes under);
+ *   - browser driver: `@platform/tools/browser-tool-executor.js` (the neutral
+ *     BrowserDriver port established by WORK-036 — NO second browser framework);
+ *   - verification/evidence: `../continuous-validation/` → `/verification`
+ *     (validation evidence references the existing authority's Evidence rows
+ *     through the public attachEvidence boundary — no parallel evidence store);
+ *   - identity: `/auth` (the TestIdentity is presented, never minted — the
+ *     agent binds an already-authenticated AuthenticatedPrincipal via the
+ *     WORK-064 admission boundary);
+ *   - composition: `buildApp` constructs the agent and exposes it on AppDeps
+ *     for FUTURE consumers (WORK-066 scheduler — NOT implemented here).
+ *
+ * WORK-066 (scheduling), WORK-067 (signals), WORK-068 (feedback conversion),
+ * WORK-069 (progressive release), and WORK-070 (architecture fitness) are
+ * NOT implemented here. They are future CONSUMERS of these contracts. The
+ * customer-product dogfooding experiment is NOT run by this change.
+ */
+export {
+  // §1 the action vocabulary + effect classification
+  classifyActionEffect,
+  describeAction,
+} from './internal/browser-action.js';
+export {
+  // §3 the effect-policy enforcement gate
+  enforceEffectPolicy,
+} from './internal/effect-policy-enforcement.js';
+export type { EffectEnforcementDecision } from './internal/effect-policy-enforcement.js';
+export {
+  // §2 the plan constructor
+  defineBrowserJourneyPlan,
+} from './internal/plan.js';
+export type { BrowserJourneyPlanInput, BrowserPlanStepInput } from './internal/plan.js';
+export {
+  // §4 the observation capture
+  executeActionAndCapture,
+  buildObservationResults,
+  evaluateObservation,
+} from './internal/observation-capture.js';
+export type {
+  ActionResult,
+  CapturedObservation,
+  ObservationContext,
+} from './internal/observation-capture.js';
+export {
+  // §5 the default agent implementation
+  DefaultBrowserValidationAgent,
+} from './internal/agent.js';
+export type { DefaultBrowserValidationAgentDeps } from './internal/agent.js';
+
+export {
+  // §4 the typed domain error
+  BrowserValidationError,
+  BROWSER_VALIDATION_ERROR_CODES,
+} from './types.js';
+export type {
+  // §1 the action vocabulary
+  BrowserAction,
+  BrowserActionEffect,
+  // §2 the plan
+  BrowserPlanStep,
+  BrowserJourneyPlan,
+  // §3 the agent contract
+  BrowserValidationAgent,
+  ExecuteValidationRunInput,
+  BrowserValidationOutcome,
+  // §4 the error
+  BrowserValidationErrorCode,
+  // §6 re-exports of the consumed authority types
+  EffectPolicy,
+  Environment,
+  TestIdentitySource,
+  ValidationJourney,
+  ValidationMode,
+  ValidationRun,
+  ValidationTrigger,
+  BrowserDriver,
+  BrowserDriverCallOptions,
+  BrowserNavigationResult,
+  BrowserActionResult,
+  BrowserExtractionResult,
+  BrowserScreenshotResult,
+  ContinuousValidationService,
+  ValidationEvidenceReference,
+} from './types.js';
