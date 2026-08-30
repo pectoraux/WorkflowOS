@@ -60,7 +60,12 @@ import {
  *   - replanning without evidence loss;
  *   - simple / complex / very-complex shapes under ONE semantics;
  *   - tenant isolation (same logical keys in two projects cannot collide);
- *   - native/external semantic parity.
+ *   - native/external semantic parity;
+ *   - PERSISTENCE-LAYER IDENTITY/TENANT INTEGRITY (round-1 architect
+ *     remediation): raw-SQL negative regressions prove PostgreSQL ITSELF
+ *     (composite FKs + the graph tenant guard — migration 0058) rejects a
+ *     structurally impossible graph/plan/unit/project tuple, with NO
+ *     service layer in the path.
  */
 describe('WORK-062 — the durable orchestration substrate (semantics over the EXISTING authorities)', () => {
   let stack: TestAuthStack;
@@ -536,6 +541,179 @@ describe('WORK-062 — the durable orchestration substrate (semantics over the E
     await expect(
       substrateRepo.readDelegationPlan(wiA, 'default'),
     ).resolves.toMatchObject({ projectId: project.id });
+  });
+
+  // --- persistence-layer identity/tenant integrity (round-1 architect remediation) ----
+
+  it('RAW-SQL PERSISTENCE INTEGRITY — PostgreSQL ITSELF rejects structurally impossible graph/plan/unit/project tuples (composite FKs + the tenant guard; NO service layer in the path)', async () => {
+    // A SECOND tenant (project B) with its own work item + plan, and a
+    // second work item WITHIN tenant A (for the plan/work-item mismatch).
+    const orgB = await stack.organizationRepository.create({ name: 'Orchestration Org PIT' });
+    const userB = await stack.userRepository.upsertByExternalId({ externalId: 'orch-user-pit', displayName: 'UP' });
+    await stack.membershipRepository.assign({ userId: userB.id, organizationId: orgB.id, roleId: 'owner' });
+    const projectB = await stack.projectRepository.create({ organizationId: orgB.id, name: 'Orchestration Project PIT' });
+
+    const wiA = await createWorkItem('WI-PIT-A'); // tenant A (the default project)
+    const wiA2 = await createWorkItem('WI-PIT-A2'); // tenant A, DIFFERENT work item
+    const wiB = await createWorkItem('WI-PIT-B', projectB.id); // tenant B
+    const planA = await planService.createPlan(planInput(wiA));
+    const planB = await planService.createPlan(planInput(wiB));
+
+    // Materialize graph A through the substrate (the SERVICE path — proven
+    // elsewhere; a no-op executor drive, exactly like the dependency-violation
+    // test); the negatives below bypass the substrate entirely.
+    await substrate.driveGraph({ workItemId: wiA, planKey: 'default', ownerId: 'materialize' }, {
+      execute: async (node) => ({
+        nodeKey: node.nodeKey,
+        unitId: node.unitId,
+        outcome: null,
+        executionId: node.executionId,
+        attemptNo: node.attemptNo,
+        action: 'skipped' as const,
+      }),
+    });
+    const graphA = (await substrate.getGraph(wiA, 'default'))!;
+    const nodesA = await substrate.listNodes(wiA, 'default');
+    const unitOfA = nodesA.find((n) => n.nodeKey === 'a')!.unitId; // a unit of plan A
+    const unitOfB = planB.units[0]!.id; // a unit of plan B (tenant B; NO node yet)
+
+    // Every negative is a RAW INSERT/UPDATE that names REAL rows — only the
+    // RELATIONSHIP between them is impossible — and is constructed so that
+    // EXACTLY ONE composite is violated (the rejection is attributable).
+    // PostgreSQL must reject it with that constraint.
+    const expectPgReject = async (label: string, sql: string, params: unknown[], matcher: RegExp) => {
+      let err: unknown;
+      try {
+        await stack.db.client.query(sql, params);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, `${label}: PostgreSQL must reject this structurally impossible tuple`).toBeDefined();
+      expect(String((err as Error).message), label).toMatch(matcher);
+    };
+
+    // --- graph-level negatives (plan B has NO graph yet, so the UNIQUE
+    //     (plan_id) identity stays out of the way) ---------------------------
+
+    // (5) A GRAPH claiming ANOTHER WORK ITEM'S PLAN (plan B under work item
+    //     A2 — both in tenant A, so the tenant guard passes and ONLY the
+    //     (plan_id, work_item_id) composite is violated).
+    await expectPgReject(
+      'graph claims another work item plan',
+      `INSERT INTO wfos_orchestration_graphs
+           (project_id, work_item_id, plan_id, total_nodes)
+         VALUES ($1, $2, $3, 1)`,
+      [project.id, wiA2, planB.id],
+      /wfos_orchestration_graphs_plan_work_item_fk/,
+    );
+
+    // (6) A GRAPH claiming the WRONG TENANT (plan A + work item A — a valid
+    //     tuple — but project B): the tenant-guard trigger resolves the work
+    //     item's project through the AUTHORITATIVE chain (work item →
+    //     architecture version → architecture → project) and rejects the
+    //     mismatch BEFORE the row is stored.
+    await expectPgReject(
+      'graph claims the wrong tenant',
+      `INSERT INTO wfos_orchestration_graphs
+           (project_id, work_item_id, plan_id, total_nodes)
+         VALUES ($1, $2, $3, 1)`,
+      [projectB.id, wiA, planA.id],
+      /tenant mismatch/,
+    );
+
+    // (7) An UPDATE moving an existing graph to ANOTHER TENANT — the tenant
+    //     guard holds on UPDATE too.
+    await expectPgReject(
+      'update moves the graph across tenants',
+      `UPDATE wfos_orchestration_graphs SET project_id = $2 WHERE id = $1`,
+      [graphA.id, projectB.id],
+      /tenant mismatch/,
+    );
+
+    // --- POSITIVE CONTROL (graphs) — the fully CONSISTENT tuple (plan B +
+    //     work item B in tenant B) inserts cleanly through raw SQL: the
+    //     constraint set rejects the impossible, never the true. This graph
+    //     then serves as the consistent anchor for the node negatives below.
+    const graphB = await stack.db.client.query<{ id: string }>(
+      `INSERT INTO wfos_orchestration_graphs
+           (project_id, work_item_id, plan_id, total_nodes)
+         VALUES ($1, $2, $3, 3)
+         RETURNING id`,
+      [projectB.id, wiB, planB.id],
+    );
+
+    // --- node-level negatives (unit B has NO node yet, so the UNIQUE
+    //     (unit_id) identity stays out of the way) ---------------------------
+
+    // (1) A node of graph A referencing ANOTHER PLAN'S UNIT (unit B belongs
+    //     to plan B, not plan A) — the composite (unit_id, plan_id) FK.
+    await expectPgReject(
+      'cross-plan unit',
+      `INSERT INTO wfos_orchestration_nodes
+           (graph_id, project_id, plan_id, unit_id, node_key, depends_on)
+         VALUES ($1, $2, $3, $4, 'cross-plan-unit', '[]'::jsonb)`,
+      [graphA.id, project.id, planA.id, unitOfB],
+      /wfos_orchestration_nodes_unit_plan_fk/,
+    );
+
+    // (2) A node attached to graph A but claiming ANOTHER PLAN (plan B — the
+    //     unit/plan tuple itself is valid; the (graph_id, plan_id) composite
+    //     is what is impossible: graph A's plan is A, not B).
+    await expectPgReject(
+      'node claims another plan',
+      `INSERT INTO wfos_orchestration_nodes
+           (graph_id, project_id, plan_id, unit_id, node_key, depends_on)
+         VALUES ($1, $2, $3, $4, 'wrong-plan', '[]'::jsonb)`,
+      [graphA.id, project.id, planB.id, unitOfB],
+      /wfos_orchestration_nodes_graph_plan_fk/,
+    );
+
+    // (3) A CROSS-TENANT node: graph B + plan B + unit B — all mutually
+    //     consistent — but tenant A: the composite (graph_id, project_id) FK
+    //     (the node's tenant IS its graph's tenant).
+    await expectPgReject(
+      'cross-tenant node',
+      `INSERT INTO wfos_orchestration_nodes
+           (graph_id, project_id, plan_id, unit_id, node_key, depends_on)
+         VALUES ($1, $2, $3, $4, 'cross-tenant', '[]'::jsonb)`,
+      [graphB.rows[0]!.id, project.id, planB.id, unitOfB],
+      /wfos_orchestration_nodes_graph_project_fk/,
+    );
+
+    // (4) An UPDATE re-pointing an existing node (of plan A, in graph A) at
+    //     ANOTHER PLAN'S UNIT — the same tuple integrity holds on UPDATE,
+    //     not just INSERT.
+    await expectPgReject(
+      'update re-points the unit',
+      `UPDATE wfos_orchestration_nodes SET unit_id = $2 WHERE unit_id = $1`,
+      [unitOfA, unitOfB],
+      /wfos_orchestration_nodes_unit_plan_fk/,
+    );
+
+    // --- POSITIVE CONTROL (nodes) — the fully CONSISTENT tuple (graph B in
+    //     tenant B, unit of plan B) inserts cleanly through raw SQL.
+    const nodeB = await stack.db.client.query<{ count: number }>(
+      `WITH ins AS (
+         INSERT INTO wfos_orchestration_nodes
+              (graph_id, project_id, plan_id, unit_id, node_key, depends_on)
+            VALUES ($1, $2, $3, $4, 'raw-consistent', '[]'::jsonb)
+            RETURNING 1
+       ) SELECT COUNT(*)::int AS count FROM ins`,
+      [graphB.rows[0]!.id, projectB.id, planB.id, unitOfB],
+    );
+    expect(nodeB.rows[0]!.count).toBe(1);
+
+    // Cleanup the raw fixtures (plan B stays unmaterialized for later tests).
+    await stack.db.client.query(`DELETE FROM wfos_orchestration_graphs WHERE id = $1`, [
+      graphB.rows[0]!.id,
+    ]);
+    const leftover = await stack.db.client.query<{ graphs: number; nodes: number }>(
+      `SELECT (SELECT COUNT(*)::int FROM wfos_orchestration_graphs WHERE plan_id = $1) AS graphs,
+              (SELECT COUNT(*)::int FROM wfos_orchestration_nodes WHERE plan_id = $1) AS nodes`,
+      [planB.id],
+    );
+    expect(leftover.rows[0]!.graphs).toBe(0);
+    expect(leftover.rows[0]!.nodes).toBe(0);
   });
 
   // --- simple / complex / very-complex shapes under ONE semantics ------------------------

@@ -31,6 +31,32 @@
 -- are node keys WITHIN one graph (validated at graph creation), so a
 -- dependency graph can never cross a tenant boundary.
 --
+-- PERSISTENCE-LAYER IDENTITY/TENANT INTEGRITY (round-1 architect remediation
+-- on PR #82): the relationships below are enforced as TUPLES by PostgreSQL
+-- itself — composite foreign keys + the graph tenant-guard trigger — so the
+-- chain
+--
+--   orchestration graph → exact delegation plan → exact delegation unit
+--                     → the SAME Work Item / the SAME project
+--
+-- is STRUCTURALLY enforced and survives a buggy application caller. The
+-- plain single-column FKs (which only prove the referenced row EXISTS
+-- SOMEWHERE) stay; the composite constraints make the cross-references
+-- consistent:
+--
+--   graph (plan_id, work_item_id) → delegation_plans (id, work_item_id)
+--     the plan belongs to exactly that Work Item (WORK-046 P1),
+--   node (unit_id, plan_id)      → delegation_units (id, plan_id)
+--     the unit belongs to exactly that plan,
+--   node (graph_id, plan_id)     → orchestration_graphs (id, plan_id)
+--     the node's plan IS its graph's plan,
+--   node (graph_id, project_id)  → orchestration_graphs (id, project_id)
+--     the node's tenant IS its graph's tenant,
+--   graph.project_id             = the Work Item's project (through the
+--     authoritative work item → architecture version → architecture chain)
+--     — enforced by wfos_orchestration_graph_tenant_guard (a BEFORE
+--     trigger, the same defense-in-depth form as the dependency gate).
+--
 -- Concurrency invariants enforced HERE (survive a buggy application caller):
 --   - lease exclusivity: ownership acquisition is a single conditional
 --     UPDATE (owner free-or-expired) — at most one active owner per node,
@@ -45,6 +71,22 @@
 --     NOT EXISTS gate in the repository SQL) — a dependent node cannot even
 --     acquire a dispatch lease until its dependencies' durable outcomes
 --     admit it.
+
+-- ---------------------------------------------------------------------------
+-- Enabling composite keys on the EXISTING delegation tables (0057). These
+-- are ADDITIVE and NON-SEMANTIC — `id` is already the primary key, so the
+-- tuple (id, …) is unique by construction; the composite UNIQUE constraints
+-- exist purely so the orchestration tables below can reference the TUPLES
+-- (a plain FK can only prove existence, never consistency). No delegation
+-- semantics change: WORK-046 remains the delegation authority.
+-- ---------------------------------------------------------------------------
+ALTER TABLE wfos_delegation_plans
+  ADD CONSTRAINT wfos_delegation_plans_id_work_item_uidx
+  UNIQUE (id, work_item_id);
+
+ALTER TABLE wfos_delegation_units
+  ADD CONSTRAINT wfos_delegation_units_id_plan_uidx
+  UNIQUE (id, plan_id);
 
 CREATE TABLE wfos_orchestration_graphs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -78,7 +120,22 @@ CREATE TABLE wfos_orchestration_graphs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- The durable orchestration identity: one graph per delegation plan.
   CONSTRAINT wfos_orchestration_graphs_plan_uidx
-    UNIQUE (plan_id)
+    UNIQUE (plan_id),
+  -- Tuple keys for the composite FKs below (a composite FK can only
+  -- reference a unique key; these are unique by construction since id is
+  -- the primary key — they exist for referential integrity, not identity).
+  CONSTRAINT wfos_orchestration_graphs_id_plan_uidx
+    UNIQUE (id, plan_id),
+  CONSTRAINT wfos_orchestration_graphs_id_project_uidx
+    UNIQUE (id, project_id),
+  -- PERSISTENCE-LAYER INTEGRITY: the graph's plan IS the plan of the
+  -- graph's Work Item — PostgreSQL rejects a (plan_id, work_item_id)
+  -- combination that is not a real delegation plan row. A graph claiming
+  -- another Work Item's plan is structurally unrepresentable.
+  CONSTRAINT wfos_orchestration_graphs_plan_work_item_fk
+    FOREIGN KEY (plan_id, work_item_id)
+    REFERENCES wfos_delegation_plans (id, work_item_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX wfos_orchestration_graphs_project_idx ON wfos_orchestration_graphs (project_id);
@@ -91,6 +148,10 @@ CREATE TABLE wfos_orchestration_nodes (
   -- is project-scoped; a cross-tenant node read is structurally impossible
   -- through the substrate's scoped queries).
   project_id UUID NOT NULL REFERENCES wfos_projects(id),
+  -- The owning plan (denormalized from the graph FOR tuple integrity: it is
+  -- the composite-FK key that makes a node whose unit/plan/graph/project
+  -- combination is structurally impossible unrepresentable in PostgreSQL).
+  plan_id UUID NOT NULL,
   -- ONE node per EXISTING delegation unit (the stable delegation identity).
   unit_id UUID NOT NULL REFERENCES wfos_delegation_units(id) ON DELETE CASCADE,
   -- Mirrors the unit's key (the caller's stable logical key within the plan).
@@ -130,11 +191,71 @@ CREATE TABLE wfos_orchestration_nodes (
     UNIQUE (graph_id, node_key),
   -- ONE node per delegation unit (the unit identity is global).
   CONSTRAINT wfos_orchestration_nodes_unit_uidx
-    UNIQUE (unit_id)
+    UNIQUE (unit_id),
+  -- PERSISTENCE-LAYER INTEGRITY (composite FKs — defense against a buggy
+  -- application caller; the chain graph → plan → unit → Work Item/project
+  -- cannot be corrupted even by a raw SQL writer):
+  --   the node's unit belongs to the node's EXACT plan,
+  CONSTRAINT wfos_orchestration_nodes_unit_plan_fk
+    FOREIGN KEY (unit_id, plan_id)
+    REFERENCES wfos_delegation_units (id, plan_id)
+    ON DELETE CASCADE,
+  --   the node's plan IS its graph's plan,
+  CONSTRAINT wfos_orchestration_nodes_graph_plan_fk
+    FOREIGN KEY (graph_id, plan_id)
+    REFERENCES wfos_orchestration_graphs (id, plan_id)
+    ON DELETE CASCADE,
+  --   the node's tenant IS its graph's tenant.
+  CONSTRAINT wfos_orchestration_nodes_graph_project_fk
+    FOREIGN KEY (graph_id, project_id)
+    REFERENCES wfos_orchestration_graphs (id, project_id)
+    ON DELETE CASCADE
 );
 
 CREATE INDEX wfos_orchestration_nodes_graph_idx ON wfos_orchestration_nodes (graph_id);
 CREATE INDEX wfos_orchestration_nodes_project_idx ON wfos_orchestration_nodes (project_id);
+
+-- GRAPH TENANT GUARD (round-1 architect remediation): the graph's tenant is
+-- the Work Item's project, resolved through the AUTHORITATIVE chain
+-- (work item → architecture version → architecture → project) — the same
+-- chain every existing route uses. A graph claiming a different project
+-- than its Work Item's is structurally unrepresentable: the trigger rejects
+-- the row BEFORE it is stored, regardless of which caller wrote it.
+CREATE OR REPLACE FUNCTION wfos_orchestration_graph_tenant_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  wi_project UUID;
+BEGIN
+  SELECT a.project_id
+    INTO wi_project
+    FROM wfos_work_items wi
+    JOIN wfos_architecture_versions av ON av.id = wi.architecture_version_id
+    JOIN wfos_architectures a ON a.id = av.architecture_id
+   WHERE wi.id = NEW.work_item_id;
+
+  IF wi_project IS NULL THEN
+    RAISE EXCEPTION 'orchestration graph references unknown work item %',
+      NEW.work_item_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  IF wi_project <> NEW.project_id THEN
+    RAISE EXCEPTION
+      'orchestration graph tenant mismatch: work item % belongs to project %, the graph claims project %',
+      NEW.work_item_id, wi_project, NEW.project_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER wfos_orchestration_graph_tenant_guard_trg
+BEFORE INSERT OR UPDATE OF project_id, work_item_id ON wfos_orchestration_graphs
+FOR EACH ROW
+EXECUTE FUNCTION wfos_orchestration_graph_tenant_guard();
 
 -- DEPENDENCY GATE INVARIANT (defense in depth): a node that has NEVER been
 -- dispatched (no execution reference, no outcome) may not acquire an owner

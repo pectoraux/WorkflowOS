@@ -17579,6 +17579,47 @@ describe('WORK-062 invariants — the Durable Orchestration Substrate (orchestra
     expect(migration).toMatch(/reconciliation_count INT NOT NULL DEFAULT 0/);
   });
 
+  it('persistence-layer IDENTITY/TENANT INTEGRITY — composite FKs tie graph→plan→Work Item and node→graph→plan→unit→project (PostgreSQL rejects structurally impossible tuples; the round-1 architect remediation)', () => {
+    const migration = readFileSync(MIGRATION, 'utf8');
+    // The enabling composite keys on the EXISTING delegation tables —
+    // additive and non-semantic (id is already unique; the tuple keys exist
+    // for referential integrity, never as a second identity).
+    expect(migration).toMatch(/ALTER TABLE wfos_delegation_plans[\s\S]{0,200}UNIQUE \(id, work_item_id\)/);
+    expect(migration).toMatch(/ALTER TABLE wfos_delegation_units[\s\S]{0,200}UNIQUE \(id, plan_id\)/);
+    // The graph's plan IS the plan of the graph's Work Item (the composite
+    // (plan_id, work_item_id) FK — a graph claiming another Work Item's plan
+    // is unrepresentable).
+    expect(migration).toMatch(/FOREIGN KEY \(plan_id, work_item_id\)[\s\S]{0,120}REFERENCES wfos_delegation_plans \(id, work_item_id\)/);
+    // The node carries its plan (the tuple key for the composite FKs).
+    expect(migration).toMatch(/plan_id UUID NOT NULL,/);
+    // The node's unit belongs to the node's EXACT plan.
+    expect(migration).toMatch(/FOREIGN KEY \(unit_id, plan_id\)[\s\S]{0,120}REFERENCES wfos_delegation_units \(id, plan_id\)/);
+    // The node's plan IS its graph's plan.
+    expect(migration).toMatch(/FOREIGN KEY \(graph_id, plan_id\)[\s\S]{0,120}REFERENCES wfos_orchestration_graphs \(id, plan_id\)/);
+    // The node's tenant IS its graph's tenant.
+    expect(migration).toMatch(/FOREIGN KEY \(graph_id, project_id\)[\s\S]{0,120}REFERENCES wfos_orchestration_graphs \(id, project_id\)/);
+    // The graph's tenant is the Work Item's project through the AUTHORITATIVE
+    // chain — enforced by the tenant-guard trigger (defense in depth).
+    expect(migration).toMatch(/wfos_orchestration_graph_tenant_guard/);
+    expect(migration).toMatch(/tenant mismatch/);
+    expect(migration).toMatch(/JOIN wfos_architecture_versions av ON av\.id = wi\.architecture_version_id/);
+    // The repository writes the full TUPLE (never a bare id) so the composite
+    // FKs verify consistency at the persistence boundary.
+    const repoCode = stripCodeComments(readFileSync(ORCH_REPO, 'utf8'));
+    expect(repoCode).toMatch(/\(graph_id, project_id, plan_id, unit_id, node_key, depends_on,/);
+    // And the raw-SQL negative regressions prove PostgreSQL rejects the
+    // impossible tuples WITHOUT the service layer (INSERT and UPDATE paths,
+    // with a consistent-tuple positive control).
+    const semantics = readFileSync(join(ORCH_TESTS_DIR, 'orchestration-substrate.integration.test.ts'), 'utf8');
+    expect(semantics).toMatch(/RAW-SQL PERSISTENCE INTEGRITY/);
+    expect(semantics).toMatch(/NO service layer in the path/);
+    expect(semantics).toMatch(/wfos_orchestration_nodes_unit_plan_fk/);
+    expect(semantics).toMatch(/wfos_orchestration_nodes_graph_project_fk/);
+    expect(semantics).toMatch(/wfos_orchestration_graphs_plan_work_item_fk/);
+    expect(semantics).toMatch(/tenant mismatch/);
+    expect(semantics).toMatch(/POSITIVE CONTROL/);
+  });
+
   it('fencing at the MUTATION BOUNDARY — every node-state mutation is generation-fenced in the UPDATE\'s WHERE clause (PostgreSQL rejects stale workers)', () => {
     const repoCode = stripCodeComments(readFileSync(ORCH_REPO, 'utf8'));
     // recordNodeResult: the fenced outcome write.

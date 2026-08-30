@@ -10,6 +10,14 @@
  *                      attempt (never a second execution identity)
  *   *_project_id     → wfos_projects (TENANT scope, server-resolved)
  *
+ * PERSISTENCE-LAYER IDENTITY/TENANT INTEGRITY (round-1 architect remediation):
+ * the writes below carry the full TUPLE (graph, project, plan, unit), and
+ * PostgreSQL itself — composite foreign keys + the graph tenant-guard
+ * trigger (migration 0058) — makes a structurally impossible
+ * graph/plan/unit/project combination unrepresentable, surviving even a
+ * buggy application caller. A raw-SQL negative regression proves it
+ * without this repository in the path.
+ *
  * This repository NEVER writes delegation, workflow, execution, agent-run,
  * verification, or review rows — it is structurally incapable of becoming a
  * second authority (pinned by static invariants). Reading delegation state
@@ -269,18 +277,21 @@ export class PgOrchestrationRepository {
 
     // ONE node per unit — ON CONFLICT DO NOTHING (a pre-existing node set
     // from a concurrent creator or a prior drive is authoritative; fresh
-    // nodes backfill the durable outcome from the unit's status).
+    // nodes backfill the durable outcome from the unit's status). The full
+    // (graph, project, plan, unit) tuple is written so the composite FKs
+    // (migration 0058) verify consistency AT the persistence boundary.
     for (const unit of snapshot.units) {
       const backfill = backfillForUnitStatus(unit.status);
       await tx.query(
         `INSERT INTO wfos_orchestration_nodes
-             (graph_id, project_id, unit_id, node_key, depends_on,
+             (graph_id, project_id, plan_id, unit_id, node_key, depends_on,
               execution_id, attempt_no, outcome)
-           VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+           VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
            ON CONFLICT (unit_id) DO NOTHING`,
         [
           graph.id,
           snapshot.projectId,
+          snapshot.planId,
           unit.unitId,
           unit.unitKey,
           JSON.stringify(unit.dependsOn),
