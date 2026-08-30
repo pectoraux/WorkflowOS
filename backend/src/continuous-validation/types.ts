@@ -328,6 +328,35 @@ export interface ValidationObservation {
   readonly provenance: ObservationProvenance;
 }
 
+/** The input shape for {@link recordObservation} (validated at runtime). */
+export interface RecordObservationInput {
+  readonly id: string;
+  readonly kind: ObservationKind;
+  readonly value: unknown;
+  readonly provenance: ObservationProvenance;
+}
+
+/**
+ * The evaluated pairing of an expected observation with the actual captured
+ * observation (null when missing). Produced by the evaluation boundary and
+ * consumed by finalization.
+ */
+export interface ObservationResult {
+  readonly expected: ExpectedObservation;
+  readonly actual: ValidationObservation | null;
+  readonly matched: boolean;
+  readonly provenance: ObservationProvenance;
+}
+
+/**
+ * An execution-level error reported by the (future) executor at finalization:
+ * a detected effect-policy violation, or environment/deployment
+ * unavailability. Both map to their typed outcomes — never to healthy.
+ */
+export type ExecutionError =
+  | { readonly kind: 'effect_policy_violation'; readonly reason: string }
+  | { readonly kind: 'environment_error'; readonly reason: string };
+
 // ============================================================================
 // §7  Outcomes — the typed, provenance-preserving results
 // ============================================================================
@@ -425,6 +454,9 @@ export const CONTINUOUS_VALIDATION_ERROR_CODES = [
   // Observation/outcome boundaries (Task 6)
   'OBSERVATION_PROVENANCE_INVALID',
   'FINALIZE_RESULTS_FOREIGN',
+  'FINALIZE_RUN_ALREADY_COMPLETED',
+  'FINALIZE_JOURNEY_MISMATCH',
+  'FINALIZE_EXECUTION_ERROR_INVALID',
 ] as const;
 export type ContinuousValidationErrorCode = (typeof CONTINUOUS_VALIDATION_ERROR_CODES)[number];
 

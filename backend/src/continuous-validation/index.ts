@@ -63,6 +63,15 @@ export type {
   ValidationRunAdmission,
   ValidationAdmissionErrorCode,
 } from './internal/run-admission.js';
+export {
+  // Task 6 — observations + typed outcomes with provenance
+  recordObservation,
+  evaluateObservation,
+} from './internal/observation.js';
+export {
+  finalizeValidationRun,
+} from './internal/outcome.js';
+export type { FinalizeValidationRunInput } from './internal/outcome.js';
 export type {
   EffectPolicy,
   ValidationMode,
@@ -83,7 +92,10 @@ export type {
   TestIdentityBinding,
   TestIdentitySource,
   ObservationProvenance,
+  RecordObservationInput,
   ValidationObservation,
+  ObservationResult,
+  ExecutionError,
   RunProvenance,
   ValidationFailure,
   ValidationOutcome,
