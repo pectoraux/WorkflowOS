@@ -140,7 +140,11 @@ export const auth = {
       const body = await apiGet<AuthMe>(`/auth/me`);
       return body;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) return null;
+      // 401 = unauthenticated (no session); 404 = the runtime routes are not
+      // wired in this backend (e.g. a test harness without authRuntime). Both
+      // mean "no session" → fall back to the API-key path. Never throw — the
+      // canonical auth-state source must resolve, not hang.
+      if (err instanceof ApiError && (err.status === 401 || err.status === 404)) return null;
       throw err;
     }
   },

@@ -79,12 +79,18 @@ export interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
-  const [state, setState] = useState<AuthState>({
-    isAuthenticated: auth.hasApiKey(),
-    user: null,
-    method: auth.hasApiKey() ? 'apikey' : null,
-    loading: true,
-  });
+  // Initial state: if an API key is already persisted (localStorage), the
+  // automation path is synchronously authenticated — NO loading delay (the
+  // API key is a local credential; the backend is the authority but the
+  // state is "a credential has been entered," checked synchronously). Only
+  // when there is NO API key do we enter loading to check /auth/me for a
+  // browser session cookie.
+  const hasApiKeyInitially = auth.hasApiKey();
+  const [state, setState] = useState<AuthState>(
+    hasApiKeyInitially
+      ? { isAuthenticated: true, user: null, method: 'apikey', loading: false }
+      : { isAuthenticated: false, user: null, method: null, loading: true },
+  );
 
   const refresh = useCallback(async () => {
     // Check the session first (the human login path).
@@ -117,8 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }): ReactNode {
   }, []);
 
   useEffect(() => {
+    // Only fetch /auth/me when we don't already have a synchronous API-key
+    // credential. When the API key is present, skip the async check entirely
+    // (no loading delay — the E2E automation path and a returning API-key
+    // user see the app immediately).
+    if (hasApiKeyInitially) return;
     void refresh();
-  }, [refresh]);
+  }, [refresh, hasApiKeyInitially]);
 
   const signupWithEmail = useCallback(
     async (email: string, password: string, displayName?: string) => {
