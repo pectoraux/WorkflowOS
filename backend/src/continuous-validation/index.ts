@@ -42,6 +42,12 @@ export {
   ValidationDomainError,
   CONTINUOUS_VALIDATION_ERROR_CODES,
 } from './types.js';
+export {
+  // Task 3 — fail-closed effect-policy admission
+  admitEffectPolicy,
+  environmentKindValidForMode,
+} from './internal/effect-policy.js';
+export type { EffectPolicyDecision } from './internal/effect-policy.js';
 export type {
   EffectPolicy,
   ValidationMode,
