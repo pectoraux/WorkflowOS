@@ -70,9 +70,12 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
     // WORK-064 (Continuous Product Validation — the domain/model authority)
     // was ACTIVATED by the architect on 2026-08-30, implemented on branch
     // feat/work-064-continuous-validation (PR #86), MERGED by the architect
-    // as c351451 on 2026-08-30 and FINALIZED complete per §34.8/ADR-0007 —
-    // nothing is in flight (55/55 recorded work orders complete).
-    expect(inFlight.map((w) => w.id).sort()).toEqual([]);
+    // as c351451 on 2026-08-30 and FINALIZED complete per §34.8/ADR-0007.
+    // WORK-074 (Identity & Access Runtime Activation — the WORK-063 RUNTIME)
+    // is now ACTIVATED and IN FLIGHT (branch
+    // feat/work-074-identity-access-runtime) — the dogfooding gate's
+    // authentication precondition under implementation.
+    expect(inFlight.map((w) => w.id).sort()).toEqual(['WORK-074']);
     // Every completed item carries merge evidence (the truthful record).
     for (const w of complete) {
       expect(w.mergedAs?.pr, `${w.id} must record its merge PR`).toBeGreaterThan(0);
@@ -108,13 +111,13 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
     // Q4 — what can safely run in parallel? (frontier + conflicts)
     const frontier = fresh.getFrontier();
     // WORK-064 was ACTIVATED 2026-08-30, MERGED by the architect as c351451
-    // via PR #86, and FINALIZED complete per §34.8/ADR-0007 — NOTHING is in
-    // flight (55/55 recorded work orders complete). WORK-053..061 and
-    // WORK-065..070 are future-generation items not yet recorded in
+    // via PR #86, and FINALIZED complete per §34.8/ADR-0007. WORK-074 (the
+    // identity & access runtime) is now the ONE in-flight item; WORK-053..061
+    // and WORK-065..070 are future-generation items not yet recorded in
     // program-state (WORK-065 and WORK-067 are dependency-eligible on the
     // complete WORK-064 — NOT activated, the architect's authorization is
     // required).
-    expect(frontier.inFlight.map((w) => w.id)).toEqual([]);
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-074']);
     expect(frontier.dependencyEligible).toEqual([]);
     expect(frontier.blocked).toEqual([]);
     // The frontier's item-level coordination flag discipline is vacuously
@@ -467,7 +470,10 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
       // started items (all three live records are complete-and-merged:
       // WORK-050 by 8f27cc7/PR #78, WORK-062 by f0855d2/PR #82, WORK-064 by
       // c351451/PR #86 — the last finalized by the change under test).
-      expect(stillInFlight.sort()).toEqual(['WORK-050', 'WORK-062', 'WORK-064']);
+      // WORK-074 is ALSO in the rebuilt state — the LIVE in-flight record
+      // (the identity runtime under implementation); outcomes never complete
+      // it either.
+      expect(stillInFlight.sort()).toEqual(['WORK-050', 'WORK-062', 'WORK-064', 'WORK-074']);
       expect(claimsOnly.getWorkOrder('WORK-050').mergedAs).toBeUndefined();
       expect(claimsOnly.getWorkOrder('WORK-062').mergedAs).toBeUndefined();
       expect(claimsOnly.getWorkOrder('WORK-064').mergedAs).toBeUndefined();
