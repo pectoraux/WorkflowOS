@@ -85,6 +85,14 @@ export {
   // Task 8 — the persistence port (in-memory adapter; NO migration authorized)
   InMemoryValidationRunRepository,
 } from './internal/in-memory-validation-run-repository.js';
+export {
+  // Task 9 — the domain service composed through buildApp for future consumers
+  DefaultContinuousValidationService,
+} from './internal/continuous-validation-service.js';
+export type {
+  ContinuousValidationService,
+  ContinuousValidationServiceDeps,
+} from './internal/continuous-validation-service.js';
 export type {
   EffectPolicy,
   ValidationMode,
