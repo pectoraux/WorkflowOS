@@ -415,3 +415,173 @@ mechanism (the dispatch runs prove the exact code path).
 - MinIO credentials were generated with openssl, set only as Railway
   service variables, and never committed or printed; the R2 placeholder
   values they replaced carried no secret material.
+
+## Addendum 4 — REQUEST CHANGES remediation round 2: authoritative deployment identity, proven persistence, interrupted-release recovery (2026-08-30 ~00:30Z)
+
+The architect's second verdict found the release pipeline materially
+stronger but blocked approval on three counts. Remediation record:
+
+### 1. Deployment evidence is now the authoritative machine-readable identity record
+
+The pre-remediation `deployment-evidence` job recorded the backend as
+`"automatedDeploy": "see railway-backend job…"` — job-log prose, not an
+identity. The record (schemaVersion 2, per-release run artifact + job
+summary) now carries the durable cross-provider provenance, each element
+sourced from the provider's OWN record or the LIVE service — never from
+pipeline prose:
+
+```
+release commit dba6f4369dc2ee620671efad8692e121901d4a09
+├── Vercel deployment dpl_8QjPLWdon73qHDxEjcSNKtgd6Xst
+│     (Vercel REST API v6/deployments — matched by the EXACT deployment
+│      URL this run created; a stale-identity fallback is age-bounded to
+│      5 minutes, never older)
+├── Railway api deployment 1ca8ec7b-a61a-41f9-bbcd-f5faf747b31d
+│     imageDigest sha256:3f851b00… (railway deployment list --json,
+│     set-difference vs the pre-deploy snapshot, polled to SUCCESS)
+│     observedSha dba6f436… ← live GET /health deployment.commitSha
+└── Railway worker deployment b5ea678b-52de-44b0-ab7b-4964df93c4e7
+      imageDigest sha256:7824bade… (same mechanism)
+      observedSha dba6f436… ← the live deployment's boot log line
+      `app.process.starting … commitSha="dba6f436…"` — the RUNNING
+      process attests its own revision
+```
+
+The worker observation is the round's key design point: the worker serves
+NO HTTP by design (backend/src/index.ts — only the api role builds the
+Fastify server), so its live revision cannot be probed over HTTP. The
+process entrypoint now logs its deployment identity at boot for ALL roles
+(`app.process.starting` {role, commitSha, environmentName, serviceName}),
+and the pipeline reads that line from the just-deployed deployment's logs.
+The evidence records what the RUNNING PROCESS attests — never the merely
+configured `WORKFLOWOS_COMMIT_SHA` variable (a distinction the
+interrupted-release drill below demonstrated live: the variable said
+`1d9a5ff` while the running worker still attested `6fe83e7`).
+
+The evidence job VALIDATES the record before attesting: every provider
+identity present, every observedSha == releaseCommit, readiness ready with
+every check ok — otherwise the job FAILS ("an unobservable deployment is
+unverifiable"; an incomplete record would launder an interrupted release
+into "evidence"). The job needs every pipeline stage DIRECTLY, so an
+interrupted release can never produce a partial record. Machine-checked:
+RD-06/RD-07 (deployment-topology.test.ts, 37/37) with red-proofed
+discriminations — the pre-remediation prose-pointer shape and the
+identity-less deploy stage are REJECTING violations, verified locally
+against the HEAD versions of all three files (exactly the 4 new checks
+fail against the old shapes; all 37 pass against the new).
+
+Run D (33283025817) is the live proof: full pipeline green, record
+validated, artifact uploaded (deployment-evidence-dba6f4369dc2ee620671efad8692e121901d4a09.zip,
+Artifact ID 9723569379), and independently re-verified from this machine:
+/health reports dba6f43, the worker deployment b5ea678b's boot log
+attests dba6f43, readiness all-green, SPA + /api rewrite through the
+Vercel deployment URL report the same SHA.
+
+### 2. MinIO persistence — a REAL defect found and fixed, then proven
+
+The persistence question exposed that the durability property did NOT
+hold: the MinIO service was running with `volumeMounts: []` — ephemeral
+container storage. The 2026-08-29 IaC apply had CREATED the minio-volume
+but the attachment to the service never materialized (the
+`railway service list` record and the deployment meta both confirmed
+volumes: [] — while Redis correctly showed redis-volume at /data). Every
+object in production would have been silently lost on the next MinIO
+restart.
+
+Fix: a surgical one-change IaC apply (`config plan` showed EXACTLY one
+change — attach the existing minio-volume at /data on service MinIO —
+after expressing the worker's live partial github-source precisely so
+nothing else changed). Deployment ab4c5551: SUCCESS with
+volumeMounts ["/data"]; init.sh re-created the private bucket
+idempotently on the volume.
+
+Persistence drill (executed live, through the REAL application boundary —
+POST /projects/:id/specifications/:specId/versions with a 12,313-byte
+body > the 8KiB inline threshold → ObjectStore → MinIO, per DATA3-AC-02):
+
+1. WRITE: drill spec `minio-persistence-drill`
+   (3a69aaed-6e7a-42af-8c09-928acd1ee1f1), version storageKey
+   `1788048288168-0zvicz0y`, provider s3,
+   digestSha256 `18b08a93472d2b6f7bde065a19d9b2daef8d24e68c74aefd63b5f0d05c8fdee0`.
+2. BASELINE READ: GET …/versions/latest — content round-trips, digest
+   matches (put/get proof).
+3. RESTART: `railway redeploy --service MinIO` — deployment ab4c5551 →
+   073a76b5 (SUCCESS, volume mounted): the object-storage AUTHORITY's
+   container restart, the operational failure mode.
+4. POST-RESTART READ: byte-identical (digest
+   `18b08a93…` — matches both the stored digest and the original
+   content); /health/ready all-green (the app reconnects automatically).
+
+The durability contract is now explicit in production.md: MinIO + the
+Railway persistent volume + private networking = the persistence
+authority, with the drill procedure recorded for re-execution.
+
+### 3. Interrupted-release recovery — documented, machine-checked, AND drilled live
+
+The release recovery protocol (workflow header + production.md) covers the
+four failure modes; RD-08 machine-checks the documentation AND the
+structural enforcement (evidence needs every stage; backend-verification
+enforces api/worker SHA coordination; Railway deployment atomicity). The
+live drill executed the full sequence at commit 1d9a5ff/dba6f43 — and
+caught two REAL defects on the way:
+
+- **Run A (33282530146, 6fe83e7)** — failure mode "worker deploy fails":
+  the api deploy succeeded, the worker Railway deployment SUCCEEDED
+  server-side, but the stage failed at the boot-log observation step
+  (`railway logs <id>` without `--service` → "No service linked").
+  Everything downstream SKIPPED — no verification, no frontend, no
+  evidence: nothing shipped, nothing falsely attested, production stayed
+  fully serviceable (readiness green). Fixed in 1d9a5ff.
+- **Run B (33282788523, 1d9a5ff)** — canceled mid-worker-deploy right
+  after the api deploy succeeded: the genuine MIXED-REVISION state,
+  observed live at the moment of interruption — /health reported
+  `1d9a5ffe…` (api NEW) while the running worker's boot log attested
+  `6fe83e7f…` (worker OLD; its deployment 85e20b2c still live, the new
+  build ce854e1c only BUILDING). Readiness all-green and the drill data
+  intact DURING the mixed state — the interim state is serviceable, the
+  worker never ahead of the api role, and the mixed state can never be
+  attested (the evidence job cannot run).
+- **Run C (33282851275, 1d9a5ff)** — recovery re-run: backend stages
+  green (including the new backend-verification identity+readiness
+  checks), Vercel deploy SUCCEEDED, but the stage failed closed at
+  deployment-ID resolution (`vercel inspect` printed no dpl_ id; the
+  `vercel ls ./frontend` fallback was wrong by construction — the
+  positional is a PROJECT NAME, not a directory). Again: verification +
+  evidence skipped, release unattested, no partial record laundered.
+  Fixed in dba6f43 (Vercel REST API resolution, exact URL match).
+- **Run D (33283025817, dba6f43)** — full recovery: the ENTIRE strict
+  pipeline green end-to-end with the validated identity record (above).
+
+The drill is honest evidence, not theater: both unplanned failures were
+real defects in the new machinery, each caught by fail-closed behavior
+BEFORE anything unverified shipped, each fixed, and the recovery path
+(re-run to convergence + attestation) exercised end-to-end. That is
+precisely the property the architect asked the protocol to establish.
+
+### 4. CI on the final head dba6f43: 13/13 green (honest flake record)
+
+All 13 workflows green (Architecture Governance, backend, e2e, 6×
+browser-e2e, release ×2 [PR path + run D], deploy, frontend,
+companion-extension-e2e). The backend workflow took a same-commit re-run
+discrimination sequence on dba6f43: attempt 1 failed
+`WORK-046 delegation TWO-ACTOR #2` (25P02, two-actor concurrency),
+attempts 2–3 failed `R1-#2b` cross-mode-handoff (`'running' vs
+'completed'` at the 45s deadline — the DOCUMENTED main-level flake
+signature, the same test/signature as main's backend run #260 and the
+previously documented PR #74/#77/#78 occurrences), attempt 4 SUCCESS.
+Materially: MAIN ITSELF (a12444a — the merge-base, zero branch commits)
+failed R1-#2b in 7 consecutive backend runs on 2026-08-29
+(18:40Z→19:12Z), so this is a pre-existing main-level CI-environment
+failure (GitHub runner slowness; the test's own comment documents local
+convergence in ~1.4s vs repeated CI deadline overruns across three prior
+PRs), with zero diff from this PR to the failing suite. The branch's
+backend suite was fully green on 2dc8dc3 (one commit before this round's
+changes) and is green on dba6f43 (re-run).
+
+### Rotation reminder
+
+The Railway project token, the GitHub PAT, and the Vercel token transited
+operator channels and should be rotated after this work merges (the
+GitHub PAT especially — it was pasted into a chat context). All secrets
+live exclusively in the GitHub Actions secret store; rotation is a
+secret-store update + re-dispatch, no code changes.
