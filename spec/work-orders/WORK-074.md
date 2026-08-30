@@ -4,8 +4,7 @@ Status: in flight (activated 2026-08-30 by the architect's implementation
 instruction — the dogfooding gate's authentication precondition, finding F-1;
 the activation is recorded in
 `spec/development-state/program-state.json`, branch
-`feat/work-074-identity-access-runtime`, implementation PR recorded post-creation
-per the canonical pattern). The implementation delivers the WORK-063 identity
+`feat/work-074-identity-access-runtime`, implementation PR #99). The implementation delivers the WORK-063 identity
 model as RUNTIME — nothing re-architected, no second authority:
 
 1. **Human login** — the WORK-063 providers behind the SAME `AuthProvider`

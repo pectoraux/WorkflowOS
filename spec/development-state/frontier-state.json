@@ -6,9 +6,9 @@
     "spec/dependency-graph.md",
     "spec/work-orders/ (the architect-issued Work Order files, GitHub issues #64..#73, plus WORK-062 issued by the 2026-08-30 governance correction, plus WORK-063 issued by the 2026-08-30 identity-and-access architecture decision, plus WORK-064..070 issued by the 2026-08-30 continuous-product-validation sub-evolution / ACR-002, plus WORK-071 + WORK-072 + WORK-073 + WORK-074 issued by the 2026-08-30 customer dogfooding experiment's governed follow-up \u2014 see spec/architecture/v1.1/dogfooding-evidence/2026-08-30-onboarding-attempt.md)"
   ],
-  "computedAt": "2026-08-30 (WORK-074 \u2014 the identity & access runtime \u2014 ACTIVATED by the architect's implementation instruction and IN FLIGHT on branch feat/work-074-identity-access-runtime; it left plannedNext. Main carries the dogfooding follow-up governance 4eb48b7.)",
+  "computedAt": "2026-08-30 (WORK-074 \u2014 the identity & access runtime \u2014 ACTIVATED by the architect's implementation instruction and IN FLIGHT on branch feat/work-074-identity-access-runtime (PR #99); it left plannedNext. Main carries the dogfooding follow-up governance 4eb48b7.)",
   "currentMain": "f9ba02f1090491d3bf4eaf980682dd091d46af0d",
-  "currentLiveImplementation": "WORK-074 (Identity & Access Runtime Activation \u2014 the WORK-063 RUNTIME) on branch feat/work-074-identity-access-runtime",
+  "currentLiveImplementation": "WORK-074 (Identity & Access Runtime Activation \u2014 the WORK-063 RUNTIME) on branch feat/work-074-identity-access-runtime (PR #99)",
   "liveImplementationNote": "WORK-074 is IN FLIGHT (activated 2026-08-30): the human login (Google/GitHub/email), server-side sessions, deterministic identity resolution + linking, scoped machine identity (service accounts + capability-gated keys), the Workbench login migration off the demo key, and the required proofs on real PostgreSQL. WORK-065/067/071/072/073 remain NOT activated and NOT implemented.",
   "activeRule": "A derived frontier must never authorize work whose authoritative Work Order dependencies are incomplete. If live PR state and repository state disagree, halt authorization and require architect reconciliation.",
   "knownConflicts": [
