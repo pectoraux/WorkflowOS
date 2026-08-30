@@ -69,9 +69,6 @@
       "WORK-062",
       "WORK-063"
     ],
-    "WORK-065": [
-      "WORK-064"
-    ],
     "WORK-066": [
       "WORK-064",
       "WORK-065"
@@ -110,7 +107,6 @@
     "WORK-059": "blocked — WORK-055, WORK-056, WORK-058 not started (WORK-019 complete)",
     "WORK-060": "blocked — WORK-055, WORK-056, WORK-058, WORK-059 not started (WORK-005 complete)",
     "WORK-061": "blocked — WORK-057, WORK-058, WORK-059, WORK-060 not started (WORK-047, WORK-050, WORK-062, and WORK-063 all COMPLETE — the WORK-062 edge was satisfied by the f0855d2 merge via PR #82 and the WORK-063 edge by the 8dac9c4 merge via PR #81, both finalized §34.8/ADR-0007 on 2026-08-30; the remaining gate is the WORK-053..056 foundation chain, which the architect has not activated)",
-    "WORK-065": "eligible — WORK-064 complete (merged c351451 via PR #86, finalized §34.8/ADR-0007; the domain/model authority the browser agent executes underneath is on main) — NOT activated, NOT started: the architect's authorization is required",
     "WORK-066": "blocked — WORK-065 not started (WORK-064 complete; soft: WORK-058 not started — the scheduler can ship with a simpler fixed-mapping assurance model and delegate to WORK-058 when it lands)",
     "WORK-067": "eligible — WORK-064 complete (merged c351451 via PR #86, finalized §34.8/ADR-0007); WORK-015, WORK-040, WORK-041 complete (soft: WORK-056 not started — WORK-067 operates on raw observations directly with the same provenance discipline until WORK-056 lands) — NOT activated, NOT started: the architect's authorization is required",
     "WORK-068": "blocked — WORK-067 not started",
@@ -149,13 +145,6 @@
   },
   "futureGenerationParallelMetadata": {
     "note": "Parallel-execution metadata for the future Work Orders. Each entry summarizes the parallelEligibility, parallelConflicts, and protectedSurfaces declared in the Work Order spec file. See spec/architecture/v1.1/parallel-execution-metadata.md for the full model and each Work Order's 'Parallel-execution metadata' section for the verbatim declaration.",
-    "WORK-065": {
-      "parallelEligibility": "conditional",
-      "protectedSurfaces": [
-        "spec/architecture/v1.1/validation-model.md",
-        "spec/work-orders/WORK-065.md"
-      ]
-    },
     "WORK-066": {
       "parallelEligibility": "conditional",
       "protectedSurfaces": [
