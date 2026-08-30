@@ -350,6 +350,12 @@ export interface RecordObservationInput {
  * declaration exactly (structural equality on id/stepId/kind/description/
  * matcher): finalization verifies it against the journey — a variant with
  * the same id but a different matcher can never produce a healthy result.
+ *
+ * `matched` is an executor ASSERTION, never a determination: finalization
+ * independently recomputes the match with the deterministic evaluator
+ * (`evaluateObservation`: canonical expectation × actual observation) and
+ * REJECTS a result whose asserted `matched` contradicts the derived value.
+ * Health and failure flow from the DERIVED evaluation only.
  */
 export interface ObservationResult {
   readonly expected: ExpectedObservation;
@@ -487,6 +493,7 @@ export const CONTINUOUS_VALIDATION_ERROR_CODES = [
   'OBSERVATION_PROVENANCE_INVALID',
   'FINALIZE_RESULTS_FOREIGN',
   'FINALIZE_EXPECTATION_CANONICAL_MISMATCH',
+  'FINALIZE_MATCH_ASSERTION_MISMATCH',
   'FINALIZE_RUN_ALREADY_COMPLETED',
   'FINALIZE_JOURNEY_MISMATCH',
   'FINALIZE_EXECUTION_ERROR_INVALID',

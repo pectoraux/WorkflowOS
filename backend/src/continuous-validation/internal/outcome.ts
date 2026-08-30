@@ -30,7 +30,18 @@
  *                    #86 review correction 1): a future executor cannot
  *                    retain an expectation's id while altering its matcher
  *                    and claiming `matched: true` — health can never be
- *                    derived from an executor-supplied expectation.
+ *                    derived from an executor-supplied expectation;
+ *   derived match   → the caller-supplied `result.matched` is an ASSERTION,
+ *                    never a determination (PR #86 review correction 3):
+ *                    finalization independently recomputes the match with
+ *                    the authoritative deterministic evaluator
+ *                    (evaluateObservation: canonical expectation + actual
+ *                    observation) and REJECTS any result whose asserted
+ *                    `matched` contradicts the derived value. Health (and
+ *                    failure) flow from the DERIVED value only — an
+ *                    executor can fabricate neither a false healthy (actual
+ *                    wrong + matched:true) nor a false failure (actual
+ *                    right + matched:false).
  *
  * There is NO code path from an absent/invalid/unrequired-by-criteria
  * observation to a false `healthy` state: the criteria are the declared
@@ -49,7 +60,7 @@ import type {
   ValidationRun,
 } from '../types.js';
 import { ValidationDomainError } from '../types.js';
-import { deepEquals } from './observation.js';
+import { deepEquals, evaluateObservation } from './observation.js';
 
 /** The finalization input. */
 export interface FinalizeValidationRunInput {
@@ -60,7 +71,10 @@ export interface FinalizeValidationRunInput {
   /**
    * The evaluated observation results. Each result must reference the
    * journey's expectations — quoting the canonical declaration EXACTLY
-   * (verified by structural equality; variants are rejected).
+   * (verified by structural equality; variants are rejected) — and its
+   * `matched` field is an ASSERTION that finalization verifies against the
+   * independently derived evaluation (a contradicting assertion is
+   * rejected; the derived value determines the outcome).
    */
   readonly results: readonly ObservationResult[];
   /** An execution-level error reported by the executor, if any. */
@@ -87,8 +101,9 @@ function journeyExpectations(journey: ValidationJourney): Map<string, ExpectedOb
  * (already-completed run, journey mismatch, a journey whose success
  * criteria are malformed at this boundary — health must never be vacuous,
  * foreign results, duplicated results, a result whose expectation does not
- * quote the canonical journey declaration, provenance mismatch, invalid
- * executionError).
+ * quote the canonical journey declaration, a result whose asserted
+ * `matched` contradicts the derived evaluation, provenance mismatch,
+ * invalid executionError).
  */
 export function finalizeValidationRun(input: FinalizeValidationRunInput): ValidationRun {
   const { run, journey, results } = input;
@@ -143,8 +158,11 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
 
   // Validate the results: every result must reference a journey expectation
   // (quoting its CANONICAL declaration exactly) with provenance matching
-  // THIS run.
+  // THIS run. The asserted `matched` is verified against the DERIVED
+  // evaluation (correction 3) and the derived value is recorded for the
+  // health determination below.
   const seenExpectationIds = new Set<string>();
+  const derivedMatchedById = new Map<string, boolean>();
   for (const result of results) {
     const expected = result.expected as ExpectedObservation | undefined;
     if (!expected || typeof expected.id !== 'string' || !expectations.has(expected.id)) {
@@ -187,6 +205,24 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
         `the result for ${expected.id} carries provenance that does not match run ${run.id} (foreign or broken provenance is rejected)`,
       );
     }
+    // PR #86 review correction 3 — derived match integrity: `matched` is an
+    // executor ASSERTION, never a determination. Finalization recomputes the
+    // match with the authoritative deterministic evaluator over the CANONICAL
+    // expectation and the recorded actual observation, and REJECTS a result
+    // whose assertion contradicts the derivation. Without this, an executor
+    // could submit `expected = canonical, actual = wrong, matched: true` and
+    // fabricate health (or `actual = right, matched: false` and fabricate a
+    // failure) — the same false-healthy class as correction 1, through a
+    // different field. The derived value (not the assertion) is what the
+    // success-criteria evaluation below reads.
+    const derivedMatched = evaluateObservation(canonical, result.actual ?? null);
+    if (result.matched !== derivedMatched) {
+      throw new ValidationDomainError(
+        'FINALIZE_MATCH_ASSERTION_MISMATCH',
+        `the result for ${expected.id} asserts matched=${String(result.matched)} but evaluating the canonical expectation against the recorded observation derives matched=${String(derivedMatched)} — an executor assertion can never determine health`,
+      );
+    }
+    derivedMatchedById.set(expected.id, derivedMatched);
   }
 
   // Validate the execution error shape (fail closed on foreign kinds).
@@ -244,7 +280,10 @@ export function finalizeValidationRun(input: FinalizeValidationRunInput): Valida
     }
     for (const [expectationId, expected] of expectations) {
       const result = matchedById.get(expectationId);
-      if (result === undefined || !result.matched) {
+      // The DERIVED match (evaluateObservation over the canonical
+      // expectation — recorded during result validation above) decides, not
+      // the executor's asserted `result.matched` (correction 3).
+      if (result === undefined || derivedMatchedById.get(expectationId) !== true) {
         failures.push(
           Object.freeze({
             kind: 'validation_failure' as const,

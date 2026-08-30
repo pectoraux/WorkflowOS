@@ -10,13 +10,19 @@ import { describe, it, expect } from 'vitest';
  * converted into a false healthy state, and never directly converted into an
  * ungoverned code change. A missing observation is an EXPLICIT failure.
  *
- * PR #86 REVIEW CORRECTIONS (the architect's audit, 2026-08-30) — §6 + §7
- * below carry the discriminating regressions:
+ * PR #86 REVIEW CORRECTIONS (the architect's audit, 2026-08-30) — §6, §7,
+ * and §8 below carry the discriminating regressions:
  *   1. canonical expectation integrity — a result must quote the journey's
  *      canonical expectation EXACTLY (id/stepId/kind/description/matcher);
  *   2. success-criteria semantics — SuccessCriterion.requiresObservationIds
  *      is the declared set that determines health; an observational
- *      expectation not required by any criterion does not fail the run.
+ *      expectation not required by any criterion does not fail the run;
+ *   3. derived match integrity — the caller-supplied `result.matched` is an
+ *      executor assertion, never a determination: finalization recomputes
+ *      the match (evaluateObservation: canonical expectation × actual
+ *      observation) and rejects any contradicting assertion. Neither a
+ *      false healthy (wrong actual + matched:true) nor a false failure
+ *      (right actual + matched:false) can be fabricated.
  */
 import {
   defineValidationJourney,
@@ -858,5 +864,152 @@ describe('WORK-064 success-criteria semantics — requiresObservationIds determi
     }
     expect(caught).toBeInstanceOf(ValidationDomainError);
     expect((caught as ValidationDomainError).code).toBe('VALIDATION_JOURNEY_INVALID');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §8 PR #86 review correction 3 — derived match integrity
+//    (`result.matched` is an executor ASSERTION; finalization derives the
+//    match itself via evaluateObservation(canonicalExpected, actual) and
+//    rejects any contradicting assertion — health and failure flow from the
+//    DERIVED value only)
+// ---------------------------------------------------------------------------
+
+describe('WORK-064 derived match integrity — result.matched is verified, never trusted (PR #86 review correction 3)', () => {
+  /** A result whose `matched` is the EXECUTOR'S ASSERTION (hand-set for the attack shapes). */
+  function assertedResult(
+    expected: ExpectedObservation,
+    value: unknown,
+    matched: boolean,
+  ): ObservationResult {
+    return {
+      expected,
+      actual: observation(`o-${expected.id}`, expected, value),
+      matched, // the assertion under test — NOT derived here
+      provenance: {
+        runId: admittedRun.id,
+        journeyId: journey.id,
+        stepId: expected.stepId,
+        environmentId: previewEnv.id,
+        observedAt,
+      },
+    };
+  }
+
+  /** Catch a finalize call and return the typed error's code (null when none thrown). */
+  function finalizeCode(results: readonly ObservationResult[]): string | null {
+    try {
+      finalizeValidationRun({ run: admittedRun, journey, results });
+      return null;
+    } catch (error) {
+      expect(error).toBeInstanceOf(ValidationDomainError);
+      return (error as ValidationDomainError).code;
+    }
+  }
+
+  it('a genuinely MATCHING actual with a matched:false assertion is REJECTED — a false FAILURE cannot be fabricated', () => {
+    // The architect's direction 1: actual matches the canonical expectation,
+    // the executor asserts matched:false. The pre-correction code TRUSTED the
+    // assertion and finalized validation_failure (a false failure on a
+    // REQUIRED observation). The correction derives the match — the
+    // derivation is true — and rejects the lying assertion instead.
+    expect(
+      finalizeCode([
+        assertedResult(headingExpected, 'Sign in to WorkflowOS', false), // the lie
+        assertedResult(sessionExpected, 401, true), // honest
+      ]),
+    ).toBe('FINALIZE_MATCH_ASSERTION_MISMATCH');
+  });
+
+  it('a NON-matching actual with a matched:true assertion is REJECTED — a false HEALTHY cannot be fabricated', () => {
+    // The architect's direction 2: the expectation is canonical, the actual
+    // is WRONG, the executor asserts matched:true. The pre-correction code
+    // TRUSTED the assertion and finalized HEALTHY — the remaining
+    // false-healthy hole. The correction derives matched=false and rejects
+    // the assertion: MUST NOT produce healthy.
+    expect(
+      finalizeCode([
+        assertedResult(headingExpected, 'Welcome back', true), // the lie
+        assertedResult(sessionExpected, 401, true), // honest
+      ]),
+    ).toBe('FINALIZE_MATCH_ASSERTION_MISMATCH');
+  });
+
+  it('a MISSING observation (actual: null) with a matched:true assertion is REJECTED — no-silent-healthy holds through the assertion', () => {
+    // evaluateObservation(canonical, null) is ALWAYS false (the no-silent-
+    // healthy rule): asserting matched:true against a missing observation is
+    // a contradiction, and the boundary rejects it rather than recording a
+    // fabricated match.
+    const missingObserved: ObservationResult = {
+      expected: headingExpected,
+      actual: null,
+      matched: true, // the fabricated match over a missing observation
+      provenance: {
+        runId: admittedRun.id,
+        journeyId: journey.id,
+        stepId: headingExpected.stepId,
+        environmentId: previewEnv.id,
+        observedAt,
+      },
+    };
+    expect(finalizeCode([missingObserved])).toBe('FINALIZE_MATCH_ASSERTION_MISMATCH');
+  });
+
+  it('canonical expectation + correct actual + matched:true → HEALTHY (the honest path is unaffected)', () => {
+    // The architect's direction 3 (the positive control): an assertion that
+    // AGREES with the derivation finalizes exactly as before — honest
+    // executors are not punished by the verification.
+    const completed = finalizeValidationRun({
+      run: admittedRun,
+      journey,
+      results: [
+        assertedResult(headingExpected, 'Sign in to WorkflowOS', true),
+        assertedResult(sessionExpected, 401, true),
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('healthy');
+    if (completed.outcome?.kind === 'healthy') {
+      expect(completed.outcome.satisfiedCriteria).toEqual(['criterion-heading', 'criterion-session']);
+    }
+  });
+
+  it('canonical expectation + correct actual + matched:false is never silently accepted — the assertion was the only defect', () => {
+    // The architect's direction 4: the false assertion must not be silently
+    // accepted. The rejection is about the ASSERTION, not the data: the very
+    // same canonical expectation and the very same captured actual finalize
+    // healthy the moment the assertion is honest — proving the derived
+    // evaluation (not the assertion) determines the outcome.
+    expect(finalizeCode([assertedResult(headingExpected, 'Sign in to WorkflowOS', false)])).toBe(
+      'FINALIZE_MATCH_ASSERTION_MISMATCH',
+    );
+    const completed = finalizeValidationRun({
+      run: admittedRun,
+      journey,
+      results: [
+        assertedResult(headingExpected, 'Sign in to WorkflowOS', true),
+        assertedResult(sessionExpected, 401, true),
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('healthy');
+  });
+
+  it('an HONEST matched:false assertion is accepted — consistency, not the value, is what is verified', () => {
+    // A derived-false result with an honest matched:false assertion passes
+    // the verification (§7 already proves an unmet OBSERVATIONAL expectation
+    // stays healthy; here the unmet expectation is REQUIRED, so the honest
+    // false drives a validation_failure — the assertion is not second-
+    // guessed in either direction).
+    const completed = finalizeValidationRun({
+      run: admittedRun,
+      journey,
+      results: [
+        assertedResult(headingExpected, 'Completely wrong heading', false), // honest miss
+        assertedResult(sessionExpected, 401, true),
+      ],
+    });
+    expect(completed.outcome?.kind).toBe('validation_failure');
+    if (completed.outcome?.kind === 'validation_failure') {
+      expect(completed.outcome.failures.map((f) => f.expected.id)).toEqual(['obs-heading']);
+    }
   });
 });
