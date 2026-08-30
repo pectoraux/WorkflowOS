@@ -48,6 +48,11 @@ export {
   environmentKindValidForMode,
 } from './internal/effect-policy.js';
 export type { EffectPolicyDecision } from './internal/effect-policy.js';
+export {
+  // Task 4 — test-identity binding (adapter over the /auth authority)
+  bindTestIdentity,
+  SYNTHETIC_IDENTITY_PROVIDERS,
+} from './internal/test-identity.js';
 export type {
   EffectPolicy,
   ValidationMode,
