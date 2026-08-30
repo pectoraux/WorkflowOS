@@ -48,6 +48,49 @@
 # the skip is recorded in the run logs and the deployment evidence and skips
 # ONLY the ancestry precheck, never the deploy/verify stages themselves.
 #
+# RELEASE RECOVERY PROTOCOL — interrupted releases and mixed-revision states.
+# The strict pipeline makes every failure mode recoverable by RE-RUNNING the
+# workflow (all stages are idempotent: the same SHA is re-pinned, the same
+# image is redeployed, verification re-observes the live services):
+#
+#   1. API deploy fails            → nothing shipped (every later stage is
+#                                    skipped via the needs-chain); production
+#                                    stays fully on the previous release;
+#                                    fix and re-run.
+#   2. Worker deploy fails / the
+#      run is canceled mid-release → interim state is api(NEW)+worker(OLD).
+#                                    This state is SAFE and TRANSIENT: the
+#                                    worker is never AHEAD of the api role
+#                                    (the api deploy — which owns schema
+#                                    migrations — always runs first), and the
+#                                    release is INCOMPLETE until the worker's
+#                                    observed boot SHA equals the release SHA
+#                                    (backend-verification enforces it). Fix
+#                                    and re-run; the pipeline re-converges
+#                                    both roles onto the release SHA before
+#                                    the frontend ships. To instead abandon
+#                                    the release, roll the api service back
+#                                    to its previous deployment (Railway
+#                                    redeploy of the prior deployment ID —
+#                                    recorded in the last evidence artifact)
+#                                    so both roles return to the same
+#                                    revision.
+#   3. Restart mid-release         → same as (2): Railway deployments are
+#                                    atomic (a new deployment takes over only
+#                                    after its build+start succeed), so the
+#                                    interrupted stage's service keeps its
+#                                    previous healthy deployment until the
+#                                    re-run completes it.
+#   4. api/worker temporarily on
+#      different revisions         → observable, bounded, and one-directional
+#                                    (worker never newer than api). The
+#                                    release protocol's invariant: a release
+#                                    is COMPLETE only when the evidence
+#                                    records BOTH roles' observed SHAs equal
+#                                    to the release commit AND the frontend
+#                                    deployment — a mixed state can never be
+#                                    attested as released.
+#
 # Pull requests:
 #   - static checks: vercel configuration invariants + frontend typecheck
 #   - a Vercel PREVIEW deployment, verified to be ISOLATED from production
@@ -241,12 +284,20 @@ jobs:
   # Railway api-role deployment — STRICT PIPELINE stage 1 after the gate.
   # Schema migrations run on api-role startup, so this stage precedes the
   # worker. Missing Railway credentials FAIL the release (never a skip).
+  #
+  # IDENTITY CAPTURE: the stage records the AUTHORITATIVE Railway deployment
+  # identity (deployment UUID + image digest) for the machine-readable
+  # deployment evidence — "which Railway deployment serves this release" is
+  # answered by Railway's own deployment record, never by job-log prose.
   # ---------------------------------------------------------------------------
   railway-api-deploy:
     name: deploy railway backend (api role — schema migrations)
     runs-on: ubuntu-latest
     needs: [backend-contract-gate, credentials]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      deployment_id: ${{ steps.identity.outputs.deployment_id }}
+      image_digest: ${{ steps.identity.outputs.image_digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -286,14 +337,71 @@ jobs:
           # below is the deploy; no extra restarts.)
           railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS" --skip-deploys
           railway variable set "WORKFLOWOS_COMMIT_SHA=$RELEASE_SHA" --service "WorkflowOS-Worker" --skip-deploys
+          # Snapshot the pre-existing deployment IDs so the new deployment is
+          # identified by set-difference (no clock assumptions).
+          railway deployment list --service "WorkflowOS" --json \
+            | python3 -c 'import json,sys; print("\n".join(d["id"] for d in json.load(sys.stdin)))' \
+            > /tmp/pre-deployment-ids.txt
           railway up --ci --service "WorkflowOS" || {
             echo "::error::Railway api-service deployment failed — see logs above."
             exit 1
           }
 
+      - name: Capture the Railway api deployment identity
+        if: needs.credentials.outputs.has_railway == 'true'
+        id: identity
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # `railway up` returns when the build log stream ends; the rollout
+          # may still be converging. Poll until THIS release's deployment
+          # (a NEW deployment id, absent from the pre-deploy snapshot) is
+          # SUCCESS — the stage asserts Railway's own record of the rollout,
+          # then records it as the authoritative deployment identity.
+          DEPLOYMENT_ID=""
+          IMAGE_DIGEST=""
+          STATUS=""
+          for _ in $(seq 1 60); do
+            railway deployment list --service "WorkflowOS" --json > /tmp/deployments.json 2>/dev/null || true
+            read -r DEPLOYMENT_ID IMAGE_DIGEST STATUS <<< "$(python3 - <<'PY' /tmp/deployments.json /tmp/pre-deployment-ids.txt
+          import json, sys
+          deployments = json.load(open(sys.argv[1]))
+          pre = set(open(sys.argv[2]).read().split())
+          for d in deployments:
+              if d.get("id") in pre:
+                  continue  # a pre-existing deployment — never this release's
+              print(d.get("id", ""), d.get("meta", {}).get("imageDigest", "") or "-", d.get("status", ""))
+              break
+          PY
+          )"
+            if [ -n "$DEPLOYMENT_ID" ] && [ "$STATUS" = "SUCCESS" ]; then
+              break
+            fi
+            echo "waiting for the api deployment ${DEPLOYMENT_ID:-pending} to reach SUCCESS (status: ${STATUS:-unknown})…"
+            sleep 15
+          done
+          if [ -z "$DEPLOYMENT_ID" ] || [ "$STATUS" != "SUCCESS" ]; then
+            echo "::error::Could not confirm a SUCCESS Railway deployment for the api service (last status: ${STATUS:-none}). RELEASE BLOCKED — the deployment identity cannot be recorded."
+            exit 1
+          fi
+          [ "$IMAGE_DIGEST" != "-" ] || IMAGE_DIGEST=unknown
+          echo "api deployment identity: id=$DEPLOYMENT_ID digest=$IMAGE_DIGEST"
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Railway worker-role deployment — STRICT PIPELINE stage 2 (after the api
   # role, whose startup runs the schema migrations the worker depends on).
+  #
+  # IDENTITY CAPTURE (worker-specific): the worker serves NO HTTP by design
+  # (backend/src/index.ts — only the api role builds the Fastify server), so
+  # its live revision cannot be probed over HTTP. The OBSERVED SHA therefore
+  # comes from the worker's own boot log: the process logs
+  # `app.process.starting … commitSha=<sha>` at startup (all roles), and this
+  # stage reads that line from the JUST-DEPLOYED deployment's logs. The
+  # evidence records what the RUNNING PROCESS attests — never the merely
+  # configured variable value.
   # ---------------------------------------------------------------------------
   railway-worker-deploy:
     name: deploy railway backend (worker role)
@@ -305,6 +413,10 @@ jobs:
     # pipeline execution on 2026-08-29).
     needs: [railway-api-deploy, credentials]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      deployment_id: ${{ steps.identity.outputs.deployment_id }}
+      image_digest: ${{ steps.identity.outputs.image_digest }}
+      observed_sha: ${{ steps.identity.outputs.observed_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -322,31 +434,108 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global @railway/cli@latest
+          # Snapshot the pre-existing deployment IDs so the new deployment is
+          # identified by set-difference (no clock assumptions).
+          railway deployment list --service "WorkflowOS-Worker" --json \
+            | python3 -c 'import json,sys; print("\n".join(d["id"] for d in json.load(sys.stdin)))' \
+            > /tmp/pre-deployment-ids.txt
           railway up --ci --service "WorkflowOS-Worker" || {
             echo "::error::Railway worker-service deployment failed — see logs above."
             exit 1
           }
 
+      - name: Capture the Railway worker deployment identity + observed SHA
+        if: needs.credentials.outputs.has_railway == 'true'
+        id: identity
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          set -euo pipefail
+          DEPLOYMENT_ID=""
+          IMAGE_DIGEST=""
+          STATUS=""
+          for _ in $(seq 1 60); do
+            railway deployment list --service "WorkflowOS-Worker" --json > /tmp/deployments.json 2>/dev/null || true
+            read -r DEPLOYMENT_ID IMAGE_DIGEST STATUS <<< "$(python3 - <<'PY' /tmp/deployments.json /tmp/pre-deployment-ids.txt
+          import json, sys
+          deployments = json.load(open(sys.argv[1]))
+          pre = set(open(sys.argv[2]).read().split())
+          for d in deployments:
+              if d.get("id") in pre:
+                  continue  # a pre-existing deployment — never this release's
+              print(d.get("id", ""), d.get("meta", {}).get("imageDigest", "") or "-", d.get("status", ""))
+              break
+          PY
+          )"
+            if [ -n "$DEPLOYMENT_ID" ] && [ "$STATUS" = "SUCCESS" ]; then
+              break
+            fi
+            echo "waiting for the worker deployment ${DEPLOYMENT_ID:-pending} to reach SUCCESS (status: ${STATUS:-unknown})…"
+            sleep 15
+          done
+          if [ -z "$DEPLOYMENT_ID" ] || [ "$STATUS" != "SUCCESS" ]; then
+            echo "::error::Could not confirm a SUCCESS Railway deployment for the worker service (last status: ${STATUS:-none}). RELEASE BLOCKED — the deployment identity cannot be recorded."
+            exit 1
+          fi
+          [ "$IMAGE_DIGEST" != "-" ] || IMAGE_DIGEST=unknown
+          # OBSERVED SHA: the running worker process attests its revision in
+          # the deployment's own logs (app.process.starting … commitSha=<sha>).
+          # Retry: log ingestion lags the rollout by a few seconds.
+          OBSERVED_SHA=""
+          for _ in $(seq 1 12); do
+            railway logs "$DEPLOYMENT_ID" --lines 200 > /tmp/worker-logs.txt 2>/dev/null || true
+            OBSERVED_SHA=$(grep 'app\.process\.starting' /tmp/worker-logs.txt \
+              | grep -oE '[0-9a-f]{40}' | head -n 1 || true)
+            if [ -n "$OBSERVED_SHA" ]; then break; fi
+            echo "waiting for the worker boot identity log line…"
+            sleep 10
+          done
+          if [ -z "$OBSERVED_SHA" ]; then
+            echo "::error::The deployed worker did not log its boot identity (app.process.starting with commitSha). The worker's live revision CANNOT be observed — RELEASE BLOCKED (an unobservable deployment is unverifiable)."
+            exit 1
+          fi
+          echo "worker deployment identity: id=$DEPLOYMENT_ID digest=$IMAGE_DIGEST observedSha=$OBSERVED_SHA"
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "observed_sha=$OBSERVED_SHA" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Live backend verification — STRICT PIPELINE stage 3: the deployed backend
   # must report the EXACT release SHA and be fully ready (including the object
   # store) before the frontend may ship. This is the enforcement point of the
-  # release-ordering guarantee.
+  # release-ordering guarantee. The observed API identity + readiness are
+  # emitted as outputs — the machine-readable deployment evidence records
+  # what the LIVE service reported, not what the pipeline intended.
   # ---------------------------------------------------------------------------
   backend-verification:
     name: verify live backend (identity + readiness)
     runs-on: ubuntu-latest
     needs: [railway-worker-deploy]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    outputs:
+      observed_sha: ${{ steps.verify.outputs.observed_sha }}
+      readiness_json: ${{ steps.verify.outputs.readiness_json }}
+      worker_observed_sha: ${{ needs.railway-worker-deploy.outputs.observed_sha }}
     steps:
       - name: Verify the live production backend
+        id: verify
         env:
           RELEASE_SHA: ${{ github.sha }}
+          WORKER_OBSERVED_SHA: ${{ needs.railway-worker-deploy.outputs.observed_sha }}
           PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
         run: |
           set -euo pipefail
           if [ -z "${PRODUCTION_API_URL}" ]; then
             echo "::error::PRODUCTION_API_URL repository variable is not set — cannot verify the live backend contract."
+            exit 1
+          fi
+          # Cross-role revision coordination: within a release the worker is
+          # never ahead of the api role. Both roles were pinned to the
+          # release SHA before their deploys; the worker's OBSERVED boot SHA
+          # must equal the release SHA — a mismatch means the worker is NOT
+          # running this release (unverifiable mixed state → block).
+          if [ -n "${WORKER_OBSERVED_SHA}" ] && [ "${WORKER_OBSERVED_SHA}" != "${RELEASE_SHA}" ]; then
+            echo "::error::Worker revision coordination FAILED: the worker's observed boot SHA (${WORKER_OBSERVED_SHA}) does not equal the release SHA (${RELEASE_SHA}). RELEASE BLOCKED."
             exit 1
           fi
           # Identity: /health must report deployment.commitSha == RELEASE_SHA.
@@ -371,10 +560,12 @@ jobs:
           # ok — postgres, redis, AND the object store. A not-ready backend
           # blocks the release (fail-closed), whatever the failing check is.
           READY=""
+          READY_JSON="{}"
           for _ in $(seq 1 30); do
             READY_CODE=$(curl -sS --max-time 15 -o /tmp/wfos-ready.json -w '%{http_code}' "${PRODUCTION_API_URL}/health/ready" || echo 000)
             if [ "$READY_CODE" = "200" ]; then
               READY=ok
+              READY_JSON=$(cat /tmp/wfos-ready.json)
               break
             fi
             echo "waiting for backend readiness (HTTP $READY_CODE: $(head -c 300 /tmp/wfos-ready.json 2>/dev/null))…"
@@ -386,6 +577,12 @@ jobs:
           fi
           echo "backend readiness verified: all dependency checks ok (postgres, redis, objectStore)"
           cat /tmp/wfos-ready.json
+          echo "observed_sha=$BACKEND_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "readiness_json<<WFOS_READY_EOF"
+            echo "$READY_JSON"
+            echo "WFOS_READY_EOF"
+          } >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Production frontend deployment + live verification — STRICT PIPELINE stage
@@ -436,9 +633,21 @@ jobs:
           URL=$(cat /tmp/prod-url.txt)
           echo "Production deployed: $URL"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
-          # Resolve the deployment ID for the evidence record.
-          ID=$(vercel inspect "$URL" --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || echo "")
-          echo "id=${ID:-unknown}" >> "$GITHUB_OUTPUT"
+          # Resolve the Vercel deployment ID for the identity record — the
+          # deployment-evidence job FAILS on an empty ID, so resolve with a
+          # fallback: `vercel inspect` on the URL, else the project's most
+          # recent production deployment.
+          ID=$(vercel inspect "$URL" --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || true)
+          if [ -z "$ID" ]; then
+            echo "inspect did not yield a dpl_ id — falling back to vercel ls"
+            ID=$(vercel ls ./frontend --prod --token "$VERCEL_TOKEN" 2>/dev/null | grep -oE 'dpl_[A-Za-z0-9]+' | head -n 1 || true)
+          fi
+          if [ -z "$ID" ]; then
+            echo "::error::Could not resolve the Vercel deployment ID for $URL — the deployment identity cannot be recorded."
+            exit 1
+          fi
+          echo "vercel deployment id: $ID"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
 
       - name: Verify the live production deployment
         if: needs.credentials.outputs.has_vercel == 'true'
@@ -455,43 +664,139 @@ jobs:
           ./scripts/verify-cloud-deployment.sh
 
   # ---------------------------------------------------------------------------
-  # Deployment evidence — immutable per-release record (summary + artifact).
+  # Deployment evidence — the authoritative machine-readable per-release
+  # identity record. It needs EVERY strict-pipeline stage DIRECTLY (so every
+  # stage's outputs are readable) and FAILS if the record is incomplete: the
+  # durable cross-provider provenance
+  #
+  #   release commit ↔ Vercel deployment ↔ Railway api deployment
+  #                  ↔ Railway worker deployment
+  #
+  # is recorded from each provider's OWN deployment record (Vercel deployment
+  # ID; Railway deployment UUIDs + image digests) plus what the LIVE services
+  # themselves reported (api /health commitSha; worker boot-log commitSha) —
+  # never from job-log prose. An interrupted release CANNOT produce a partial
+  # evidence record: this job runs only when every stage succeeded.
   # ---------------------------------------------------------------------------
   deployment-evidence:
-    name: deployment evidence
+    name: deployment evidence (cross-provider identity record)
     runs-on: ubuntu-latest
-    # deploy-frontend is the LAST stage of the strict pipeline — needing it
-    # transitively requires every Railway stage and its verification to have
-    # succeeded.
-    needs: [deploy-frontend]
+    needs:
+      - railway-api-deploy
+      - railway-worker-deploy
+      - backend-verification
+      - deploy-frontend
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
-      - name: Record release evidence
+      - name: Record the cross-provider deployment identity
         env:
           RELEASE_SHA: ${{ github.sha }}
-          DEPLOYMENT_URL: ${{ needs.deploy-frontend.outputs.deployment_url }}
-          DEPLOYMENT_ID: ${{ needs.deploy-frontend.outputs.deployment_id }}
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERCEL_URL: ${{ needs.deploy-frontend.outputs.deployment_url }}
+          VERCEL_ID: ${{ needs.deploy-frontend.outputs.deployment_id }}
+          API_DEPLOYMENT_ID: ${{ needs.railway-api-deploy.outputs.deployment_id }}
+          API_IMAGE_DIGEST: ${{ needs.railway-api-deploy.outputs.image_digest }}
+          API_OBSERVED_SHA: ${{ needs.backend-verification.outputs.observed_sha }}
+          WORKER_DEPLOYMENT_ID: ${{ needs.railway-worker-deploy.outputs.deployment_id }}
+          WORKER_IMAGE_DIGEST: ${{ needs.railway-worker-deploy.outputs.image_digest }}
+          WORKER_OBSERVED_SHA: ${{ needs.railway-worker-deploy.outputs.observed_sha }}
+          READINESS_JSON: ${{ needs.backend-verification.outputs.readiness_json }}
           PRODUCTION_API_URL: ${{ vars.PRODUCTION_API_URL }}
         run: |
+          set -euo pipefail
           mkdir -p evidence
-          cat > evidence/deployment-evidence.json <<EOF
-          {
-            "releasedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "releaseCommit": "${RELEASE_SHA}",
-            "frontend": {
-              "deploymentUrl": "${DEPLOYMENT_URL}",
-              "deploymentId": "${DEPLOYMENT_ID}"
-            },
-            "backend": {
-              "productionApiUrl": "${PRODUCTION_API_URL}",
-              "automatedDeploy": "see railway-backend job (visible skip when RAILWAY_TOKEN absent)"
-            },
-            "verification": "see deploy-frontend job (live production verification) and railway-backend job"
+          # WRITE_JSON: compose the record; python re-parses the readiness
+          # body (multi-line) safely instead of string-interpolating it.
+          export RELEASE_SHA RELEASE_REF RELEASE_EVENT RUN_ID RUN_URL \
+                 VERCEL_URL VERCEL_ID API_DEPLOYMENT_ID API_IMAGE_DIGEST \
+                 API_OBSERVED_SHA WORKER_DEPLOYMENT_ID WORKER_IMAGE_DIGEST \
+                 WORKER_OBSERVED_SHA READINESS_JSON PRODUCTION_API_URL
+          python3 - <<'PY' > evidence/deployment-evidence.json
+          import json, os, datetime
+          def env(k): return os.environ.get(k, "")
+          record = {
+              "schemaVersion": 2,
+              "releasedAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "releaseCommit": env("RELEASE_SHA"),
+              "releaseRef": env("RELEASE_REF"),
+              "releaseEvent": env("RELEASE_EVENT"),
+              "run": {"id": env("RUN_ID"), "url": env("RUN_URL")},
+              "frontend": {
+                  "provider": "vercel",
+                  "deploymentUrl": env("VERCEL_URL"),
+                  "deploymentId": env("VERCEL_ID"),
+              },
+              "backend": {
+                  "provider": "railway",
+                  "api": {
+                      "service": "WorkflowOS",
+                      "deploymentId": env("API_DEPLOYMENT_ID"),
+                      "imageDigest": env("API_IMAGE_DIGEST"),
+                      "observedSha": env("API_OBSERVED_SHA"),
+                      "observedVia": "live GET /health deployment.commitSha",
+                      "healthUrl": env("PRODUCTION_API_URL") + "/health",
+                  },
+                  "worker": {
+                      "service": "WorkflowOS-Worker",
+                      "deploymentId": env("WORKER_DEPLOYMENT_ID"),
+                      "imageDigest": env("WORKER_IMAGE_DIGEST"),
+                      "observedSha": env("WORKER_OBSERVED_SHA"),
+                      "observedVia": "live deployment boot log (app.process.starting commitSha) — the worker serves no HTTP by design",
+                  },
+              },
+              "verification": {
+                  "backendIdentity": "live /health deployment.commitSha == releaseCommit",
+                  "backendReadiness": json.loads(env("READINESS_JSON") or "{}"),
+                  "frontendLive": "SPA shell + /api rewrite + authenticated read-only round trip through Vercel -> Railway -> PostgreSQL (deploy-frontend job)",
+              },
           }
-          EOF
+          print(json.dumps(record, indent=2))
+          PY
+          # VALIDATE: the record is AUTHORITATIVE by construction — a missing
+          # or uncoordinated identity FAILS this job (an incomplete record is
+          # worse than none: it would launder an interrupted release into
+          # "evidence").
+          python3 - <<'PY'
+          import json, sys
+          rec = json.load(open("evidence/deployment-evidence.json"))
+          problems = []
+          def required(node, key, label):
+              value = str(node.get(key, "") or "").strip()
+              if not value or value.lower() in ("unknown", "none", "null"):
+                  problems.append(f"{label} is missing/empty")
+          required(rec, "releaseCommit", "releaseCommit")
+          required(rec["frontend"], "deploymentId", "frontend.deploymentId (Vercel)")
+          required(rec["frontend"], "deploymentUrl", "frontend.deploymentUrl")
+          required(rec["backend"]["api"], "deploymentId", "backend.api.deploymentId (Railway)")
+          required(rec["backend"]["api"], "observedSha", "backend.api.observedSha")
+          required(rec["backend"]["worker"], "deploymentId", "backend.worker.deploymentId (Railway)")
+          required(rec["backend"]["worker"], "observedSha", "backend.worker.observedSha")
+          release = rec.get("releaseCommit", "")
+          for role in ("api", "worker"):
+              observed = rec["backend"][role].get("observedSha", "")
+              if observed and release and observed != release:
+                  problems.append(f"backend.{role}.observedSha ({observed}) != releaseCommit ({release}) — cross-provider provenance is UNCOORDINATED")
+          readiness = rec["verification"]["backendReadiness"]
+          if readiness.get("status") != "ready":
+              problems.append(f"backendReadiness is not 'ready': {json.dumps(readiness)[:200]}")
+          else:
+              for dep, check in (readiness.get("checks") or {}).items():
+                  if not check.get("ok"):
+                      problems.append(f"readiness check '{dep}' is not ok")
+          if problems:
+              print("::error::Deployment identity record is INCOMPLETE or UNCOORDINATED — refusing to attest this release:")
+              for p in problems:
+                  print(f"::error::  - {p}")
+              sys.exit(1)
+          print("deployment identity record validated: all provider identities present, observed SHAs == releaseCommit, readiness ready")
+          PY
           cat evidence/deployment-evidence.json >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "_Durable repository evidence: docs/deployment/evidence/ (updated by delivery pull requests)._"
+          echo "_This artifact is the machine-readable cross-provider identity record (schemaVersion 2); the run URL ties it to the exact pipeline execution._"
 
       - name: Upload evidence artifact
         uses: actions/upload-artifact@v4

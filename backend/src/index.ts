@@ -21,6 +21,27 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const app = await buildApp(config, { startWorker: config.role !== 'api' });
 
+  // DEPLOYMENT IDENTITY (boot log — ALL roles): the exact revision this
+  // process runs, emitted before any role-specific work so it appears at the
+  // head of every deployment's logs. The api role ALSO reports it through
+  // GET /health; the worker role serves no HTTP BY DESIGN, so its live
+  // deployment logs are the ONLY place the running process itself attests
+  // its revision — the release pipeline reads this line to record the
+  // worker's OBSERVED SHA in the machine-readable deployment evidence
+  // (never the merely-configured variable value).
+  const bootCommitSha =
+    process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.WORKFLOWOS_COMMIT_SHA;
+  app.deps.logger.info('app.process.starting', {
+    role: config.role,
+    ...(bootCommitSha ? { commitSha: bootCommitSha } : {}),
+    ...(process.env.RAILWAY_ENVIRONMENT_NAME
+      ? { environmentName: process.env.RAILWAY_ENVIRONMENT_NAME }
+      : {}),
+    ...(process.env.RAILWAY_SERVICE_NAME
+      ? { serviceName: process.env.RAILWAY_SERVICE_NAME }
+      : {}),
+  });
+
   let server: Awaited<ReturnType<typeof buildServer>> | undefined;
 
   if (config.role === 'api' || config.role === 'all') {

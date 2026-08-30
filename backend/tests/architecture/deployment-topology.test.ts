@@ -277,6 +277,7 @@ interface WorkflowJob {
   needs?: string[];
   if?: string;
   steps?: WorkflowStep[];
+  outputs?: Record<string, string>;
 }
 interface ReleaseWorkflow {
   jobs: Record<string, WorkflowJob>;
@@ -414,6 +415,242 @@ describe('DEPLOYMENT HARDENING — release DAG enforcement (REQUEST CHANGES reme
     expect(run).toMatch(/health\/ready/);
     expect(run).toMatch(/READY_CODE" = "200"/);
     expect(run).toMatch(/RELEASE BLOCKED/i);
+  });
+});
+
+// ===========================================================================
+// RD-06 / RD-07 / RD-08 — deployment identity records + release recovery
+// (REQUEST CHANGES remediation round 2, 2026-08-29)
+//
+// The architect verdict found the deployment evidence was NOT authoritative:
+// the backend was recorded as "see railway-backend job…" (job-log prose)
+// instead of actual provider deployment identities, and no durable
+// cross-provider provenance tied release commit ↔ Vercel ↔ Railway api ↔
+// Railway worker. These checks parse the workflow STRUCTURE and the process
+// entrypoint, and discriminate the pre-remediation shapes.
+// ===========================================================================
+
+/** The evidence job must directly need every stage whose outputs it records. */
+const EVIDENCE_REQUIRED_NEEDS = [
+  'railway-api-deploy',
+  'railway-worker-deploy',
+  'backend-verification',
+  'deploy-frontend',
+] as const;
+
+function jobRun(jobs: Record<string, WorkflowJob>, job: string): string {
+  return (jobs[job]?.steps ?? []).map((s) => s.run ?? '').join('\n');
+}
+
+function evidenceIdentityViolations(jobs: Record<string, WorkflowJob>): string[] {
+  const violations: string[] = [];
+  const evidence = jobs['deployment-evidence'];
+  if (!evidence) return ['missing job: deployment-evidence'];
+  const needs = evidence.needs ?? [];
+  for (const stage of EVIDENCE_REQUIRED_NEEDS) {
+    if (!needs.includes(stage)) {
+      violations.push(
+        `deployment-evidence must need ${stage} DIRECTLY (job outputs are only readable through a direct need — and an interrupted ${stage} must skip the evidence entirely)`,
+      );
+    }
+  }
+  const run = jobRun(jobs, 'deployment-evidence');
+  // The record must carry the actual provider identities + observed SHAs…
+  for (const field of ['releaseCommit', 'deploymentId', 'imageDigest', 'observedSha', 'schemaVersion']) {
+    if (!run.includes(field)) {
+      violations.push(`the evidence JSON must record ${field} (machine-readable identity, not prose)`);
+    }
+  }
+  // …never a prose pointer at a job log (the pre-remediation shape).
+  if (/automatedDeploy|see .*job|see .*log/i.test(run)) {
+    violations.push(
+      'the evidence must record ACTUAL deployment identities — "see <job>…" prose pointers are a rejecting violation',
+    );
+  }
+  // The record must be VALIDATED: an incomplete/uncoordinated identity
+  // FAILS the evidence job instead of attesting the release.
+  if (!/sys\.exit\(1\)/.test(run) || !/::error::/.test(run)) {
+    violations.push('the evidence job must FAIL (exit 1 + ::error::) when the identity record is incomplete or uncoordinated');
+  }
+  if (!/observedSha[^=]*!=|!= .*releaseCommit/.test(run)) {
+    violations.push('the evidence job must verify every observedSha equals the releaseCommit (cross-provider coordination)');
+  }
+  return violations;
+}
+
+function identityCaptureViolations(jobs: Record<string, WorkflowJob>): string[] {
+  const violations: string[] = [];
+  for (const job of ['railway-api-deploy', 'railway-worker-deploy'] as const) {
+    const j = jobs[job];
+    if (!j) {
+      violations.push(`missing job: ${job}`);
+      continue;
+    }
+    const run = jobRun(jobs, job);
+    if (!run.includes('railway deployment list')) {
+      violations.push(`${job} must read Railway's OWN deployment record (railway deployment list --json) — the deployment identity is Railway's, not the pipeline's`);
+    }
+    if (!/"SUCCESS"|'SUCCESS'/.test(run)) {
+      violations.push(`${job} must poll until the release's deployment is SUCCESS before recording its identity`);
+    }
+    if (!run.includes('pre-deployment-ids')) {
+      violations.push(`${job} must identify the new deployment by set-difference from the pre-deploy snapshot (no clock assumptions)`);
+    }
+    if (!Object.keys(j.outputs ?? {}).includes('deployment_id')) {
+      violations.push(`${job} must emit a deployment_id output for the evidence record`);
+    }
+  }
+  // Worker-specific: the live revision observed from the boot log (the
+  // worker serves no HTTP by design).
+  const worker = jobs['railway-worker-deploy'];
+  if (worker) {
+    const run = jobRun(jobs, 'railway-worker-deploy');
+    if (!run.includes('app.process.starting')) {
+      violations.push('the worker stage must observe the live boot identity (app.process.starting commitSha) from the deployed worker logs');
+    }
+    if (!Object.keys(worker.outputs ?? {}).includes('observed_sha')) {
+      violations.push('the worker stage must emit an observed_sha output (what the RUNNING process attests, not the configured variable)');
+    }
+  }
+  // Cross-role revision coordination at the enforcement point.
+  const verifyRun = jobRun(jobs, 'backend-verification');
+  if (!/WORKER_OBSERVED_SHA.*!=.*RELEASE_SHA/s.test(verifyRun)) {
+    violations.push('backend-verification must enforce api/worker revision coordination (worker observed boot SHA == release SHA)');
+  }
+  return violations;
+}
+
+function bootIdentityViolations(entrySource: string): string[] {
+  const violations: string[] = [];
+  const mainStart = entrySource.indexOf('async function main');
+  const roleBranch = entrySource.indexOf("config.role === 'api'");
+  const bootLog = entrySource.indexOf('app.process.starting');
+  if (mainStart < 0 || roleBranch < 0) return ['entrypoint shape unrecognized (main/role-branch not found)'];
+  if (bootLog < 0) {
+    violations.push('the entrypoint must log a boot identity line (app.process.starting)');
+  } else if (bootLog < mainStart || bootLog > roleBranch) {
+    violations.push('the boot identity log must run in main() BEFORE the role branch — the worker role must log it too (it serves no HTTP)');
+  }
+  const bootSection = entrySource.slice(Math.max(0, bootLog - 900), bootLog + 300);
+  if (!bootSection.includes('RAILWAY_GIT_COMMIT_SHA') || !bootSection.includes('WORKFLOWOS_COMMIT_SHA')) {
+    violations.push('the boot identity must derive commitSha from RAILWAY_GIT_COMMIT_SHA ?? WORKFLOWOS_COMMIT_SHA');
+  }
+  if (!/commitSha/.test(bootSection)) {
+    violations.push('the boot identity log must include the commitSha field');
+  }
+  return violations;
+}
+
+describe('DEPLOYMENT HARDENING — deployment identity records (REQUEST CHANGES remediation round 2)', () => {
+  it('RD-06: deployment-evidence records the machine-readable cross-provider identity and validates it', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    const violations = evidenceIdentityViolations(jobs);
+    expect(violations, violations.join('; ')).toEqual([]);
+  });
+
+  it('RD-06 (discrimination): the pre-remediation prose-pointer evidence shape is rejected', () => {
+    // The architect's finding: the backend was recorded as
+    // "automatedDeploy": "see railway-backend job…" and the job needed only
+    // deploy-frontend — no provider identity, no observed SHAs, and an
+    // interrupted Railway stage could not have stopped the record.
+    const oldShape: Record<string, WorkflowJob> = {
+      'railway-api-deploy': {},
+      'railway-worker-deploy': {},
+      'backend-verification': {},
+      'deploy-frontend': {},
+      'deployment-evidence': {
+        needs: ['deploy-frontend'],
+        steps: [
+          {
+            run: 'cat > evidence/deployment-evidence.json <<EOF\n' +
+              '{"backend": {"automatedDeploy": "see railway-backend job (visible skip when RAILWAY_TOKEN absent)"},\n' +
+              ' "verification": "see deploy-frontend job (live production verification)"}\n' +
+              'EOF',
+          },
+        ],
+      },
+    };
+    const violations = evidenceIdentityViolations(oldShape);
+    expect(violations.length, 'the prose-pointer shape MUST be rejected').toBeGreaterThan(0);
+    expect(violations.join('; ')).toMatch(/need railway-api-deploy DIRECTLY/);
+    expect(violations.join('; ')).toMatch(/automatedDeploy|see .*job/);
+    expect(violations.join('; ')).toMatch(/must FAIL \(exit 1/);
+  });
+
+  it('RD-07: the deploy stages capture authoritative Railway deployment identities (and the worker OBSERVED SHA)', () => {
+    const jobs = loadReleaseWorkflow().jobs;
+    const violations = identityCaptureViolations(jobs);
+    expect(violations, violations.join('; ')).toEqual([]);
+  });
+
+  it('RD-07 (discrimination): a deploy stage without identity capture is rejected', () => {
+    // The pre-remediation stage: `railway up` alone, deployment identity
+    // left to job-log prose.
+    const oldShape: Record<string, WorkflowJob> = {
+      'railway-api-deploy': {
+        steps: [{ run: 'railway up --ci --service "WorkflowOS"' }],
+      },
+      'railway-worker-deploy': {
+        steps: [{ run: 'railway up --ci --service "WorkflowOS-Worker"' }],
+      },
+      'backend-verification': { steps: [{ run: 'curl /health' }] },
+    };
+    const violations = identityCaptureViolations(oldShape);
+    expect(violations.length, 'the identity-less deploy shape MUST be rejected').toBeGreaterThan(0);
+    expect(violations.join('; ')).toMatch(/railway deployment list/);
+    expect(violations.join('; ')).toMatch(/deployment_id output/);
+    expect(violations.join('; ')).toMatch(/app\.process\.starting/);
+    expect(violations.join('; ')).toMatch(/observed_sha output/);
+    expect(violations.join('; ')).toMatch(/revision coordination/);
+  });
+
+  it('RD-08: the release recovery protocol is documented and structurally enforced', () => {
+    // (a) the workflow documents the four failure modes…
+    const workflow = read('.github/workflows/release.yml');
+    expect(workflow).toMatch(/RELEASE RECOVERY PROTOCOL/);
+    for (const mode of [/API deploy fails/, /canceled mid-release/, /Restart mid-release/, /different revisions/]) {
+      expect(workflow, `the recovery protocol must cover: ${mode}`).toMatch(mode);
+    }
+    // (b) …and the operator doc carries the same protocol…
+    const production = read('docs/deployment/production.md');
+    expect(production).toMatch(/Release recovery protocol/i);
+    expect(production).toMatch(/interrupted releases & mixed revisions|interrupted releases and mixed revisions/i);
+    // (c) …while the STRUCTURAL enforcement holds: the evidence job needs
+    // every stage directly, so a failed/canceled stage (an interrupted
+    // release) can never produce a partial identity record.
+    const jobs = loadReleaseWorkflow().jobs;
+    const needs = jobs['deployment-evidence']?.needs ?? [];
+    for (const stage of EVIDENCE_REQUIRED_NEEDS) {
+      expect(needs, `an interrupted ${stage} must skip deployment-evidence entirely`).toContain(stage);
+    }
+    // (d) the object-storage durability contract is explicit (MinIO +
+    // volume = the persistence authority), with the restart drill.
+    expect(production).toMatch(/Durability contract/);
+    expect(production).toMatch(/persistence drill|persistence\/restart drill/i);
+    expect(production).toMatch(/railway redeploy --service MinIO/);
+  });
+
+  it('DH-11: the process entrypoint logs the boot deployment identity for ALL roles (the worker has no HTTP surface)', () => {
+    const src = read('backend/src/index.ts');
+    const violations = bootIdentityViolations(src);
+    expect(violations, violations.join('; ')).toEqual([]);
+  });
+
+  it('DH-11 (discrimination): a boot identity log placed INSIDE the api branch (worker-blind) is rejected', () => {
+    // The worker serves no HTTP — an identity log emitted only on the api
+    // path leaves the worker's live revision unobservable.
+    const workerBlind = [
+      'async function main(): Promise<void> {',
+      '  const config = loadConfig();',
+      '  const app = await buildApp(config, { startWorker: config.role !== "api" });',
+      "  if (config.role === 'api' || config.role === 'all') {",
+      '    app.deps.logger.info("app.process.starting", { commitSha: process.env.WORKFLOWOS_COMMIT_SHA });',
+      '  }',
+      '}',
+    ].join('\n');
+    const violations = bootIdentityViolations(workerBlind);
+    expect(violations.length, 'the worker-blind placement MUST be rejected').toBeGreaterThan(0);
+    expect(violations.join('; ')).toMatch(/BEFORE the role branch/);
   });
 });
 

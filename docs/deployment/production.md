@@ -113,6 +113,32 @@ OBJECT_STORAGE_SECRET_ACCESS_KEY=<MINIO_ROOT_PASSWORD>
   `OBJECT_STORAGE_*` credentials together, then redeploy).
 - The bucket stays private; the service has NO public domain.
 
+**Durability contract (explicit architectural decision)**: production object
+storage is `MinIO + the Railway persistent volume + private networking`. The
+volume is the persistence authority — objects written before a MinIO
+restart/redeploy MUST still be readable after it. This is NOT the same as
+readiness ("can put/get succeed now?"); it is the property that previously
+persisted verification evidence survives the operational failure modes the
+deployment is expected to tolerate. Verify it with the persistence drill:
+
+```bash
+# 1. Write a >8KiB specification version through the REAL application
+#    boundary (large bodies go to object storage — DATA3-AC-02):
+#    POST /projects/<id>/specifications/<specId>/versions  (content > 8KiB)
+# 2. Read it back: GET /projects/<id>/specifications/<specId>/versions/latest
+#    → content round-trips from MinIO (baseline put/get proof).
+# 3. Restart the object-storage authority:
+#    railway redeploy --service MinIO -y
+# 4. Read it back AGAIN after the redeploy completes: the content must be
+#    IDENTICAL (digest match) and /health/ready must report objectStore ok.
+```
+
+The drill was executed live on 2026-08-29 (see the deployment evidence
+addendum): a >8KiB specification version written before the redeploy was
+read back byte-identical after the MinIO container restarted, and readiness
+returned to all-green — persistence across the restart failure mode, proven
+through the application's own ObjectStore boundary, not just the S3 API.
+
 **Swapping to Cloudflare R2** (unchanged procedure, kept for reference —
 use when a real R2 account exists):
 
@@ -348,24 +374,105 @@ destructive schema changes.
   2. **railway-api-deploy** — deploys the api role (`railway up --service
      WorkflowOS`); schema migrations run on api-role startup; sets
      `WORKFLOWOS_COMMIT_SHA=<release sha>` on both services so `/health`
-     reports the exact release.
+     reports the exact release. The stage then reads Railway's OWN
+     deployment record (`railway deployment list --json`), polls until the
+     release's deployment is `SUCCESS`, and emits the authoritative
+     deployment identity (deployment UUID + image digest) for the evidence
+     record.
   3. **railway-worker-deploy** — deploys the worker role (`railway up
-     --service WorkflowOS-Worker`).
+     --service WorkflowOS-Worker`), captures its deployment identity the
+     same way, AND observes the worker's live revision from the deployment's
+     boot log (`app.process.starting … commitSha=<sha>` — the worker serves
+     no HTTP by design, so its running process is the authority on what it
+     executes). An unobservable worker identity BLOCKS the release.
   4. **backend-verification** — the LIVE backend must report the exact
      release SHA (`/health deployment.commitSha`) AND be fully ready
-     (`/health/ready` 200 — postgres, redis, objectStore ALL ok).
+     (`/health/ready` 200 — postgres, redis, objectStore ALL ok), AND the
+     worker's observed boot SHA must equal the release SHA (api/worker
+     revision coordination — a mixed, uncoordinated backend blocks the
+     frontend).
   5. **deploy-frontend** — `vercel deploy --prod` + live production
      verification (`scripts/verify-cloud-deployment.sh`, `MODE=production`,
      `REQUIRE_READY=1`: SPA shell, assets, deep links, `/api` rewrite,
      backend liveness/readiness, authenticated read-only call through
-     Browser → Vercel → Railway → PostgreSQL).
-  6. **deployment-evidence** — per-release evidence record (job summary +
-     artifact).
+     Browser → Vercel → Railway → PostgreSQL). Resolves the Vercel
+     deployment ID (`dpl_…`) for the identity record.
+  6. **deployment-evidence** — composes and VALIDATES the machine-readable
+     cross-provider identity record (schemaVersion 2; see below); the job
+     FAILS if any provider identity is missing or the observed SHAs are not
+     coordinated. It needs every pipeline stage DIRECTLY, so an interrupted
+     release can never produce a partial record.
 
   The DAG structure itself is machine-checked in CI
   (`backend/tests/architecture/deployment-topology.test.ts`, checks
-  RD-01..RD-05): the pre-remediation concurrent topology and the
-  visible-skip-instead-of-fail credential handling are REJECTING violations.
+  RD-01..RD-08): the pre-remediation concurrent topology, the
+  visible-skip-instead-of-fail credential handling, and the
+  prose-instead-of-identity evidence shape are REJECTING violations.
+
+### Deployment identity & evidence (machine-readable)
+
+Every release leaves an explicit, machine-readable identity record tying the
+durable cross-provider provenance together:
+
+```
+release commit ↔ Vercel deployment (dpl_…) ↔ Railway api deployment (UUID)
+              ↔ Railway worker deployment (UUID)
+```
+
+The record (`evidence/deployment-evidence.json`, uploaded as a 90-day run
+artifact + job summary) carries, per provider: the deployment ID from the
+provider's OWN deployment record, the image digest (Railway), the URL
+(Vercel), and — critically — what the LIVE SERVICES THEMSELVES reported:
+the api role's SHA from `GET /health`, the worker role's SHA from its boot
+log. The evidence job validates that every identity is present and every
+observed SHA equals the release commit before attesting the release: an
+incomplete or uncoordinated record FAILS the job ("an unobservable
+deployment is unverifiable"). Railway CLI deployments are not
+Git-connected — that is exactly why the evidence records Railway's
+deployment UUIDs and the SHAs observed from the running services, never a
+claim from the pipeline's own logs.
+
+### Release recovery protocol (interrupted releases & mixed revisions)
+
+The complete architecture is `DB/schema → api → worker → frontend`, and the
+strict pipeline makes every interruption recoverable by RE-RUNNING the
+workflow — all stages are idempotent (the same SHA is re-pinned, the same
+image is redeployed, verification re-observes the live services), and
+Railway deployments are atomic (a new deployment takes over only after its
+build+start succeed, so an interrupted stage's service keeps its previous
+healthy deployment). The failure modes:
+
+1. **API deploy fails** — nothing ships: every later stage is skipped via
+   the needs-chain, production stays fully on the previous release, the
+   frontend is never exposed to an unverified backend. Fix and re-run.
+2. **Worker deploy fails / the run is canceled mid-release** — the interim
+   state is `api(NEW) + worker(OLD)`. This state is safe and transient: the
+   worker is never AHEAD of the api role (the api deploy — which owns schema
+   migrations — always runs first), and the release is INCOMPLETE until the
+   worker's observed boot SHA equals the release SHA (backend-verification
+   enforces this before the frontend can ship). Re-run to converge both
+   roles onto the release SHA. To ABANDON the release instead, roll the api
+   service back to its previous deployment (`railway redeploy` of the prior
+   deployment ID — recorded in the last evidence artifact) so both roles
+   return to the same revision.
+3. **Restart mid-release** (provider/runner restart during a release) —
+   same as (2): the interrupted stage's service keeps its previous healthy
+   deployment; the re-run completes the interrupted stage atomically.
+4. **api/worker temporarily on different revisions** — observable, bounded,
+   and one-directional (worker never newer than api within a release). The
+   release protocol's invariant: a release is COMPLETE only when the
+   deployment evidence records BOTH roles' observed SHAs equal to the
+   release commit AND the frontend deployment — a mixed state can never be
+   attested as released.
+
+The protocol is enforced structurally, not just documented: the
+deployment-evidence job needs every pipeline stage DIRECTLY (any failed or
+canceled stage skips it entirely — an interrupted release cannot produce a
+partial record that would launder it into "evidence"), and backend-verification
+blocks the frontend on api/worker SHA coordination. The interrupted-release
+recovery drill (cancel mid-worker-deploy → observe the mixed state → re-run
+→ converge + attest) was executed live on 2026-08-29 — see the deployment
+evidence addendum.
 
 `deploy.yml` remains the validation CI for the frozen LOCAL docker-compose
 topology — it never deploys to cloud providers and is not a second release
