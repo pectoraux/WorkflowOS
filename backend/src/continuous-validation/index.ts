@@ -72,6 +72,15 @@ export {
   finalizeValidationRun,
 } from './internal/outcome.js';
 export type { FinalizeValidationRunInput } from './internal/outcome.js';
+export {
+  // Task 7 — evidence mapping into the EXISTING /verification authority
+  mapValidationOutcomeToVerification,
+  outcomeToEvidenceResult,
+} from './internal/evidence-mapping.js';
+export type {
+  ValidationEvidenceReference,
+  MapValidationOutcomeToVerificationInput,
+} from './internal/evidence-mapping.js';
 export type {
   EffectPolicy,
   ValidationMode,

@@ -18684,3 +18684,146 @@ describe('WORK-050 invariants — Unified Execution UX (consumer, never authorit
     expect(page).toMatch(/health-incomplete/);
   });
 });
+
+// ============================================================================
+// WORK-064 — Continuous Product Validation (the domain/model authority)
+// ============================================================================
+
+describe('WORK-064 invariants — Continuous Product Validation (the domain/model authority)', () => {
+  const CV_DIR = join(BACKEND_ROOT, 'src', 'continuous-validation');
+  const CV_INTERNAL = join(CV_DIR, 'internal');
+  const CV_TYPES = join(CV_DIR, 'types.ts');
+  const CV_BARREL = join(CV_DIR, 'index.ts');
+  const CV_EFFECT_POLICY = join(CV_INTERNAL, 'effect-policy.ts');
+  const CV_TEST_IDENTITY = join(CV_INTERNAL, 'test-identity.ts');
+  const CV_RUN_ADMISSION = join(CV_INTERNAL, 'run-admission.ts');
+  const CV_OBSERVATION = join(CV_INTERNAL, 'observation.ts');
+  const CV_OUTCOME = join(CV_INTERNAL, 'outcome.ts');
+  const CV_EVIDENCE_MAPPING = join(CV_INTERNAL, 'evidence-mapping.ts');
+  const MIGRATIONS_DIR = join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations');
+
+  function stripCodeComments(src: string): string {
+    return src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  }
+
+  function readCvFiles(): { path: string; src: string }[] {
+    if (!existsSync(CV_DIR)) return [];
+    const out: { path: string; src: string }[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const stat = statSync(full);
+        if (stat.isDirectory()) walk(full);
+        else if (entry.endsWith('.ts')) {
+          out.push({ path: full, src: readFileSync(full, 'utf8') });
+        }
+      }
+    };
+    walk(CV_DIR);
+    return out;
+  }
+
+  // --- (a) the domain exists + is NOT a frozen module -----------------------
+
+  it('the continuous-validation domain exists at src/continuous-validation/ (index.ts + types.ts + internal/) and is NOT an 18th frozen module', () => {
+    expect(existsSync(CV_DIR), 'src/continuous-validation/ must exist').toBe(true);
+    expect(existsSync(CV_BARREL), 'src/continuous-validation/index.ts must exist').toBe(true);
+    expect(existsSync(CV_TYPES), 'src/continuous-validation/types.ts must exist').toBe(true);
+    expect(existsSync(CV_INTERNAL), 'src/continuous-validation/internal/ must exist').toBe(true);
+    for (const file of [
+      CV_EFFECT_POLICY,
+      CV_TEST_IDENTITY,
+      CV_RUN_ADMISSION,
+      CV_OBSERVATION,
+      CV_OUTCOME,
+      CV_EVIDENCE_MAPPING,
+    ]) {
+      expect(existsSync(file), `${relative(BACKEND_ROOT, file)} must exist`).toBe(true);
+    }
+    expect(existsSync(join(MODULES_DIR, 'continuous-validation'))).toBe(false);
+    expect(FROZEN_MODULE_NAMES, 'continuous-validation must not be a frozen module').not.toContain(
+      '/continuous-validation',
+    );
+    expect(FROZEN_MODULE_NAMES, 'the frozen module set is unchanged (17)').toHaveLength(17);
+  });
+
+  // --- (b) consumes ONLY the existing authorities through their barrels -----
+
+  it('the domain imports only allowed surfaces: @platform/*, @modules/auth, @modules/verification (barrels only — never another module internal/)', () => {
+    const files = readCvFiles();
+    expect(files.length).toBeGreaterThan(0);
+    for (const { path, src } of files) {
+      const stripped = stripCodeComments(src);
+      const importLines = stripped.match(/from\s+'[^']+'/g) ?? [];
+      for (const importLine of importLines) {
+        const target = importLine.replace(/^from\s+'/, '').replace(/'$/, '');
+        if (target.startsWith('.')) continue; // intra-domain relative imports
+        expect(
+          target.startsWith('@platform/') ||
+            target.startsWith('@modules/auth/index.js') ||
+            target.startsWith('@modules/verification/index.js') ||
+            target.startsWith('node:'),
+          `${relative(BACKEND_ROOT, path)} imports forbidden surface '${target}' (allowed: @platform/*, @modules/auth barrel, @modules/verification barrel, node:*)`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  // --- (c) NO second evidence authority --------------------------------------
+
+  it('WORK-064 creates NO parallel evidence store: the evidence mapping goes through the EXISTING /verification authority', () => {
+    const mappingSrc = stripCodeComments(readFileSync(CV_EVIDENCE_MAPPING, 'utf8'));
+    // The adapter calls the existing authority's public boundary:
+    expect(mappingSrc).toMatch(/VerificationService/);
+    expect(mappingSrc).toMatch(/attachEvidence/);
+    // ...and takes the authority as a PARAMETER (injected — never constructs
+    // a repository/store of its own):
+    expect(mappingSrc).not.toMatch(/new\s+Pg\w*Evidence/i);
+    expect(mappingSrc).not.toMatch(/INSERT\s+INTO/i);
+    expect(mappingSrc).not.toMatch(/class\s+\w*Evidence\w*Repository/i);
+    // The reference type points at the existing authority's row:
+    const mappingTypes = readFileSync(CV_EVIDENCE_MAPPING, 'utf8');
+    expect(mappingTypes).toMatch(/verificationEvidenceId/);
+  });
+
+  it('no migration or table creates a validation evidence/journey/run store (NO schema migration is authorized by WORK-064)', () => {
+    const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
+    // The migration set is unchanged from the pre-WORK-064 baseline (58):
+    expect(migrationFiles).toHaveLength(58);
+    for (const name of migrationFiles) {
+      const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
+      expect(
+        /validation_journey|validation_run|validation_evidence|validation_observation|continuous_validation/i.test(
+          sql,
+        ),
+        `migration ${name} must not create a WORK-064 validation store`,
+      ).toBe(false);
+    }
+  });
+
+  it('the module declares no evidence/journey/run REPOSITORY (persistence stays behind the port; the in-memory adapter is the repository boundary)', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/class\s+\w*(Evidence|Journey|Run|Observation)\w*Repository/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not declare a persistence repository class`,
+      ).toBe(true);
+      expect(
+        !stripped.includes('DbQuery') && !stripped.includes('db.query'),
+        `${relative(BACKEND_ROOT, path)} must not query a database directly`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (d) no secrets in the validation domain --------------------------------
+
+  it('the domain persists no credentials/tokens/cookies (metadata only, enforced by the vocabulary)', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/(apiKey|api_key|rawKey|password|cookie|bearerToken|secretRef)\s*:/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry credential fields`,
+      ).toBe(true);
+    }
+  });
+});
