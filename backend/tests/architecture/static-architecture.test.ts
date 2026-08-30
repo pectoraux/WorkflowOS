@@ -18831,4 +18831,147 @@ describe('WORK-064 invariants — Continuous Product Validation (the domain/mode
       ).toBe(true);
     }
   });
+
+  // --- (e) no second identity authority (Task 10, invariant 3+9) -------------
+
+  it('the domain owns NO identity issuance: it binds already-authenticated principals and mints nothing', () => {
+    const testIdentitySrc = stripCodeComments(readFileSync(CV_TEST_IDENTITY, 'utf8'));
+    // The binding validates + records an EXISTING authority result:
+    expect(testIdentitySrc).toMatch(/AuthenticatedPrincipal/);
+    // There is NO issuance surface anywhere in the domain:
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/\b(provisionApiKey|mintToken|issueCredential|createUser|upsertUser|registerUser|impersonate)\b/.test(
+          stripped,
+        ),
+        `${relative(BACKEND_ROOT, path)} must not carry an identity-issuance surface`,
+      ).toBe(true);
+      // Never reaches into the auth module's internals (barrel only):
+      expect(
+        !/@modules\/auth\/internal/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import /auth internals`,
+      ).toBe(true);
+    }
+    // The machine-credential provider set is the CLOSED existing set:
+    const testIdentityRaw = readFileSync(CV_TEST_IDENTITY, 'utf8');
+    expect(testIdentityRaw).toMatch(/SYNTHETIC_IDENTITY_PROVIDERS[^=]*=\s*\['apikey'\]/);
+  });
+
+  // --- (f) no second verification authority (Task 10, invariant 7) ------------
+
+  it('the domain owns NO formal evidence evaluation: no criterion mapping, no evaluation, no /requirements touch', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/evaluateCriterion|mapEvidenceToCriterion|persistEvaluations|CriterionEvidenceMapping/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry verification-authority operations`,
+      ).toBe(true);
+      expect(
+        !/@modules\/requirements/.test(stripped) && !/@modules\/work-items/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the requirements/work-items authorities`,
+      ).toBe(true);
+      expect(
+        !/@modules\/verification\/internal/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import /verification internals (barrel only)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (g) no code mutation, no PR merge/approval, no workflow mutation -------
+
+  it('the domain mutates no code, merges/approves no PRs, and transitions no workflow state', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/simple-git|child_process|execSync|spawnSync|writeFileSync|appendFileSync|rmSync|mkdirSync/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not mutate the filesystem or spawn processes`,
+      ).toBe(true);
+      expect(
+        !/@modules\/github/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the /github authority (no PR operations)`,
+      ).toBe(true);
+      expect(
+        !/@modules\/workflows/.test(stripped) && !/@modules\/reviews/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not import the workflow/review authorities`,
+      ).toBe(true);
+      expect(
+        !/(mergePullRequest|approveReview|transitionWorkflow|createPullRequest)\s*\(/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry PR/workflow mutation operations`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (h) no autonomous scheduling (WORK-066 owns triggers) ------------------
+
+  it('the domain schedules NOTHING: no timers, no queues, no cron, no autonomous loops', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/setInterval|setTimeout|cron|schedule\w*Job|enqueue\w*Job|WorkerHost/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not schedule autonomously (WORK-066 owns triggers)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (i) no signal/Work-item creation, no progressive release (WORK-067..070) --
+
+  it('the domain creates NO Engineering Signals, NO Work Items, and makes NO progressive-release decisions', () => {
+    for (const { path, src } of readCvFiles()) {
+      const stripped = stripCodeComments(src);
+      expect(
+        !/(createEngineeringSignal|emitSignal|createWorkItem|proposeWorkItem)\s*\(/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not create signals or Work Items (WORK-067/068 own those flows)`,
+      ).toBe(true);
+      expect(
+        !/(canaryRollout|progressiveRelease|haltRollout|continueRollout|recoverRollout)/.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry progressive-release decisions (WORK-069)`,
+      ).toBe(true);
+      // No browser-agent runtime (WORK-065) anywhere in the domain:
+      expect(
+        !/(puppeteer|playwright|chromium|launchBrowser|browserAgent)\b/i.test(stripped),
+        `${relative(BACKEND_ROOT, path)} must not carry browser-agent runtime (WORK-065)`,
+      ).toBe(true);
+    }
+  });
+
+  // --- (j) the effect-policy discrimination is pinned in source (Task 10 S2) ----
+
+  it('the fail-closed effect-policy matrix is pinned: production FORBIDDEN rejection, isolated-tenant requirement, no escalation', () => {
+    const policySrc = stripCodeComments(readFileSync(CV_EFFECT_POLICY, 'utf8'));
+    // FORBIDDEN never admits outside PRE_MERGE behind the approved safe mechanism:
+    expect(policySrc).toMatch(/mode !== 'PRE_MERGE'/);
+    expect(policySrc).toMatch(/approvedSafeMechanism !== true/);
+    // The explicit capability envelope is the ONLY admission truth:
+    expect(policySrc).toMatch(/acceptedPolicies\.includes\(policy\)/);
+    // ISOLATED_MUTATION requires the tenant binding:
+    expect(policySrc).toMatch(/policy === 'ISOLATED_MUTATION'/);
+    // The admission test pins the discriminations at runtime (journey-admission +
+    // effect-policy suites); here we pin the vocabulary and the mode binding:
+    const typesSrc = stripCodeComments(readFileSync(CV_TYPES, 'utf8'));
+    expect(typesSrc).toMatch(/'READ_ONLY',\s*'SAFE_MUTATION',\s*'ISOLATED_MUTATION',\s*'FORBIDDEN'/);
+  });
+
+  // --- (k) the provenance chain is pinned (Task 10 S3) ---------------------------
+
+  it('the complete observation → outcome → verification-reference provenance chain is pinned in the contracts', () => {
+    const typesSrc = stripCodeComments(readFileSync(CV_TYPES, 'utf8'));
+    // Observation-level provenance:
+    expect(typesSrc).toMatch(/readonly runId: string;/);
+    expect(typesSrc).toMatch(/readonly journeyId: string;/);
+    expect(typesSrc).toMatch(/readonly stepId: string;/);
+    expect(typesSrc).toMatch(/readonly environmentId: string;/);
+    expect(typesSrc).toMatch(/readonly observedAt: string;/);
+    // Run-level outcome provenance:
+    expect(typesSrc).toMatch(/interface RunProvenance/);
+    // Failure records retain the observation provenance:
+    expect(typesSrc).toMatch(/interface ValidationFailure/);
+    expect(typesSrc).toMatch(/readonly actual: ValidationObservation \| null;/);
+    // The evidence reference binds back to the existing verification authority:
+    const mappingSrc = stripCodeComments(readFileSync(CV_EVIDENCE_MAPPING, 'utf8'));
+    expect(mappingSrc).toMatch(/verificationEvidenceId: string/);
+    expect(mappingSrc).toMatch(/validationRunId: string/);
+    expect(mappingSrc).toMatch(/validationJourneyId: string/);
+    expect(mappingSrc).toMatch(/readonly observationIds: readonly string\[\]/);
+  });
 });
