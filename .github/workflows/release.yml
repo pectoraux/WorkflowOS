@@ -480,10 +480,13 @@ jobs:
           [ "$IMAGE_DIGEST" != "-" ] || IMAGE_DIGEST=unknown
           # OBSERVED SHA: the running worker process attests its revision in
           # the deployment's own logs (app.process.starting … commitSha=<sha>).
-          # Retry: log ingestion lags the rollout by a few seconds.
+          # Retry: log ingestion lags the rollout by a few seconds. (--service
+          # is REQUIRED even with the deployment ID — the logs command
+          # resolves the service context first; without it the fetch fails
+          # with "No service linked", the defect found by live run 33282530146.)
           OBSERVED_SHA=""
           for _ in $(seq 1 12); do
-            railway logs "$DEPLOYMENT_ID" --lines 200 > /tmp/worker-logs.txt 2>/dev/null || true
+            railway logs "$DEPLOYMENT_ID" --service "WorkflowOS-Worker" --lines 200 > /tmp/worker-logs.txt 2>/dev/null || true
             OBSERVED_SHA=$(grep 'app\.process\.starting' /tmp/worker-logs.txt \
               | grep -oE '[0-9a-f]{40}' | head -n 1 || true)
             if [ -n "$OBSERVED_SHA" ]; then break; fi
