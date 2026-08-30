@@ -1,13 +1,20 @@
 # WORK-065 — Synthetic Browser Validation Agent
 
-Status: planned.
+Status: in_flight — activated by the architect (the implementation
+instruction) on 2026-08-30. The activation is recorded in
+`spec/development-state/program-state.json` (status `in_flight`, branch
+`feat/work-065-browser-validation-agent`, dependencies `["WORK-064"]`).
+The browser agent contract is persisted in
+`spec/architecture/v1.1/validation-model.md` §9 (the agent section,
+expanded by this change). NOT merged; NOT verified — the architect's
+review and the merge gate remain the only completion event (§34.8/ADR-0007).
 
 Issued by: the research-driven v1.1 evolution (the continuous product
 validation roadmap — the closed-loop software engineering control system
 extension to v1.1). This Work Order establishes the synthetic browser
-validation agent — it does NOT implement runtime code. Activation requires
-the architect's authorization and is recorded in
-`spec/development-state/program-state.json` (this change records none).
+validation agent. Activation requires the architect's authorization and is
+recorded in `spec/development-state/program-state.json` (this change
+records the activation).
 
 Dependencies: WORK-064 (Continuous Product Validation — the authority this
 agent executes underneath). The browser agent is the EXECUTION MECHANISM
