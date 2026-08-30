@@ -18,9 +18,9 @@ identity + environment + policy + mode/trigger constraints (POST_RELEASE
 requires an explicit caller-supplied releaseRef — no release authority
 exists in the repository yet; CONTINUOUS requires explicit configuration —
 no autonomous scheduling), typed observations/outcomes with the full
-run → journey → step → environment provenance chain (a missing observation
-is an EXPLICIT validation_failure, never healthy — mutation-killing
-discriminations pinned), evidence mapping into the EXISTING `/verification`
+run → journey → step → environment provenance chain (a missing
+CRITERION-REQUIRED observation is an EXPLICIT validation_failure, never
+healthy — mutation-killing discriminations pinned), evidence mapping into the EXISTING `/verification`
 authority through its public `attachEvidence` boundary (claim authority,
 server-side classification — NO parallel evidence store), the
 ValidationRunRepository PORT with the documented IN-MEMORY adapter (NO
@@ -34,6 +34,38 @@ development-governance 66/66; architecture-governance 40/40; full backend
 regression 2617 passed / 0 failed; typecheck/lint clean (backend + frontend).
 Architectural rulings documented in
 `docs/superpowers/notes/2026-08-30-work-064-repository-mapping.md`.
+
+PR #86 review correction (2026-08-30, the architect's audit — two
+domain-correctness fixes in finalization, NOTHING else changed: no new
+authority, no migration, no WORK-065+ scope):
+
+1. **Canonical expectation integrity** — `finalizeValidationRun` now
+   resolves each result's expectation against the CANONICAL journey
+   declaration and verifies deep structural equality
+   (id/stepId/kind/description/matcher). A result retaining the id but
+   altering the matcher and claiming `matched: true` is a typed
+   `FINALIZE_EXPECTATION_CANONICAL_MISMATCH` rejection: health can never be
+   derived from an executor-supplied expectation variant. A structurally
+   equal clone is accepted (the contract is canonical SHAPE, not object
+   identity).
+2. **Success-criteria semantics** — health is determined by
+   `SuccessCriterion.requiresObservationIds` (the declared set that
+   determines health), NOT the raw expectation count: an observational
+   expectation not required by any criterion no longer fails the run (its
+   captured actual stays provenance-preserved in the run's observations;
+   when a run DOES fail, every unmet expectation — required AND
+   observational — is still recorded with full provenance); an unmet
+   required observation fails the run exactly as before. The finalize
+   boundary additionally rejects hand-crafted journeys with empty or
+   unknown-referencing criteria (defense in depth — health is never
+   vacuous).
+
+Discriminating regressions added in
+`backend/tests/continuous-validation/outcome-provenance.test.ts` (§6+§7:
+seven of them FAIL on the pre-correction implementation — the
+pre-correction pin asserting the wrong every-expectation semantics was
+inverted); the full WORK-064/governance/static/regression verification was
+re-run on the correction head.
 
 Issued by: the research-driven v1.1 evolution (the continuous product
 validation roadmap — the closed-loop software engineering control system
