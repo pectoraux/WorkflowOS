@@ -56,6 +56,13 @@ export {
   DefaultBrowserValidationAgent,
 } from './internal/agent.js';
 export type { DefaultBrowserValidationAgentDeps } from './internal/agent.js';
+export {
+  // §6 the Playwright-backed BrowserDriver adapter (the boundary — the ONE
+  // place browser-automation libraries appear). Implements the existing
+  // BrowserDriver port (WORK-036); NO second browser abstraction.
+  PlaywrightBrowserDriver,
+} from './internal/playwright-browser-driver.js';
+export type { PlaywrightBrowserDriverOptions } from './internal/playwright-browser-driver.js';
 
 export {
   // §4 the typed domain error
