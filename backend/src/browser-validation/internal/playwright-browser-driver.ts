@@ -67,15 +67,20 @@ export interface PlaywrightBrowserDriverOptions {
 
 /**
  * The Playwright-backed BrowserDriver. Implements the existing port (WORK-036)
- * — NO second browser abstraction. Each call opens a fresh context + page
- * (isolated per validation run — no shared cookies/localStorage across runs),
- * performs the primitive, and closes the page.
+ * — NO second browser abstraction. A SINGLE context + page is created lazily on
+ * the first call and REUSED across subsequent calls (a real browser session:
+ * navigate once, then interact with the loaded page). {@link close} tears the
+ * session down. Tests construct a fresh driver per run (no state leakage across
+ * runs); production would construct a fresh driver per validation run.
  */
 export class PlaywrightBrowserDriver implements BrowserDriver {
   private readonly browserOrFactory: PlaywrightBrowser | (() => Promise<PlaywrightBrowser>) | undefined;
   private readonly contextOptions: Parameters<PlaywrightBrowser['newContext']>[0];
   private readonly maxTextBytes: number;
   private readonly maxScreenshotBytes: number;
+  private resolvedBrowser: PlaywrightBrowser | null = null;
+  private context: BrowserContext | null = null;
+  private page: Page | null = null;
 
   constructor(options: PlaywrightBrowserDriverOptions = {}) {
     this.browserOrFactory = options.browser;
@@ -88,113 +93,111 @@ export class PlaywrightBrowserDriver implements BrowserDriver {
     if (this.browserOrFactory === undefined) {
       throw new Error('browser-driver-unavailable: no Playwright browser is configured');
     }
-    if (typeof this.browserOrFactory === 'function') {
-      return this.browserOrFactory();
+    if (this.resolvedBrowser === null) {
+      this.resolvedBrowser =
+        typeof this.browserOrFactory === 'function'
+          ? await this.browserOrFactory()
+          : this.browserOrFactory;
     }
-    return this.browserOrFactory;
-  }
-
-  private async withPage<T>(
-    opts: BrowserDriverCallOptions,
-    fn: (page: Page) => Promise<T>,
-  ): Promise<T> {
-    const browser = await this.resolveBrowser();
-    const context: BrowserContext = await browser.newContext(this.contextOptions);
-    const page: Page = await context.newPage();
-    try {
-      // Playwright's default action timeout is governed by the page's settings;
-      // set the per-call navigation/action timeout explicitly.
-      page.setDefaultTimeout(opts.timeoutMs);
-      page.setDefaultNavigationTimeout(opts.timeoutMs);
-      return await fn(page);
-    } finally {
-      await page.close().catch(() => {
-        // a page-close failure must not mask the real outcome
-      });
-      await context.close().catch(() => {
-        // a context-close failure must not mask the real outcome
-      });
-    }
-  }
-
-  async open(url: string, opts: BrowserDriverCallOptions): Promise<BrowserNavigationResult> {
-    return this.withPage(opts, async (page) => {
-      const response = await page.goto(url, { timeout: opts.timeoutMs, waitUntil: 'domcontentloaded' });
-      const finalUrl = page.url();
-      const status = response?.status() ?? null;
-      const title = await page.title().catch(() => null);
-      return { finalUrl, status, title };
-    });
-  }
-
-  async click(selector: string, opts: BrowserDriverCallOptions): Promise<BrowserActionResult> {
-    return this.withPage(opts, async (page) => {
-      try {
-        await page.click(selector, { timeout: opts.timeoutMs });
-        return { matched: true, finalUrl: page.url() };
-      } catch (err) {
-        const e = err as Error;
-        // A selector timeout means the element was not found/acted upon —
-        // matched: false (the agent records the observation as missing →
-        // validation_failure, never healthy).
-        if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
-          return { matched: false, finalUrl: page.url() };
-        }
-        throw e;
-      }
-    });
-  }
-
-  async type(selector: string, text: string, opts: BrowserDriverCallOptions): Promise<BrowserActionResult> {
-    return this.withPage(opts, async (page) => {
-      try {
-        await page.fill(selector, text, { timeout: opts.timeoutMs });
-        return { matched: true, finalUrl: page.url() };
-      } catch (err) {
-        const e = err as Error;
-        if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
-          return { matched: false, finalUrl: page.url() };
-        }
-        throw e;
-      }
-    });
-  }
-
-  async extract(selector: string, opts: BrowserDriverCallOptions): Promise<BrowserExtractionResult> {
-    return this.withPage(opts, async (page) => {
-      try {
-        const handle = await page.waitForSelector(selector, { timeout: opts.timeoutMs, state: 'attached' });
-        const rawText = (await handle.textContent()) ?? '';
-        const truncated = Buffer.byteLength(rawText, 'utf8') > this.maxTextBytes;
-        const text = truncated
-          ? Buffer.from(rawText).subarray(0, this.maxTextBytes).toString('utf8')
-          : rawText;
-        return { matched: true, text, finalUrl: page.url() };
-      } catch (err) {
-        const e = err as Error;
-        if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
-          return { matched: false, text: '', finalUrl: page.url() };
-        }
-        throw e;
-      }
-    });
-  }
-
-  async screenshot(opts: BrowserDriverCallOptions): Promise<BrowserScreenshotResult> {
-    return this.withPage(opts, async (page) => {
-      const buf = await page.screenshot({ type: 'png', timeout: opts.timeoutMs });
-      const base64 = buf.toString('base64');
-      const truncated = base64.length > this.maxScreenshotBytes;
-      const truncatedBase64 = truncated ? base64.slice(0, this.maxScreenshotBytes) : base64;
-      return { base64: truncatedBase64, finalUrl: page.url() };
-    });
+    return this.resolvedBrowser;
   }
 
   /**
-   * Close the underlying browser (if this driver launched it). Safe to call
-   * multiple times. Used by tests to clean up after a real-browser run.
+   * Lazily resolve + reuse the single context + page. A real browser session
+   * navigates once and then interacts with the loaded page — the page state
+   * persists across {@link open}/{@link click}/{@link type}/{@link extract}/
+   * {@link screenshot} calls until {@link close} tears it down.
+   */
+  private async resolvePage(opts: BrowserDriverCallOptions): Promise<Page> {
+    if (this.page === null) {
+      const browser = await this.resolveBrowser();
+      this.context = await browser.newContext(this.contextOptions);
+      this.page = await this.context.newPage();
+    }
+    this.page.setDefaultTimeout(opts.timeoutMs);
+    this.page.setDefaultNavigationTimeout(opts.timeoutMs);
+    return this.page;
+  }
+
+  async open(url: string, opts: BrowserDriverCallOptions): Promise<BrowserNavigationResult> {
+    const page = await this.resolvePage(opts);
+    const response = await page.goto(url, { timeout: opts.timeoutMs, waitUntil: 'domcontentloaded' });
+    const finalUrl = page.url();
+    const status = response?.status() ?? null;
+    const title = await page.title().catch(() => null);
+    return { finalUrl, status, title };
+  }
+
+  async click(selector: string, opts: BrowserDriverCallOptions): Promise<BrowserActionResult> {
+    const page = await this.resolvePage(opts);
+    try {
+      await page.click(selector, { timeout: opts.timeoutMs });
+      return { matched: true, finalUrl: page.url() };
+    } catch (err) {
+      const e = err as Error;
+      if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
+        return { matched: false, finalUrl: page.url() };
+      }
+      throw e;
+    }
+  }
+
+  async type(selector: string, text: string, opts: BrowserDriverCallOptions): Promise<BrowserActionResult> {
+    const page = await this.resolvePage(opts);
+    try {
+      await page.fill(selector, text, { timeout: opts.timeoutMs });
+      return { matched: true, finalUrl: page.url() };
+    } catch (err) {
+      const e = err as Error;
+      if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
+        return { matched: false, finalUrl: page.url() };
+      }
+      throw e;
+    }
+  }
+
+  async extract(selector: string, opts: BrowserDriverCallOptions): Promise<BrowserExtractionResult> {
+    const page = await this.resolvePage(opts);
+    try {
+      const handle = await page.waitForSelector(selector, { timeout: opts.timeoutMs, state: 'attached' });
+      const rawText = (await handle.textContent()) ?? '';
+      const truncated = Buffer.byteLength(rawText, 'utf8') > this.maxTextBytes;
+      const text = truncated
+        ? Buffer.from(rawText).subarray(0, this.maxTextBytes).toString('utf8')
+        : rawText;
+      return { matched: true, text, finalUrl: page.url() };
+    } catch (err) {
+      const e = err as Error;
+      if (e.name === 'TimeoutError' || /timeout/i.test(e.message)) {
+        return { matched: false, text: '', finalUrl: page.url() };
+      }
+      throw e;
+    }
+  }
+
+  async screenshot(opts: BrowserDriverCallOptions): Promise<BrowserScreenshotResult> {
+    const page = await this.resolvePage(opts);
+    const buf = await page.screenshot({ type: 'png', timeout: opts.timeoutMs });
+    const base64 = buf.toString('base64');
+    const truncated = base64.length > this.maxScreenshotBytes;
+    const truncatedBase64 = truncated ? base64.slice(0, this.maxScreenshotBytes) : base64;
+    return { base64: truncatedBase64, finalUrl: page.url() };
+  }
+
+  /**
+   * Close the persistent page + context + (if this driver launched it) the
+   * underlying browser. Safe to call multiple times. Used by tests to clean
+   * up after a real-browser run.
    */
   async close(): Promise<void> {
+    await this.page?.close().catch(() => {
+      // best-effort close
+    });
+    await this.context?.close().catch(() => {
+      // best-effort close
+    });
+    this.page = null;
+    this.context = null;
     if (
       this.browserOrFactory !== undefined &&
       typeof this.browserOrFactory === 'object' &&
