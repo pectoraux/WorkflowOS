@@ -232,6 +232,10 @@ test.beforeAll(async () => {
     },
   });
   await server.ready();
+  // The browser drives the REAL HTTP surface through the Vite proxy — the
+  // server must actually LISTEN (the sibling companion specs do the same;
+  // server.inject calls continue to work alongside the live listener).
+  await server.listen({ port: 3001, host: '127.0.0.1' });
   await worker.start();
 });
 
@@ -281,7 +285,7 @@ test.describe('WORKFLOWOS — Complete A→Z Browser E2E', () => {
     const projectId = (projectRes.json() as { id: string }).id;
 
     // Navigate to the project
-    await page.goto(`/#/projects/${projectId}`);
+    await page.goto(`/projects/${projectId}`);
     await page.waitForTimeout(500);
 
     // ---------------------------------------------------------------
@@ -390,7 +394,7 @@ test.describe('WORKFLOWOS — Complete A→Z Browser E2E', () => {
     // ---------------------------------------------------------------
     // 9. Navigate to Work Item page in the browser
     // ---------------------------------------------------------------
-    await page.goto(`/#/work-items/${workItemId}`);
+    await page.goto(`/work-items/${workItemId}`);
     await page.waitForTimeout(1000);
 
     // Verify Work Item title is rendered (NOT "Work item not found")
@@ -735,7 +739,7 @@ test.describe('WORKFLOWOS — Complete A→Z Browser E2E', () => {
     const auditEvents = auditRes.json() as { eventType: string }[];
     expect(auditEvents.length).toBeGreaterThan(0);
     const eventTypes = auditEvents.map(e => e.eventType);
-    expect(eventTypes).toContain('workflow_transition');
+    expect(eventTypes).toContain('WORKFLOW_TRANSITION');
 
     // ---------------------------------------------------------------
     // 22. Work Item is completed
@@ -749,7 +753,7 @@ test.describe('WORKFLOWOS — Complete A→Z Browser E2E', () => {
     // ---------------------------------------------------------------
     // 23. Browser renders the Work Item page (not "not found")
     // ---------------------------------------------------------------
-    await page.goto(`/#/work-items/${workItemId}`);
+    await page.goto(`/work-items/${workItemId}`);
     await page.waitForTimeout(1000);
     await expect(page.locator('body')).not.toContainText('Work item not found');
     await expect(page.locator('body')).toContainText('WORK-BROWSER-001');
