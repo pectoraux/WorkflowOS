@@ -13,7 +13,7 @@
  * failure in the same tenant/project is ONE engineering problem, so it
  * converges on ONE governed Work Item (the contract's "same problem,
  * different signals" convergence). Different tenants and different projects
- * NEVER collapse (the mutation-discrimination proof).
+ * NEVER collapse (the mutation-kill proof).
  */
 import { createHash } from 'node:crypto';
 
@@ -47,20 +47,36 @@ export function deriveConversionIdentity(
 
 /**
  * Derive the deterministic decision-record id over (conversionKey,
- * signalId, decision): the same logical problem + the same signal + the
- * same decision is ONE record identity (re-delivery converges on the
- * stored record). The DECISION participates so the append-only log can
- * record the honest decision history of a signal (e.g. 'proposed' at
- * first conversion, then 'deduplicated' once an open equivalent exists)
- * without ever rewriting a stored record.
+ * architectureVersionId, signalId, decision): the same logical problem +
+ * the same architecture version + the same signal + the same decision is
+ * ONE record identity (re-delivery converges on the stored record). The
+ * DECISION participates so the append-only log can record the honest
+ * decision history of a signal (e.g. 'proposed' at first conversion, then
+ * 'deduplicated' once an open equivalent exists) without ever rewriting a
+ * stored record.
+ *
+ * ARCHITECTURE VERSION participates because the authoritative Work Item
+ * dedup fence is UNIQUE(architecture_version_id, work_item_id): the SAME
+ * logical problem converted under TWO architecture versions legitimately
+ * creates TWO governed Work Items, and the decision history must stay
+ * version-independent — a record identity without the version dimension
+ * would collide across versions and let one version's ConversionResult
+ * reference the OTHER version's Work Item through a converged stored
+ * record (the PR #107 architect-review blocker). The version dimension is
+ * proven by mutation-kill: removing it from this canonicalization makes
+ * the cross-version independence invariant test FAIL.
  */
 export function deriveConversionRecordId(
   conversionKey: string,
+  architectureVersionId: string,
   signalId: string,
   decision: string,
 ): string {
   const digest = createHash('sha256')
-    .update(JSON.stringify([conversionKey, signalId, decision]), 'utf8')
+    .update(
+      JSON.stringify([conversionKey, architectureVersionId, signalId, decision]),
+      'utf8',
+    )
     .digest('hex');
   return `SIGWIR-${digest.slice(0, 24)}`;
 }

@@ -62,15 +62,31 @@ describe('WORK-068 — the deterministic conversion identity', () => {
     expect(again.conversionKey).toBe(identity.conversionKey);
   });
 
-  it('the record identity is deterministic over (conversionKey, signalId, decision) — re-delivery of the same decision converges', () => {
-    const a = deriveConversionRecordId('SIGWI-x', 'sig_1', 'proposed');
-    const b = deriveConversionRecordId('SIGWI-x', 'sig_1', 'proposed');
-    const c = deriveConversionRecordId('SIGWI-x', 'sig_1', 'deduplicated');
-    const d = deriveConversionRecordId('SIGWI-x', 'sig_2', 'proposed');
+  it('the record identity is deterministic over (conversionKey, architectureVersionId, signalId, decision) — re-delivery of the same decision converges', () => {
+    const a = deriveConversionRecordId('SIGWI-x', 'archver-1', 'sig_1', 'proposed');
+    const b = deriveConversionRecordId('SIGWI-x', 'archver-1', 'sig_1', 'proposed');
+    const c = deriveConversionRecordId('SIGWI-x', 'archver-1', 'sig_1', 'deduplicated');
+    const d = deriveConversionRecordId('SIGWI-x', 'archver-1', 'sig_2', 'proposed');
     expect(a).toBe(b);
     expect(a).not.toBe(c); // the decision participates — the honest history
-    expect(a).not.toBe(d);
+    expect(a).not.toBe(d); // the signal participates
     expect(a).toMatch(/^SIGWIR-[0-9a-f]{24}$/);
+  });
+
+  it('ARCHITECTURE VERSION participates in the record identity: the same signal + same decision under two versions are TWO independent records (the PR #107 architect-review fix)', () => {
+    // The authoritative Work Item dedup fence is UNIQUE(architecture_version_id,
+    // work_item_id): the same logical problem under two versions is TWO
+    // governed Work Items — and the decision history must never converge
+    // records across versions (a versionless recordId would let one
+    // version's ConversionResult reference the OTHER version's Work Item).
+    const versionA = deriveConversionRecordId('SIGWI-x', 'archver-1', 'sig_1', 'proposed');
+    const versionB = deriveConversionRecordId('SIGWI-x', 'archver-2', 'sig_1', 'proposed');
+    expect(versionA).not.toBe(versionB);
+    // Idempotency is per-version: re-delivery within EACH version converges.
+    expect(deriveConversionRecordId('SIGWI-x', 'archver-2', 'sig_1', 'proposed')).toBe(versionB);
+    // Both remain valid SIGWIR identities.
+    expect(versionA).toMatch(/^SIGWIR-[0-9a-f]{24}$/);
+    expect(versionB).toMatch(/^SIGWIR-[0-9a-f]{24}$/);
   });
 
   it('the proposal title derivation is deterministic and honest', () => {

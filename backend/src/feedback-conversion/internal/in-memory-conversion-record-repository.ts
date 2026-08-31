@@ -5,9 +5,10 @@
  * (`migrations: []`); the in-memory adapter is the composed implementation
  * and the durable decision-log binding point stays a documented future ACR
  * at the same port. The keyed-uniqueness contract (recordId =
- * deterministic (conversionKey, signalId)) mirrors the PostgreSQL
- * PRIMARY KEY discipline — the real-PG two-actor integration suite proves
- * the contract against a test-schema table implementing the same port.
+ * deterministic (conversionKey, architectureVersionId, signalId, decision))
+ * mirrors the PostgreSQL PRIMARY KEY discipline — the real-PG two-actor
+ * integration suite proves the contract against a test-schema table
+ * implementing the same port.
  */
 import type {
   ConversionRecord,
@@ -29,12 +30,19 @@ export class InMemoryFeedbackConversionRecordRepository
   async append(record: ConversionRecord): Promise<ConversionRecord> {
     const existing = this.byRecordId.get(record.recordId);
     if (existing) {
-      // Idempotent convergence: the same (conversionKey, signalId) identity
-      // re-appended returns the STORED record — re-delivery never duplicates
-      // the log. A DIFFERENT payload under the same record identity is a
-      // typed conflict (fail closed — never silently overwritten).
+      // Idempotent convergence: the same (conversionKey,
+      // architectureVersionId, signalId, decision) identity re-appended
+      // returns the STORED record — re-delivery never duplicates the log.
+      // A DIFFERENT payload under the same record identity is a typed
+      // conflict (fail closed — never silently overwritten). The
+      // architectureVersionId comparison is defense in depth: the recordId
+      // derivation already scopes by version, so a cross-version append
+      // carries a DIFFERENT recordId and never reaches this branch — but if
+      // a recordId ever collided across versions, the payload check still
+      // refuses to converge it (the PR #107 architect-review fix).
       if (
         existing.record.decision === record.decision &&
+        existing.record.architectureVersionId === record.architectureVersionId &&
         existing.record.workItemId === record.workItemId &&
         existing.record.workItemHumanId === record.workItemHumanId
       ) {

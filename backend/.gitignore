@@ -6,3 +6,6 @@ dist/
 coverage/
 .vitest-cache/
 test-results/
+
+# WORK-068 mutation-kill harness — transient mutant modules (written and removed at test runtime)
+backend/tests/feedback-conversion/__mutants__/

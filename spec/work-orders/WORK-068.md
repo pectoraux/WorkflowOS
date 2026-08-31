@@ -292,3 +292,52 @@ surfaces).
   contract could require one — it does not).
 - The recurrence-recorded outcome records but does not act (by design: the
   architect/planner owns the follow-up decision).
+
+### The PR #107 architect-review fixes (2026-08-31/09-01 — appended by the implementation)
+
+The architect review (NOT READY TO MERGE) found two blockers + one
+secondary issue. All three are fixed on the same branch:
+
+1. **Decision-record identity was missing `architectureVersionId`
+   (BLOCKER).** The authoritative Work Item dedup fence is
+   UNIQUE(architecture_version_id, work_item_id), but the decision-record
+   identity was keyed only by (conversionKey, signalId, decision) — the
+   same signal converted under two architecture versions could collide on
+   one recordId and let one version's ConversionResult reference the
+   OTHER version's Work Item. FIX: `ConversionRecord` carries
+   `architectureVersionId`; `deriveConversionRecordId` canonicalizes
+   (conversionKey, architectureVersionId, signalId, decision); the
+   in-memory append's idempotent payload comparison includes the version
+   (defense in depth). REGRESSION: `cross-version.test.ts` (two versions →
+   two Work Items + two independent records, each referencing ITS OWN
+   version's item; idempotent within each version; the version-scoped
+   recurrence fence), the pure-derivation version-participation test, the
+   record-log cross-version conflict/independence tests, AND a real-PG
+   cross-version integration proof on a second architecture version of the
+   same architecture.
+2. **The six mutation/discrimination proofs were defect-shaped test
+   doubles, not mutation-kill proofs (BLOCKER).** They demonstrated bad
+   behavior in a hand-built double — not that the real invariant tests
+   turn red when the production boundary is removed. FIX: replaced by
+   `mutation-kill.test.ts` — a TRUE source-level mutation-kill harness:
+   each case READS the actual production source, applies ONE precisely
+   pinned textual mutation that removes the guarded boundary (a changed
+   production shape fails the proof LOUDLY — kills can never silently
+   rot), emits the mutant to `tests/feedback-conversion/__mutants__/`
+   (relative imports rewritten to the REAL modules — only the mutated
+   boundary differs; src/ is never touched), imports it through vitest,
+   and runs THE SAME invariant scenario twice: GREEN against the real
+   module (the restore-and-green half) and RED against the mutant — pinned
+   to the SPECIFIC invariant failure message so an unrelated crash can
+   never masquerade as a kill. Seven kills: bypass-intake (parallel
+   store), hollow-assessment, strip-provenance, fresh-key dedup removal,
+   scopeless identity, autonomous path (the static-architecture scan
+   predicate run against the mutated source), and versionless record
+   identity (the blocker-1 fence). Transient mutants are removed in
+   finally + swept before/after the suite (and `__mutants__/` is
+   git-ignored).
+3. **`listConversions` accepted a tenant context but ignored it
+   (secondary).** FIX: the tenant predicate is now ENFORCED — the read
+   filters the decision history to the caller tenant's records (a
+   cross-tenant caller never sees another tenant's history); covered by
+   the module-composition tenant-scoping test.

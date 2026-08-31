@@ -260,16 +260,29 @@ export interface FeedbackConversionMetadata {
  */
 export interface ConversionRecord {
   /**
-   * Deterministic over (conversionKey, signalId, decision): the same
-   * logical problem + the same signal + the same decision is ONE record
-   * identity (re-delivery converges on the existing record — the keyed
-   * uniqueness contract of the record port). The DECISION participates so
-   * the append-only log preserves the honest decision history of a signal
+   * Deterministic over (conversionKey, architectureVersionId, signalId,
+   * decision): the same logical problem + the same architecture version +
+   * the same signal + the same decision is ONE record identity
+   * (re-delivery converges on the existing record — the keyed uniqueness
+   * contract of the record port). The DECISION participates so the
+   * append-only log preserves the honest decision history of a signal
    * ('proposed' at first conversion, 'deduplicated' once an open
    * equivalent exists) without ever rewriting a stored record.
+   *
+   * ARCHITECTURE VERSION participates because the authoritative Work Item
+   * dedup fence is UNIQUE(architecture_version_id, work_item_id): the SAME
+   * logical problem converted under TWO architecture versions creates TWO
+   * governed Work Items, and each decision record must reference ITS OWN
+   * version's Work Item — a record identity without the version dimension
+   * would collide across versions and point one version's decision at the
+   * other version's Work Item (the PR #107 architect-review blocker: the
+   * returned ConversionResult must never reference Work Item B while its
+   * decision record still references Work Item A).
    */
   readonly recordId: string;
   readonly conversionKey: string;
+  /** The architecture version the decision was recorded against (the record-side scope of the UNIQUE(architecture_version_id, work_item_id) fence). */
+  readonly architectureVersionId: string;
   /** The tenant/project scope the decision was recorded under. */
   readonly tenantId: string;
   readonly projectId: string;
@@ -301,10 +314,12 @@ export interface ConversionRecord {
 export interface FeedbackConversionRecordRepository {
   /**
    * Append a decision record. Idempotent on recordId (the deterministic
-   * (conversionKey, signalId) key): appending the same record identity again
-   * converges on the stored record (re-delivery never duplicates the log).
-   * A recordId collision with a DIFFERENT decision payload is a typed
-   * conflict (fail closed — never silently overwritten).
+   * (conversionKey, architectureVersionId, signalId, decision) key):
+   * appending the same record identity again converges on the stored record
+   * (re-delivery never duplicates the log). A recordId collision with a
+   * DIFFERENT decision payload is a typed conflict (fail closed — never
+   * silently overwritten). Records under DIFFERENT architecture versions
+   * are INDEPENDENT identities (they never collide and never converge).
    */
   append(record: ConversionRecord): Promise<ConversionRecord>;
   /** The decision history for one conversion key (chronological). */
@@ -441,7 +456,12 @@ export interface FeedbackConversionService {
     input: ConvertSignalInput,
     ctx: FeedbackConversionContext,
   ): Promise<ConversionResult>;
-  /** Read the conversion decision history for a project (read-only). */
+  /**
+   * Read the conversion decision history for a project (read-only,
+   * tenant-scoped: only the caller tenant's decision records are returned —
+   * the tenant predicate is ENFORCED, never accepted-and-ignored; a
+   * cross-tenant caller never sees another tenant's decision history).
+   */
   listConversions(
     projectId: string,
     ctx: Pick<FeedbackConversionContext, 'tenantId'>,

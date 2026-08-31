@@ -95,4 +95,48 @@ describe('WORK-068 — module composition', () => {
     const readerProto = Object.getPrototypeOf(ctx.engineeringSignalService) as Record<string, unknown>;
     expect(typeof readerProto.findSignal).toBe('function');
   });
+
+  it('listConversions ENFORCES the tenant predicate (the PR #107 architect-review secondary fix): the caller tenant sees ONLY its own decision history — never another tenant\'s', async () => {
+    // One project id, TWO tenants' decision records in the log (the
+    // record-level history a shared project id string could ever hold):
+    const records = new InMemoryFeedbackConversionRecordRepository();
+    const service = new DefaultFeedbackConversionService({
+      recordRepository: records,
+      now: fixedClock('2026-09-03T00:00:00Z'),
+    });
+    const seed = async (tenantId: string, signalId: string, versionId: string) => {
+      await records.append({
+        recordId: `SIGWIR-${tenantId}-${signalId}-${versionId}`,
+        conversionKey: `SIGWI-${tenantId}-${signalId}`,
+        architectureVersionId: versionId,
+        tenantId,
+        projectId: 'project-1',
+        signalId,
+        decision: 'proposed',
+        workItemId: `wi-${tenantId}`,
+        workItemHumanId: `SIGWI-${tenantId}-${signalId}`,
+        decidedAt: '2026-09-03T00:00:00Z',
+        summary: `seed ${tenantId}`,
+      });
+    };
+    await seed('tenant-A', 'sig_a1', 'archver-1');
+    await seed('tenant-A', 'sig_a2', 'archver-1');
+    await seed('tenant-B', 'sig_b1', 'archver-1');
+
+    // Tenant A's caller: ONLY tenant A's records.
+    const forA = await service.listConversions('project-1', { tenantId: 'tenant-A' });
+    expect(forA.map((r) => r.tenantId)).toEqual(['tenant-A', 'tenant-A']);
+    expect(forA.map((r) => r.signalId).sort()).toEqual(['sig_a1', 'sig_a2'].sort());
+
+    // Tenant B's caller: ONLY tenant B's records (never A's — the predicate
+    // is enforced, never accepted-and-ignored).
+    const forB = await service.listConversions('project-1', { tenantId: 'tenant-B' });
+    expect(forB.map((r) => r.tenantId)).toEqual(['tenant-B']);
+    expect(forB.map((r) => r.signalId)).toEqual(['sig_b1']);
+
+    // A tenant with NO history in the project sees an empty list (not a
+    // failure, not another tenant's data):
+    const forC = await service.listConversions('project-1', { tenantId: 'tenant-C' });
+    expect(forC).toEqual([]);
+  });
 });

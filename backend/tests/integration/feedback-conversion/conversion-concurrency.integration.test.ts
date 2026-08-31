@@ -68,6 +68,7 @@ describe.skipIf(!isRealPg)(
     let orgId: string;
     let projectId: string;
     let versionId: string;
+    let version2Id: string;
     let ctxT1: FeedbackConversionContext;
     let ctxT2: FeedbackConversionContext;
     let secondClient: { close: () => Promise<void> } | undefined;
@@ -86,9 +87,15 @@ describe.skipIf(!isRealPg)(
       const arch = await stack.architectureRepository.create({ projectId: project.id, name: 'W68 Conversion Arch' });
       const version = await stack.architectureVersionRepository.create({ architectureId: arch.id, contentInline: 'v1' });
       await stack.architectureVersionRepository.transitionState(version.id, 'frozen', user.id);
+      // A SECOND version of the SAME architecture — the cross-version
+      // regression harness (the PR #107 architect-review fence: the same
+      // logical problem under two versions is TWO governed Work Items).
+      const version2 = await stack.architectureVersionRepository.create({ architectureId: arch.id, contentInline: 'v2' });
+      await stack.architectureVersionRepository.transitionState(version2.id, 'frozen', user.id);
       orgId = org.id;
       projectId = project.id;
       versionId = version.id;
+      version2Id = version2.id;
 
       // T1 uses the main test client's repositories; T2 uses a SECOND
       // independent pg.Client against the SAME test schema (the race).
@@ -230,12 +237,52 @@ describe.skipIf(!isRealPg)(
       expect(all.filter((w) => w.workItemId === identity.conversionKey)).toHaveLength(1);
     });
 
+    it("CROSS-VERSION: the same signal converted against TWO architecture versions → TWO Work Items + TWO INDEPENDENT decision records, each referencing ITS OWN version's item (the PR #107 architect-review blocker fence)", async () => {
+      const key = 'cross-version:record:independence';
+      const signal = realSignalFixture({
+        signalId: 'sig_w68_xver', tenantId: orgId, projectId,
+        logicalFailureKey: key, identityFingerprint: '9'.repeat(64),
+      });
+      const { t1, ctxA } = buildServicePair([signal]);
+      const r1 = await t1.convertSignal({ signalId: 'sig_w68_xver', architectureVersionId: versionId }, ctxA);
+      const r2 = await t1.convertSignal({ signalId: 'sig_w68_xver', architectureVersionId: version2Id }, ctxA);
+      // Both versions propose (each version's UNIQUE(version, key) fence is empty):
+      expect(r1.decision).toBe('proposed');
+      expect(r2.decision).toBe('proposed');
+      // TWO DISTINCT authoritative rows (the DB fence scopes by version):
+      expect(r1.workItem!.id).not.toBe(r2.workItem!.id);
+      const inV1 = (await stack.workItemRepository.findByArchitectureVersion(versionId))
+        .filter((w) => w.workItemId === r1.conversionKey);
+      const inV2 = (await stack.workItemRepository.findByArchitectureVersion(version2Id))
+        .filter((w) => w.workItemId === r2.conversionKey);
+      expect(inV1).toHaveLength(1);
+      expect(inV2).toHaveLength(1);
+      // The decision records are INDEPENDENT identities, each referencing
+      // ITS OWN version's Work Item — the exact defect the architect review
+      // demonstrated (a versionless recordId pointing version B's result at
+      // version A's record) is structurally impossible now:
+      expect(r2.record.recordId).not.toBe(r1.record.recordId);
+      expect(r1.record.architectureVersionId).toBe(versionId);
+      expect(r2.record.architectureVersionId).toBe(version2Id);
+      expect(r1.record.workItemId).toBe(r1.workItem!.id);
+      expect(r2.record.workItemId).toBe(r2.workItem!.id);
+      // Re-delivery WITHIN version 1 converges (idempotent — one item, the
+      // honest 'deduplicated' history) while version 2 stays independent:
+      const again1 = await t1.convertSignal({ signalId: 'sig_w68_xver', architectureVersionId: versionId }, ctxA);
+      expect(again1.decision).toBe('deduplicated');
+      expect(again1.workItem!.id).toBe(r1.workItem!.id);
+      expect(
+        (await stack.workItemRepository.findByArchitectureVersion(versionId))
+          .filter((w) => w.workItemId === r1.conversionKey),
+      ).toHaveLength(1);
+    });
+
     it('the record-port keyed-uniqueness contract: a test-schema table implementing the port (PK on record_id) arbitrates two concurrent appends of the SAME decision', async () => {
       // The WORK-066/067 port-contract pattern: the in-memory adapter is the
       // composed implementation; this proof pins the CONTRACT a future ACR
       // productionizes — the record_id PRIMARY KEY (the deterministic
-      // (conversionKey, signalId, decision) key) decides the winner under
-      // true two-actor concurrency.
+      // (conversionKey, architectureVersionId, signalId, decision) key)
+      // decides the winner under true two-actor concurrency.
       const schema = 'wfos_test_w68_records';
       await stack.db.client.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
       await stack.db.client.query(`SET search_path TO ${schema}, public`);
@@ -243,6 +290,7 @@ describe.skipIf(!isRealPg)(
         CREATE TABLE IF NOT EXISTS conversion_records (
           record_id TEXT PRIMARY KEY,
           conversion_key TEXT NOT NULL,
+          architecture_version_id TEXT NOT NULL,
           decision TEXT NOT NULL,
           decided_at TIMESTAMPTZ NOT NULL,
           summary TEXT NOT NULL
@@ -254,9 +302,9 @@ describe.skipIf(!isRealPg)(
           // The bare ON CONFLICT DO NOTHING (the fixture's documented form —
           // the constraint decides, the follow-up SELECT converges).
           const result = await stack.db.client.query(
-            `INSERT INTO conversion_records (record_id, conversion_key, decision, decided_at, summary)
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-            [recordId, 'SIGWI-contract', 'proposed', new Date(), 'two-actor append'],
+            `INSERT INTO conversion_records (record_id, conversion_key, architecture_version_id, decision, decided_at, summary)
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+            [recordId, 'SIGWI-contract', 'archver-contract-1', 'proposed', new Date(), 'two-actor append'],
           );
           const rows = await stack.db.client.query(
             `SELECT COUNT(*)::int AS count FROM conversion_records WHERE record_id = $1`,
@@ -273,14 +321,22 @@ describe.skipIf(!isRealPg)(
         // A DIFFERENT decision under the same logical problem is a DIFFERENT
         // row (the decision participates in the key — the honest history):
         await stack.db.client.query(
-          `INSERT INTO conversion_records (record_id, conversion_key, decision, decided_at, summary)
-           VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-          ['SIGWIR-contract-test-dedup', 'SIGWI-contract', 'deduplicated', new Date(), 'later decision'],
+          `INSERT INTO conversion_records (record_id, conversion_key, architecture_version_id, decision, decided_at, summary)
+           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+          ['SIGWIR-contract-test-dedup', 'SIGWI-contract', 'archver-contract-1', 'deduplicated', new Date(), 'later decision'],
+        );
+        // The SAME identity under a DIFFERENT architecture version is an
+        // INDEPENDENT row (the version participates in the key — the
+        // record-side scope of the UNIQUE(version, work_item_id) fence):
+        await stack.db.client.query(
+          `INSERT INTO conversion_records (record_id, conversion_key, architecture_version_id, decision, decided_at, summary)
+           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+          ['SIGWIR-contract-test-v2', 'SIGWI-contract', 'archver-contract-2', 'proposed', new Date(), 'same identity, version 2'],
         );
         const total = await stack.db.client.query(
           `SELECT COUNT(*)::int AS count FROM conversion_records`,
         );
-        expect((total.rows[0] as { count: number }).count).toBe(2);
+        expect((total.rows[0] as { count: number }).count).toBe(3);
       } finally {
         await stack.db.client.query(`SET search_path TO public`);
         await stack.db.client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);

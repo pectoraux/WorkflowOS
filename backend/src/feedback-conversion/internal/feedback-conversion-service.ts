@@ -175,6 +175,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
       // existing authority's public update path), record the decision.
       return this.convergeOnOpenItem(
         existingByKey,
+        input.architectureVersionId,
         identity.conversionKey,
         signal,
         assessment,
@@ -191,6 +192,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
       // follow-up (a new version's conversion would create fresh work).
       return this.recordRecurrence(
         existingByKey,
+        input.architectureVersionId,
         identity.conversionKey,
         signal,
         assessment,
@@ -256,6 +258,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
       });
       return this.buildResult(
         'proposed',
+        input.architectureVersionId,
         identity.conversionKey,
         signal,
         assessment,
@@ -281,6 +284,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
         if (converged && !converged.completed) {
           return this.convergeOnOpenItem(
             converged,
+            input.architectureVersionId,
             identity.conversionKey,
             signal,
             assessment,
@@ -291,6 +295,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
         if (converged && converged.completed) {
           return this.recordRecurrence(
             converged,
+            input.architectureVersionId,
             identity.conversionKey,
             signal,
             assessment,
@@ -310,10 +315,15 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
 
   async listConversions(
     projectId: string,
-    _ctx: Pick<FeedbackConversionContext, 'tenantId'>,
+    ctx: Pick<FeedbackConversionContext, 'tenantId'>,
   ): Promise<readonly ConversionRecord[]> {
-    // Read-only; the project scope is server-side (the caller never widens it).
-    return this.recordRepository.listForProject(projectId);
+    // Read-only AND tenant-scoped: the tenant predicate is ENFORCED (never
+    // accepted-and-ignored — the PR #107 architect-review secondary fix).
+    // The caller's tenant scope decides which decision history is visible;
+    // a cross-tenant caller never sees another tenant's records (a UUID is
+    // never an authorization credential — the planner's scope discipline).
+    const history = await this.recordRepository.listForProject(projectId);
+    return history.filter((record) => record.tenantId === ctx.tenantId);
   }
 
   // -------------------------------------------------------------------------
@@ -322,6 +332,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
 
   private async convergeOnOpenItem(
     existing: WorkItemRecord,
+    architectureVersionId: string,
     conversionKey: string,
     signal: {
       signalId: string;
@@ -382,6 +393,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
 
     return this.buildResult(
       'deduplicated',
+      architectureVersionId,
       conversionKey,
       signal,
       assessment,
@@ -399,6 +411,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
 
   private async recordRecurrence(
     existing: WorkItemRecord,
+    architectureVersionId: string,
     conversionKey: string,
     signal: {
       signalId: string;
@@ -420,6 +433,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
     const priority = deriveConversionPriority(assessment, 1);
     return this.buildResult(
       'recurrence-recorded',
+      architectureVersionId,
       conversionKey,
       signal,
       assessment,
@@ -437,6 +451,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
 
   private async buildResult(
     decision: 'proposed' | 'deduplicated' | 'recurrence-recorded',
+    architectureVersionId: string,
     conversionKey: string,
     signal: {
       signalId: string;
@@ -453,9 +468,22 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
     _ctx: FeedbackConversionContext,
     reasoning: string,
   ): Promise<ConversionResult> {
+    // The decision-record identity is scoped by the architecture version —
+    // the record-side mirror of the UNIQUE(architecture_version_id,
+    // work_item_id) fence: the same logical problem under TWO versions is
+    // TWO governed Work Items and TWO independent decision records, each
+    // referencing ITS OWN version's Work Item (the PR #107 architect-review
+    // fix — the returned result can never point at version B's Work Item
+    // while its record still references version A's).
     const record: ConversionRecord = {
-      recordId: deriveConversionRecordId(conversionKey, signal.signalId, decision),
+      recordId: deriveConversionRecordId(
+        conversionKey,
+        architectureVersionId,
+        signal.signalId,
+        decision,
+      ),
       conversionKey,
+      architectureVersionId,
       tenantId: signal.tenantId,
       projectId: signal.projectId,
       signalId: signal.signalId,
@@ -463,7 +491,7 @@ export class DefaultFeedbackConversionService implements FeedbackConversionServi
       workItemId: workItem?.id ?? null,
       workItemHumanId: workItem?.workItemId ?? null,
       decidedAt,
-      summary: `signal ${signal.signalId} (${signal.logicalFailureKey}) → ${decision}${workItem ? ` on Work Item ${workItem.workItemId}` : ''} at ${decidedAt}; tenant ${signal.tenantId}, project ${signal.projectId}`,
+      summary: `signal ${signal.signalId} (${signal.logicalFailureKey}) → ${decision}${workItem ? ` on Work Item ${workItem.workItemId}` : ''} at ${decidedAt}; tenant ${signal.tenantId}, project ${signal.projectId}, architecture version ${architectureVersionId}`,
     };
     const stored = await this.recordRepository.append(record);
     return {

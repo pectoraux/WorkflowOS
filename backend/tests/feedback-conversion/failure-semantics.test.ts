@@ -81,15 +81,28 @@ describe('WORK-068 — typed, fail-closed failure semantics', () => {
   it('the record-log append conflict fails closed with FEEDBACK_CONVERSION_RECORD_CONFLICT (never silently rewritten)', async () => {
     const { records } = buildService();
     await records.append({
-      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', tenantId: 't', projectId: 'p',
+      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-1',
+      tenantId: 't', projectId: 'p',
       signalId: 'sig_1', decision: 'proposed', workItemId: 'wi-1', workItemHumanId: 'SIGWI-k',
       decidedAt: '2026-09-01T00:00:00Z', summary: 'first',
     });
     await expect(
       records.append({
-        recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', tenantId: 't', projectId: 'p',
+        recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-1',
+        tenantId: 't', projectId: 'p',
         signalId: 'sig_1', decision: 'deduplicated', workItemId: 'wi-1', workItemHumanId: 'SIGWI-k',
         decidedAt: '2026-09-02T00:00:00Z', summary: 'conflicting rewrite attempt',
+      }),
+    ).rejects.toMatchObject({ code: 'FEEDBACK_CONVERSION_RECORD_CONFLICT' });
+    // The architecture-version payload dimension is ALSO part of the
+    // conflict check (defense in depth — a recordId colliding across
+    // versions never silently converges onto the other version's payload):
+    await expect(
+      records.append({
+        recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-2',
+        tenantId: 't', projectId: 'p',
+        signalId: 'sig_1', decision: 'proposed', workItemId: 'wi-2', workItemHumanId: 'SIGWI-k',
+        decidedAt: '2026-09-02T00:00:00Z', summary: 'cross-version collision attempt',
       }),
     ).rejects.toMatchObject({ code: 'FEEDBACK_CONVERSION_RECORD_CONFLICT' });
   });
@@ -97,17 +110,30 @@ describe('WORK-068 — typed, fail-closed failure semantics', () => {
   it('the record-log idempotent append CONVERGES on the stored record (re-delivery never duplicates the log)', async () => {
     const { records } = buildService();
     const first = await records.append({
-      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', tenantId: 't', projectId: 'p',
+      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-1',
+      tenantId: 't', projectId: 'p',
       signalId: 'sig_1', decision: 'proposed', workItemId: 'wi-1', workItemHumanId: 'SIGWI-k',
       decidedAt: '2026-09-01T00:00:00Z', summary: 'first',
     });
     const again = await records.append({
-      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', tenantId: 't', projectId: 'p',
+      recordId: 'SIGWIR-fixed', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-1',
+      tenantId: 't', projectId: 'p',
       signalId: 'sig_1', decision: 'proposed', workItemId: 'wi-1', workItemHumanId: 'SIGWI-k',
       decidedAt: '2026-09-01T00:00:00Z', summary: 'first',
     });
     expect(again).toEqual(first);
     const history = await records.listForConversion('SIGWI-k');
     expect(history).toHaveLength(1);
+    // The SAME identity under a DIFFERENT architecture version is an
+    // INDEPENDENT record (never converged, never a conflict — two rows):
+    const other = await records.append({
+      recordId: 'SIGWIR-fixed-v2', conversionKey: 'SIGWI-k', architectureVersionId: 'archver-2',
+      tenantId: 't', projectId: 'p',
+      signalId: 'sig_1', decision: 'proposed', workItemId: 'wi-2', workItemHumanId: 'SIGWI-k',
+      decidedAt: '2026-09-01T00:00:00Z', summary: 'first under version 2',
+    });
+    expect(other.recordId).not.toBe(first.recordId);
+    const after = await records.listForConversion('SIGWI-k');
+    expect(after).toHaveLength(2);
   });
 });

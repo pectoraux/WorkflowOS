@@ -177,6 +177,73 @@ export class FakeArchitectureScope {
   }
 }
 
+/**
+ * A fake scope over MULTIPLE architecture versions of ONE architecture (the
+ * cross-version regression harness — the PR #107 architect-review fence:
+ * UNIQUE(architecture_version_id, work_item_id) means the same logical
+ * problem under two versions is TWO governed Work Items).
+ */
+export class FakeMultiVersionScope {
+  constructor(
+    private readonly versionIds: readonly string[],
+    private readonly architectureId = 'arch-1',
+    private readonly projectId = 'project-1',
+  ) {}
+  get versionReader() {
+    return {
+      findById: async (id: string) =>
+        this.versionIds.includes(id) ? { architectureId: this.architectureId } : null,
+    };
+  }
+  get architectureReader() {
+    return {
+      findById: async (id: string) =>
+        id === this.architectureId ? { projectId: this.projectId } : null,
+    };
+  }
+}
+
+/**
+ * Build a conversion scenario over MULTIPLE architecture versions: one ctx
+ * whose version reader accepts every listed version (all belonging to the
+ * same project through the same architecture).
+ */
+export function buildMultiVersionScenario(overrides: {
+  versionIds?: readonly string[];
+  tenantId?: string;
+  projectId?: string;
+  signals?: readonly EngineeringSignalRecord[];
+  clock?: () => Date;
+} = {}): {
+  service: FeedbackConversionService;
+  intake: FakeWorkItemIntake;
+  signalReader: FakeSignalReader;
+  records: InMemoryFeedbackConversionRecordRepository;
+  ctx: FeedbackConversionContext;
+  versionIds: string[];
+} {
+  const versionIds = overrides.versionIds ?? ['archver-1', 'archver-2'];
+  const tenantId = overrides.tenantId ?? 'tenant-1';
+  const projectId = overrides.projectId ?? 'project-1';
+  const intake = new FakeWorkItemIntake();
+  const signalReader = new FakeSignalReader(overrides.signals ?? [signalFixture()]);
+  const scope = new FakeMultiVersionScope(versionIds, 'arch-1', projectId);
+  const records = new InMemoryFeedbackConversionRecordRepository();
+  const service = new DefaultFeedbackConversionService({
+    recordRepository: records,
+    now: overrides.clock ?? fixedClock('2026-09-03T00:00:00Z'),
+  });
+  const ctx: FeedbackConversionContext = {
+    tenantId,
+    projectId,
+    engineeringSignalService: signalReader,
+    workItemRepository: intake,
+    architectureVersionRepository: scope.versionReader,
+    architectureRepository: scope.architectureReader,
+  };
+  return { service, intake, signalReader, records, ctx, versionIds: [...versionIds] };
+}
+
 /** Build a conversion service + a wired ctx over the fakes. */
 export function buildService(overrides: {
   clock?: () => Date;
