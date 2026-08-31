@@ -19,7 +19,21 @@ records the activation).
 Dependencies: WORK-064 (Continuous Product Validation — the authority this
 agent executes underneath). The browser agent is the EXECUTION MECHANISM
 for ValidationJourneys; WORK-064 is the AUTHORITY that defines them and the
-EffectPolicy that binds them. That dependency edge is now SATISFIED — WORK-064 is COMPLETE (implemented on branch feat/work-064-continuous-validation, merged by the architect as `c351451` via PR #86 on 2026-08-30 and finalized per §34.8/ADR-0007; the domain/model authority is on main at backend/src/continuous-validation/). WORK-065 is now DEPENDENCY-ELIGIBLE and remains NOT activated, NOT started — the architect's authorization is required.
+EffectPolicy that binds them. That dependency edge is SATISFIED — WORK-064 is COMPLETE (implemented on branch feat/work-064-continuous-validation, merged by the architect as `c351451` via PR #86 on 2026-08-30 and finalized per §34.8/ADR-0007; the domain/model authority is on main at backend/src/continuous-validation/). WORK-065 was accordingly DEPENDENCY-ELIGIBLE and was ACTIVATED by the architect on 2026-08-30 (see the Status header above; the earlier "NOT activated, NOT started" wording of this file predates the activation and is superseded by it).
+
+Reconciliation (2026-08-31): the implementation branch was reconciled onto
+the post-#99 mainline (cdedd0ca — the WORK-074 PR #99 merge) as merge
+commit 53248d5. The reconciliation resolved the governance-only conflicts
+(program-state / frontier-state / dependency-state / future-roadmap + the
+governance snapshot suites), declared the ADR-0003 mutual coordination
+between the two live in-flight records (WORK-065 ↔ WORK-074 on the shared
+static-architecture suite surface), re-pinned the merged-finalization
+red-window expectations to the pre-existing WORK-074 gap (closed by the
+finalization PR #100, NOT this change), and advanced the WORK-065
+migration-set pin 58 → 59 for WORK-074's 0059_identity_runtime (credit
+comment). WORK-074's canonical record is preserved exactly as main carries
+it; the §34.8/ADR-0007 post-merge finalization remains a separate
+governance change that owns the status transition.
 
 Downstream: WORK-066 (Validation Scheduling & Change Triggers) decides
 when this agent runs; WORK-067 (Engineering Signal & Regression Correlation)
