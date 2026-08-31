@@ -189,11 +189,13 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     // conflict partner: WORK-074 (Identity & Access Runtime Activation) is
     // IN FLIGHT and shares the static-architecture suite surface this
     // historical pair made durable history on. WORK-064 (merged c351451 via
-    // PR #86, finalized §34.8/ADR-0007), WORK-050 (merged 8f27cc7) and
+    // PR #86, finalized §34.8/ADR-0007), WORK-050 (merged 8f27cc7),
     // WORK-062 (merged f0855d2 via PR #82, finalized complete per
-    // §34.8/ADR-0007) are NOT live partners — merged items are durable
-    // history. The frontier is the authoritative live view: WORK-074 is the
-    // ONE item in flight.
+    // §34.8/ADR-0007), and WORK-071 (merged 8604c8a5 via PR #96 before this
+    // reconciliation — its overlap with WORK-046 on app.ts and the suite
+    // surface is now durable history too) are NOT live partners — merged
+    // items are durable history. The frontier is the authoritative live
+    // view: WORK-074 is the ONE item in flight.
     expect(a046.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-074']);
     expect(a052.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-074']);
     const frontier = realService.getFrontier();
@@ -424,7 +426,7 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
 
   // --- the real frontier (W052-AC03 applied to the live program) -----------------
 
-  it('W052-AC03 — the REAL frontier: 55 recorded items complete; WORK-074 (the identity & access runtime) is the ONE in-flight item; nothing is dependency-eligible among the recorded items; nothing is blocked', () => {
+  it('W052-AC03 — the REAL frontier: 56 recorded items complete; WORK-074 (the identity & access runtime) is the ONE in-flight item; nothing is dependency-eligible among the recorded items; nothing is blocked', () => {
     const frontier = realService.getFrontier();
     expect(frontier.dependencyEligible).toEqual([]);
     // WORK-064 (Continuous Product Validation — the domain/model authority)
@@ -432,16 +434,20 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     // instruction after the approved plan merged as 4018f42), implemented on
     // branch feat/work-064-continuous-validation (PR #86), MERGED by the
     // architect as c351451 on 2026-08-30 (squash-merged at the approved head
-    // 524c3f4) and FINALIZED complete per §34.8/ADR-0007. WORK-074 (Identity
-    // & Access Runtime Activation — the WORK-063 RUNTIME) is now ACTIVATED
-    // and IN FLIGHT (branch feat/work-074-identity-access-runtime) — the
-    // dogfooding gate's authentication precondition under implementation.
-    // Nothing is blocked (WORK-053..061 and WORK-065..070 are
-    // future-generation items not yet recorded in program-state; WORK-065
-    // and WORK-067 are dependency-eligible on the complete WORK-064 but NOT
-    // activated).
+    // 524c3f4) and FINALIZED complete per §34.8/ADR-0007. WORK-071 (Local
+    // Development Runtime Substrate) was MERGED into main as 8604c8a5 by the
+    // architect via PR #96 (2026-08-31) and is recorded complete with its
+    // merge evidence — the reconciliation of PR #99 onto the post-#96
+    // mainline recomputed the governance state accordingly. WORK-074
+    // (Identity & Access Runtime Activation — the WORK-063 RUNTIME) is now
+    // ACTIVATED and IN FLIGHT (branch feat/work-074-identity-access-runtime)
+    // — the dogfooding gate's authentication precondition under
+    // implementation. Nothing is blocked (WORK-053..061 and WORK-065..070
+    // are future-generation items not yet recorded in program-state;
+    // WORK-065 and WORK-067 are dependency-eligible on the complete
+    // WORK-064 but NOT activated).
     expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-074']);
     expect(frontier.blocked).toEqual([]);
-    expect(frontier.complete.length).toBeGreaterThanOrEqual(55);
+    expect(frontier.complete.length).toBeGreaterThanOrEqual(56);
   });
 });
