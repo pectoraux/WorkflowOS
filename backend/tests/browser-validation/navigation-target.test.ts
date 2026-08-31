@@ -50,6 +50,7 @@ import {
   classifyActionEffect,
   enforceEffectPolicy,
   defineBrowserJourneyPlan,
+  defineJourneyNavigationSafety,
   type BrowserAction,
 } from '../../src/browser-validation/index.js';
 
@@ -359,11 +360,10 @@ describe('WORK-065 navigation-target §5 — plan construction carries + validat
     successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
   });
 
-  it('a plan with a valid readonlySafeNavigationTargets allowlist is constructed (the allowlist is carried on the plan)', () => {
+  it('the plan carries NO readonlySafeNavigationTargets (the allowlist is journey-bound, not plan-bound — PR #97 third review)', () => {
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
-        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
         steps: [
           {
             stepId: 'step-open',
@@ -375,10 +375,16 @@ describe('WORK-065 navigation-target §5 — plan construction carries + validat
       },
       journey,
     );
-    expect(plan.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
+    // The plan carries ONLY steps + journeyId — NO allowlist field:
+    expect(Object.keys(plan).sort()).toEqual(['journeyId', 'steps']);
   });
 
-  it('a plan with NO readonlySafeNavigationTargets defaults to an empty allowlist (the safe default — no navigation is proven read-only-safe)', () => {
+  it('the BrowserJourneyPlanInput type does NOT accept readonlySafeNavigationTargets (the executor cannot supply an allowlist via the plan)', () => {
+    // THE ARCHITECT'S REQUIRED REGRESSION: the executor-created plan CANNOT
+    // carry a readonlySafeNavigationTargets field. Attempting to supply one
+    // is a TYPE ERROR (the plan input type does not declare it). This is the
+    // provenance proof: the executor cannot expand the trusted safe-target
+    // set through the plan.
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
@@ -393,36 +399,129 @@ describe('WORK-065 navigation-target §5 — plan construction carries + validat
       },
       journey,
     );
-    expect(plan.readonlySafeNavigationTargets).toEqual([]);
+    expect(Object.keys(plan).sort()).toEqual(['journeyId', 'steps']);
   });
 
-  it('a plan with an invalid allowlist entry (non-http(s)) is rejected', () => {
-    expect(() =>
-      defineBrowserJourneyPlan(
-        {
-          journeyId: journey.id,
-          readonlySafeNavigationTargets: ['file:///etc/passwd'],
-          steps: [
-            { stepId: 'step-open', actions: [{ kind: 'navigate', url: 'file:///etc/passwd', satisfiesObservationId: 'obs-status' }] },
-          ],
-        },
-        journey,
-      ),
-    ).toThrow(/allowlist entry/);
+  it('defineJourneyNavigationSafety validates the journey binding (journeyId === journey.id)', () => {
+    // The authoritative declaration is BOUND to the journey. A declaration
+    // for a different journey is rejected.
+    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
+    expect(navSafety.journeyId).toBe(journey.id);
+    expect(navSafety.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
   });
 
-  it('a plan with an allowlist entry with embedded userinfo is rejected', () => {
-    expect(() =>
-      defineBrowserJourneyPlan(
-        {
-          journeyId: journey.id,
-          readonlySafeNavigationTargets: ['https://user:pass@example.com/sign-in'],
-          steps: [
-            { stepId: 'step-open', actions: [{ kind: 'navigate', url: 'https://user:pass@example.com/sign-in', satisfiesObservationId: 'obs-status' }] },
-          ],
-        },
-        journey,
-      ),
-    ).toThrow(/userinfo/);
+  it('defineJourneyNavigationSafety rejects an invalid allowlist entry (non-http(s))', () => {
+    expect(() => defineJourneyNavigationSafety(journey, ['file:///etc/passwd'])).toThrow(/not http\(s\)/);
+  });
+
+  it('defineJourneyNavigationSafety rejects an allowlist entry with embedded userinfo', () => {
+    expect(() => defineJourneyNavigationSafety(journey, ['https://user:pass@example.com/sign-in'])).toThrow(/userinfo/);
+  });
+
+  it('defineJourneyNavigationSafety defaults to an empty allowlist (the safe default — no navigation is proven read-only-safe)', () => {
+    const navSafety = defineJourneyNavigationSafety(journey, []);
+    expect(navSafety.readonlySafeNavigationTargets).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6  The authority-confusion proof (the architect's required regression)
+// ---------------------------------------------------------------------------
+
+describe('WORK-065 navigation-target §6 — the authority-confusion proof (the executor cannot expand the trusted set)', () => {
+  const journey: ValidationJourney = defineValidationJourney({
+    id: 'journey-authority-confusion',
+    name: 'A journey',
+    identityRequirement: 'unauthenticated',
+    allowedModes: ['PRE_MERGE'],
+    effectPolicy: 'READ_ONLY',
+    steps: [
+      {
+        id: 'step-open',
+        name: 'open',
+        expectedObservations: [
+          { id: 'obs-status', stepId: 'step-open', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+        ],
+      },
+    ],
+    successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+  });
+
+  it('THE ARCHITECT\'S REQUIRED REGRESSION: the executor-created plan CANNOT carry readonlySafeNavigationTargets (the plan input type does not declare it)', () => {
+    // The authoritative journey declares ['/sign-in'] safe. The executor
+    // attempts to construct a plan with readonlySafeNavigationTargets =
+    // ['/sign-in', '/delete/123'] (expanding the trusted set). The plan input
+    // type does NOT accept readonlySafeNavigationTargets — this is a TYPE ERROR
+    // at compile time (proven by the @ts-expect-error below) + the plan output
+    // carries no allowlist (proven by Object.keys). The executor CANNOT
+    // expand the trusted set through the plan.
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: journey.id,
+        // @ts-expect-error — readonlySafeNavigationTargets is NOT a field on
+        // BrowserJourneyPlanInput (the executor cannot supply an allowlist).
+        readonlySafeNavigationTargets: ['https://example.com/sign-in', 'https://example.com/delete/123'],
+        steps: [
+          {
+            stepId: 'step-open',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      journey,
+    );
+    // The plan output carries NO allowlist — only journeyId + steps:
+    expect(Object.keys(plan).sort()).toEqual(['journeyId', 'steps']);
+  });
+
+  it('the positive case: journey declares ["/sign-in"] safe; plan navigates to "/sign-in" → the journey authority declares it, the plan consumes it', () => {
+    // The journey authority (via defineJourneyNavigationSafety) declares
+    // /sign-in read-only-safe. The plan navigates to /sign-in. Under
+    // READ_ONLY, the enforcement gate admits it (URL in the journey's
+    // allowlist). The executor chose WHICH declared-safe target to navigate
+    // to, but did NOT expand the trusted set.
+    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in' };
+    const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, navSafety.readonlySafeNavigationTargets);
+    expect(d.admitted).toBe(true);
+  });
+
+  it('the attack: journey declares ["/sign-in"] safe; the plan navigates to "/delete/123" (NOT declared safe) → REJECTED under READ_ONLY', () => {
+    // The journey authority declared ONLY /sign-in safe. The executor's plan
+    // navigates to /delete/123 (not declared safe). Under READ_ONLY, the
+    // enforcement gate rejects it (unverified — not in the journey's
+    // allowlist). The executor CANNOT manufacture /delete/123 as safe.
+    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
+    const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, navSafety.readonlySafeNavigationTargets);
+    expect(d.admitted).toBe(false);
+    expect(d.executionError!.reason).toMatch(/not proven read-only-safe|unverified/);
+  });
+
+  it('a journeyNavigationSafety declaration bound to a DIFFERENT journey is rejected by the agent (the declaration must originate from THIS journey)', () => {
+    // The agent validates journeyNavigationSafety.journeyId === journey.id.
+    // A declaration bound to a different journey is rejected — the
+    // declaration's provenance is the journey authority, not the executor.
+    // (This is proven at the agent level in agent-execution.test.ts §15.)
+    const otherJourney: ValidationJourney = defineValidationJourney({
+      id: 'journey-other',
+      name: 'Another journey',
+      identityRequirement: 'unauthenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'READ_ONLY',
+      steps: [
+        { id: 's', name: 's', expectedObservations: [{ id: 'o', stepId: 's', kind: 'dom', description: 'o', matcher: { kind: 'exists' } }] },
+      ],
+      successCriteria: [{ id: 'c', description: 'c', requiresObservationIds: ['o'] }],
+    });
+    // A declaration bound to `otherJourney` is valid for otherJourney:
+    const navSafetyForOther = defineJourneyNavigationSafety(otherJourney, ['https://example.com/other']);
+    expect(navSafetyForOther.journeyId).toBe('journey-other');
+    // But it does NOT match `journey` (journey-authority-confusion):
+    expect(navSafetyForOther.journeyId).not.toBe(journey.id);
   });
 });

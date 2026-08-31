@@ -106,6 +106,20 @@ export class DefaultBrowserValidationAgent {
 
     // 2. EXECUTE the journey's plan: enforce the EffectPolicy before every
     //    action, capture observations with full provenance.
+    //    THE AUTHORITATIVE NAVIGATION-SAFETY ALLOWLIST: the journey-bound
+    //    JourneyNavigationSafetyDeclaration (NOT a plan field — PR #97 third
+    //    architect review correction). The agent validates the declaration is
+    //    bound to THIS journey before using its allowlist. The executor
+    //    constructs the plan but CANNOT expand the trusted safe-target set.
+    if (!input.journeyNavigationSafety || input.journeyNavigationSafety.journeyId !== input.journey.id) {
+      return {
+        admitted: false,
+        admissionReason: `the journey navigation safety declaration is not bound to journey ${input.journey.id} (journeyNavigationSafety.journeyId mismatch — the authoritative declaration must originate from the journey authority)`,
+        run: null,
+        evidenceReference: null,
+      };
+    }
+    const readonlySafeNavigationTargets = input.journeyNavigationSafety.readonlySafeNavigationTargets;
     const now = input.now ?? (() => new Date());
     const ctx: ObservationContext = {
       runId: run.id,
@@ -134,7 +148,7 @@ export class DefaultBrowserValidationAgent {
       outer: for (const planStep of input.plan.steps) {
         for (const action of planStep.actions) {
           // 2a. Enforce the EffectPolicy BEFORE execution.
-          const decision = enforceEffectPolicy(action, run.effectPolicy, identity, input.environment, input.plan.readonlySafeNavigationTargets);
+          const decision = enforceEffectPolicy(action, run.effectPolicy, identity, input.environment, readonlySafeNavigationTargets);
           if (!decision.admitted && decision.executionError !== null) {
             executionError = decision.executionError;
             this.deps.logger.warn(

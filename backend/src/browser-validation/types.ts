@@ -55,6 +55,7 @@ import type {
   ValidationTrigger,
   ValidationEvidenceReference,
 } from '../continuous-validation/index.js';
+import { validateAllowlistEntry } from './internal/navigation-target.js';
 
 // ============================================================================
 // §1  The browser action vocabulary (the execution contract)
@@ -143,34 +144,57 @@ export interface BrowserPlanStep {
  * rejected). A plan that satisfies NO expected observation is rejected (the
  * agent observes nothing the journey declared — health would be vacuous).
  *
- * THE AUTHORITATIVE NAVIGATION-SAFETY ALLOWLIST (PR #97 second architect
- * review correction): {@link readonlySafeNavigationTargets} is the journey's
- * TRUSTED declaration of which navigation targets are read-only-safe. A
- * `navigate` action is admitted under READ_ONLY ONLY when its URL is in this
- * allowlist — the executor CANNOT turn a per-action assertion into
- * authoritative safety (there is no per-action `targetPolicy` field). The
- * allowlist is the authoritative mechanism; the URL structure checks
- * (scheme/userinfo) are defense-in-depth. An empty allowlist means NO
- * navigation is proven read-only-safe (every navigate under READ_ONLY is
- * rejected — the safe default).
+ * THE PLAN CARRIES NO NAVIGATION-SAFETY ALLOWLIST (PR #97 third architect
+ * review correction): the authoritative {@link readonlySafeNavigationTargets}
+ * declaration lives on the JOURNEY-BOUND {@link JourneyNavigationSafetyDeclaration},
+ * NOT on the executor-constructed plan. The executor constructs the plan
+ * (choosing which navigate actions to perform) but CANNOT expand the trusted
+ * safe-target set — that set is the journey authority's declaration. The
+ * enforcement gate checks each navigate URL against the journey's declaration
+ * at execution time.
  */
 export interface BrowserJourneyPlan {
   readonly journeyId: string;
   readonly steps: readonly BrowserPlanStep[];
-  /**
-   * The authoritative TRUSTED declaration of navigation targets that are
-   * read-only-safe. A `navigate` action's URL must be in this allowlist (exact
-   * string match) to be admitted under READ_ONLY. Each entry MUST be a
-   * parseable http(s) URL with no embedded userinfo (validated at plan
-   * construction). May be empty (the safe default — no navigation is proven
-   * read-only-safe).
-   */
-  readonly readonlySafeNavigationTargets: readonly string[];
 }
 
 // ============================================================================
-// §3  The browser validation agent (the execution mechanism contract)
+// §2b  The journey-bound navigation-safety declaration (the AUTHORITATIVE provenance)
 // ============================================================================
+
+/**
+ * The AUTHORITATIVE declaration of which navigation targets are read-only-safe,
+ * BOUND to a {@link ValidationJourney}. This is the journey authority's trusted
+ * declaration — NOT an executor-supplied assertion, NOT a plan field.
+ *
+ * PR #97 third architect review correction: the second correction placed the
+ * allowlist on {@link BrowserJourneyPlan} (executor-constructed) — the executor
+ * could still manufacture safe targets. This type moves the allowlist to a
+ * JOURNEY-BOUND declaration: {@link defineJourneyNavigationSafety} validates
+ * the binding (`journeyId === journey.id`) + the entry syntax. The executor
+ * constructs the PLAN (which navigate actions to perform) but CANNOT expand
+ * the trusted safe-target set — that set is the journey authority's
+ * declaration, carried on {@link ExecuteValidationRunInput.journeyNavigationSafety}
+ * alongside the journey.
+ *
+ * The critical invariant:
+ *
+ *   > A READ_ONLY navigation is safe only when the target is declared
+ *   > read-only-safe by the authoritative journey, and the execution plan is
+ *   > proven consistent with that declaration.
+ */
+export interface JourneyNavigationSafetyDeclaration {
+  /** The journey this declaration is bound to (MUST equal journey.id). */
+  readonly journeyId: string;
+  /**
+   * The authoritative TRUSTED allowlist of read-only-safe navigation targets.
+   * A `navigate` action's URL must be in this allowlist (exact string match)
+   * to be admitted under READ_ONLY. Each entry is a parseable http(s) URL
+   * with no embedded userinfo (validated at construction). May be empty (the
+   * safe default — no navigation is proven read-only-safe).
+   */
+  readonly readonlySafeNavigationTargets: readonly string[];
+}
 
 /** The input to {@link BrowserValidationAgent.executeValidationRun}. */
 export interface ExecuteValidationRunInput {
@@ -189,8 +213,18 @@ export interface ExecuteValidationRunInput {
   readonly releaseRef?: string;
   /** REQUIRED for CONTINUOUS (no autonomous scheduling — WORK-066 owns triggers). */
   readonly continuousConfigured?: boolean;
-  /** The execution plan (browser actions per step). */
+  /** The execution plan (browser actions per step — carries NO allowlist). */
   readonly plan: BrowserJourneyPlan;
+  /**
+   * The AUTHORITATIVE journey-bound navigation-safety declaration (PR #97
+   * third architect review correction). This is the journey authority's
+   * trusted declaration of read-only-safe navigation targets — NOT a plan
+   * field, NOT an executor assertion. The agent validates
+   * `journeyNavigationSafety.journeyId === journey.id` and uses its
+   * `readonlySafeNavigationTargets` to enforce READ_ONLY navigation safety.
+   * The executor constructs the plan but CANNOT expand this set.
+   */
+  readonly journeyNavigationSafety: JourneyNavigationSafetyDeclaration;
   /** The EXISTING /verification run id (the agent never creates verification runs). */
   readonly verificationRunId: string;
   /** The project whose verification run this evidence attaches to. */
@@ -255,6 +289,49 @@ export class BrowserValidationError extends Error {
     this.name = 'BrowserValidationError';
     this.code = code;
   }
+}
+
+// ============================================================================
+// §4b  The journey-bound declaration constructor (the authoritative provenance)
+// ============================================================================
+
+/**
+ * Construct the AUTHORITATIVE journey-bound navigation-safety declaration.
+ * Validates:
+ *   - `journeyId` MUST equal `journey.id` (the declaration is bound to THIS
+ *     journey — a declaration for a different journey is rejected);
+ *   - every entry in `readonlySafeNavigationTargets` MUST be a parseable
+ *     http(s) URL with no embedded userinfo (the trusted declaration must be
+ *     syntactically safe).
+ *
+ * This is the JOURNEY AUTHORITY's declaration, NOT an executor assertion.
+ * The executor constructs the PLAN (which navigate actions to perform) but
+ * CANNOT expand this set — the set is bound to the journey and carried on
+ * {@link ExecuteValidationRunInput.journeyNavigationSafety}.
+ */
+export function defineJourneyNavigationSafety(
+  journey: ValidationJourney,
+  readonlySafeNavigationTargets: readonly string[],
+): JourneyNavigationSafetyDeclaration {
+  if (!journey || typeof journey.id !== 'string' || journey.id.trim() === '') {
+    throw new BrowserValidationError('BROWSER_PLAN_INVALID', 'a journey navigation safety declaration requires a journey with a non-empty id');
+  }
+  if (!Array.isArray(readonlySafeNavigationTargets)) {
+    throw new BrowserValidationError('BROWSER_PLAN_INVALID', `journey ${journey.id}: readonlySafeNavigationTargets must be an array`);
+  }
+  // Validate each entry: parseable http(s) URL with no userinfo. The trusted
+  // declaration must be syntactically safe (defense in depth — the gate is
+  // primary, but the declaration itself must not carry a forbidden URL).
+  for (const entry of readonlySafeNavigationTargets) {
+    const violation = validateAllowlistEntry(entry);
+    if (violation !== null) {
+      throw new BrowserValidationError('BROWSER_PLAN_INVALID', `journey ${journey.id}: ${violation}`);
+    }
+  }
+  return Object.freeze({
+    journeyId: journey.id,
+    readonlySafeNavigationTargets: Object.freeze([...readonlySafeNavigationTargets]),
+  });
 }
 
 // ============================================================================

@@ -19673,9 +19673,9 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
     expect(appSrc).not.toMatch(/new PlaywrightBrowserDriver\(/);
   });
 
-  // --- (o) the navigation-target safety boundary is pinned (PR #97 second review) --
+  // --- (o) the navigation-target safety boundary is pinned (PR #97 third review — journey-bound provenance) --
 
-  it('the navigation-target safety boundary is pinned: the AUTHORITATIVE allowlist — a navigate is admitted under READ_ONLY ONLY when the URL is in the plan\'s readonlySafeNavigationTargets (no per-action assertion)', () => {
+  it('the navigation-target safety boundary is pinned: the AUTHORITATIVE allowlist is JOURNEY-BOUND (not plan-bound) — the executor cannot expand the trusted set', () => {
     expect(existsSync(BV_NAVIGATION_TARGET), 'navigation-target.ts must exist').toBe(true);
     const navSrc = stripCodeComments(readFileSync(BV_NAVIGATION_TARGET, 'utf8'));
     // The closed classification vocabulary (read_only_safe / unverified / forbidden):
@@ -19704,17 +19704,39 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
     expect(enforcementSrc).toMatch(/targetClass === 'unverified' && policy === 'READ_ONLY'/);
     expect(enforcementSrc).toMatch(/allowlist: readonly string\[\] = \[\]/);
     // The navigate action type carries NO per-action targetPolicy field (the
-    // executor cannot assert safety). Pin that the navigate variant has url +
-    // satisfiesObservationId + timeoutMs but NOT targetPolicy:
+    // executor cannot assert safety):
     const typesSrc = stripCodeComments(readFileSync(BV_TYPES, 'utf8'));
     expect(typesSrc).not.toMatch(/readonly targetPolicy:/);
     expect(typesSrc).not.toMatch(/type NavigationTargetPolicy/);
-    // The BrowserJourneyPlan carries the authoritative readonlySafeNavigationTargets allowlist:
-    expect(typesSrc).toMatch(/readonly readonlySafeNavigationTargets: readonly string\[\]/);
-    // The plan constructor validates the allowlist entries:
+    // THE JOURNEY-BOUND PROVENANCE (PR #97 third review correction): the
+    // BrowserJourneyPlan does NOT carry readonlySafeNavigationTargets (the
+    // plan is executor-constructed; the executor cannot expand the trusted
+    // set through the plan). The allowlist lives on the JOURNEY-BOUND
+    // JourneyNavigationSafetyDeclaration, carried on ExecuteValidationRunInput.
+    // Pin that the plan interface has only journeyId + steps (extract the
+    // BrowserJourneyPlan interface block and assert it has no allowlist field):
+    const planInterfaceMatch = typesSrc.match(/interface BrowserJourneyPlan \{[^}]*\}/);
+    expect(planInterfaceMatch, 'BrowserJourneyPlan interface must exist').not.toBeNull();
+    expect(planInterfaceMatch![0]).not.toMatch(/readonlySafeNavigationTargets/);
+    expect(planInterfaceMatch![0]).toMatch(/readonly journeyId: string;/);
+    expect(planInterfaceMatch![0]).toMatch(/readonly steps: readonly BrowserPlanStep\[\];/);
+    // The JourneyNavigationSafetyDeclaration type exists + carries the allowlist:
+    const declInterfaceMatch = typesSrc.match(/interface JourneyNavigationSafetyDeclaration \{[^}]*\}/);
+    expect(declInterfaceMatch, 'JourneyNavigationSafetyDeclaration interface must exist').not.toBeNull();
+    expect(declInterfaceMatch![0]).toMatch(/readonly journeyId: string;/);
+    expect(declInterfaceMatch![0]).toMatch(/readonly readonlySafeNavigationTargets: readonly string\[\];/);
+    // The defineJourneyNavigationSafety constructor (the authoritative provenance):
+    expect(typesSrc).toMatch(/export function defineJourneyNavigationSafety/);
+    // ExecuteValidationRunInput carries journeyNavigationSafety (NOT on the plan):
+    expect(typesSrc).toMatch(/readonly journeyNavigationSafety: JourneyNavigationSafetyDeclaration/);
+    // The plan constructor does NOT accept or carry readonlySafeNavigationTargets:
     const planSrc = stripCodeComments(readFileSync(BV_PLAN, 'utf8'));
-    expect(planSrc).toMatch(/readonlySafeNavigationTargets/);
-    expect(planSrc).toMatch(/validateAllowlistEntry/);
+    expect(planSrc).not.toMatch(/readonlySafeNavigationTargets/);
+    expect(planSrc).not.toMatch(/validateAllowlistEntry/);
+    // The agent validates the journey binding (journeyNavigationSafety.journeyId === journey.id):
+    const agentSrc = stripCodeComments(readFileSync(BV_AGENT, 'utf8'));
+    expect(agentSrc).toMatch(/journeyNavigationSafety\.journeyId !== input\.journey\.id/);
+    expect(agentSrc).toMatch(/readonlySafeNavigationTargets/);
   });
 
   // --- (p) the PlaywrightBrowserDriver URL validation is pinned (defense in depth) ---

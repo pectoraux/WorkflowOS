@@ -323,7 +323,7 @@ run's declared EffectPolicy:
   binding to match the environment's isolated tenant; a cross-tenant
   mutation is rejected before execution.
 
-#### 9.4.1 Navigation-target safety (the AUTHORITATIVE allowlist model)
+#### 9.4.1 Navigation-target safety (the AUTHORITATIVE journey-bound provenance model)
 
 A browser navigation is NOT unconditionally a read action. A navigation can
 have externally observable side effects even without a DOM mutation:
@@ -339,24 +339,42 @@ a plain-path GET may still mutate server state, and a query string is one
 possible signal of mutation, not a proof of it. The agent cannot know whether
 a target GET mutates server state merely from the URL.
 
-THE INVARIANT (the authoritative boundary):
+THE INVARIANT (the authoritative provenance):
 
+> A READ_ONLY navigation is safe only when the target is declared
+> read-only-safe by the authoritative journey, and the execution plan is
+> proven consistent with that declaration.
+>
 > The browser executor must not turn an executor-supplied assertion into
 > authoritative safety.
 
-A per-action assertion (e.g. a `targetPolicy` field on the `navigate` action)
-is an executor-supplied assertion — the executor could assert safety for
-`/delete/123` and the agent would have no way to verify it. The model
-therefore requires an **authoritative trusted declaration**:
+THE JOURNEY-BOUND MODEL (the authoritative provenance):
 
-The `BrowserJourneyPlan` carries a `readonlySafeNavigationTargets` allowlist —
-the journey's TRUSTED declaration of which navigation targets are
-read-only-safe. A `navigate` action is admitted under READ_ONLY ONLY when its
-URL is in this allowlist (exact string match). There is NO per-action safety
-field on the `navigate` action — the executor cannot assert safety; the
-journey declares it.
+The authoritative `readonlySafeNavigationTargets` allowlist is NOT a field on
+the executor-constructed `BrowserJourneyPlan` — it is a JOURNEY-BOUND
+declaration. The journey authority (or the architect's wiring) constructs a
+`JourneyNavigationSafetyDeclaration` bound to a specific journey
+(`journeyId === journey.id`, validated by `defineJourneyNavigationSafety`).
+The declaration carries the trusted allowlist. The `ExecuteValidationRunInput`
+carries it ALONGSIDE the journey — NOT on the plan.
 
-Classification:
+The executor constructs the PLAN (choosing which navigate actions to perform)
+but CANNOT expand the trusted safe-target set — the plan input type does not
+accept `readonlySafeNavigationTargets` (a type-level proof). The enforcement
+gate checks each navigate URL against the JOURNEY's allowlist (from
+`journeyNavigationSafety.readonlySafeNavigationTargets`).
+
+```text
+ValidationJourney
+    └── JourneyNavigationSafetyDeclaration (journeyId-bound, authoritative)
+              ↓ carried on ExecuteValidationRunInput.journeyNavigationSafety
+BrowserJourneyPlan
+    └── derived/validated against the journey declaration (carries NO allowlist)
+              ↓
+Browser executor (enforcement gate checks each navigate URL against the journey's allowlist)
+```
+
+Classification (`classifyNavigationTarget(url, allowlist)`):
 
 - `forbidden` — the URL has a non-http(s) scheme or embedded userinfo
   (categorically rejected under EVERY policy, regardless of the allowlist —
@@ -374,13 +392,6 @@ Classification:
 An empty allowlist means NO navigation is proven read-only-safe (the safe
 default — every navigate under READ_ONLY is rejected).
 
-The allowlist entries are validated at plan construction: each MUST be a
-parseable http(s) URL with no embedded userinfo (the trusted declaration must
-be syntactically safe). A query string in an allowlist entry is permitted —
-the journey authority may declare a query-string URL read-only-safe (a query
-string is not proof of mutation; the allowlist is the authority, not the URL
-structure).
-
 Defense in depth: the `PlaywrightBrowserDriver` ALSO validates the URL
 scheme + userinfo before `page.goto()` (the documented "http(s) URLs only"
 guarantee made real). The gate is the primary enforcement; the driver is the
@@ -388,10 +399,11 @@ backstop. The browser driver is NEVER called for a navigation that the
 policy boundary rejected (discrimination-proven).
 
 This is discrimination-proven: the attack shape `GET /delete/123` under
-READ_ONLY is REJECTED (not in the allowlist → unverified → rejected). An
-agent that does NOT enforce the allowlist (trusting the URL structure alone,
-or a per-action assertion) would admit it — the corresponding test FAILS
-when the allowlist check is removed.
+READ_ONLY is REJECTED (not in the journey's allowlist → unverified → rejected).
+An agent that does NOT enforce the journey-bound allowlist (trusting an
+executor-supplied plan-level allowlist, or a per-action assertion) would
+admit it — the corresponding test FAILS when the journey-binding check is
+removed.
 
 #### 9.4.2 The attack shape (the discrimination proof)
 

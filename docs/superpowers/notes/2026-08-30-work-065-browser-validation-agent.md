@@ -220,69 +220,88 @@ boundary (effect-policy enforcement, navigation-target classification,
 no-second-authority matrix) must exist and be proven BEFORE a production
 driver is wired.
 
-## 4c. Navigation-target safety boundary (PR #97 architect review — the AUTHORITATIVE allowlist model)
+## 4c. Navigation-target safety boundary (PR #97 architect review — the AUTHORITATIVE journey-bound provenance)
 
 The original implementation classified EVERY `navigate` action as a `read`
-action (admitted under READ_ONLY). The architect's first REQUEST CHANGES
-correctly identified this as a real safety defect. The first correction
-introduced a per-action `targetPolicy` field verified against the URL
-structure. The architect's **second REQUEST CHANGES** correctly identified
-that this STILL did not close the defect: a plain-path GET like `/delete/123`
-declared `read_only_safe` (no query string) was still admitted under
-READ_ONLY. The agent cannot know whether a target GET mutates server state
-merely from the URL structure — "no query string" is not proof of safety, and
-"query string" is not proof of mutation. The per-action `targetPolicy` was an
-**executor-supplied assertion**, and the agent was turning it into
-authoritative safety.
+action. The first correction introduced a per-action `targetPolicy` field
+(still executor-supplied). The second correction moved the allowlist to the
+`BrowserJourneyPlan` (still executor-constructed — the executor could
+manufacture safe targets via the plan). The architect's **third REQUEST
+CHANGES** correctly identified the remaining authority-boundary gap: the
+allowlist's PROVENANCE was still executor-supplied.
 
 THE INVARIANT (the architect's ruling):
 
+> A READ_ONLY navigation is safe only when the target is declared
+> read-only-safe by the authoritative journey, and the execution plan is
+> proven consistent with that declaration.
+>
 > The browser executor must not turn an executor-supplied assertion into
 > authoritative safety.
 
-THE AUTHORITATIVE MODEL (the final correction):
+THE JOURNEY-BOUND MODEL (the final correction):
 
-- the `navigate` action carries **NO** per-action safety field — the executor
-  cannot assert safety;
-- the `BrowserJourneyPlan` carries an AUTHORITATIVE
-  `readonlySafeNavigationTargets` allowlist — the journey's TRUSTED
-  declaration of which navigation targets are read-only-safe;
-- the agent VERIFIES each navigate URL against the allowlist
-  (`classifyNavigationTarget(url, allowlist)`):
-  - `forbidden` (non-http(s) scheme, embedded userinfo) → rejected under
-    every policy (syntactic safety, defense in depth — regardless of the
-    allowlist);
-  - `read_only_safe` (URL is in the allowlist) → admitted under READ_ONLY +
-    every non-FORBIDDEN policy;
-  - `unverified` (URL NOT in the allowlist) → rejected under READ_ONLY (no
-    authoritative proof of safety); admitted under SAFE_MUTATION/
-    ISOLATED_MUTATION (the run has a mutation policy);
-- the `PlaywrightBrowserDriver.open()` ALSO validates the URL scheme +
-  userinfo before `page.goto()` (the documented "http(s) URLs only"
-  guarantee made real — defense in depth).
+- REMOVED `readonlySafeNavigationTargets` from `BrowserJourneyPlan` and
+  `BrowserJourneyPlanInput` entirely — the plan carries ONLY `journeyId` +
+  `steps`. The executor constructs the plan (choosing navigate actions) but
+  CANNOT carry or expand an allowlist through it (a type-level proof: the
+  plan input type does not declare the field).
+- ADDED `JourneyNavigationSafetyDeclaration` — a JOURNEY-BOUND authoritative
+  declaration: `{ journeyId, readonlySafeNavigationTargets }`. Constructed by
+  `defineJourneyNavigationSafety(journey, targets)`, which validates the
+  binding (`journeyId === journey.id`) + the entry syntax (http(s), no userinfo).
+- ADDED `journeyNavigationSafety` to `ExecuteValidationRunInput` — the
+  authoritative declaration is carried ALONGSIDE the journey, NOT on the plan.
+- The agent validates `journeyNavigationSafety.journeyId === journey.id`
+  before using the allowlist (a declaration bound to a different journey is
+  rejected — proven in agent-execution.test.ts §15).
+- `enforceEffectPolicy` takes the journey's allowlist (from
+  `journeyNavigationSafety.readonlySafeNavigationTargets`), NOT the plan's.
 
-THE ATTACK SHAPE (the architect's required regression): `GET /delete/123`
-under READ_ONLY with `/delete/123` NOT in the allowlist → `unverified` →
-REJECTED before `page.goto()`. The OLD model (per-action `targetPolicy`)
-would admit it if the caller asserted `read_only_safe`; the NEW model
-(authoritative allowlist) rejects it because the journey did not declare
-`/delete/123` read-only-safe.
+THE ARCHITECT'S REQUIRED REGRESSION (the authority-confusion proof):
 
-The critical proof: the browser driver is NEVER called for a navigation that
-the policy boundary rejected (7 discriminating tests in agent-execution.test.ts
-§14, including the `/delete/123` attack shape + 8 driver-level URL-validation
-tests). The allowlist entries are validated at plan construction (each MUST be
-a parseable http(s) URL with no userinfo). An empty allowlist is the safe
-default (no navigation is proven read-only-safe).
+```
+authoritative journey (via defineJourneyNavigationSafety):
+  readonlySafeNavigationTargets = ["https://example.com/sign-in"]
 
+executor-created plan:
+  readonlySafeNavigationTargets = ["https://example.com/sign-in", "https://example.com/delete/123"]
+
+→ plan construction: the plan input type does NOT accept readonlySafeNavigationTargets
+  (a TYPE ERROR — @ts-expect-error proves it; the executor cannot expand the set via the plan)
+```
+
+And the positive case:
+
+```
+journey: ["/sign-in"]
+plan navigates to: "/sign-in"
+journeyNavigationSafety.readonlySafeNavigationTargets: ["/sign-in"]
+
+→ admitted under READ_ONLY (URL in the journey's allowlist)
+```
+
+The attack shape (`GET /delete/123` under READ_ONLY, not in the journey's
+allowlist) → `unverified` → REJECTED before `page.goto()`. The browser driver
+is NEVER called for a rejected navigation (7 discriminating tests in
+agent-execution.test.ts §14 + 2 binding-validation tests in §15 + 4
+authority-confusion tests in navigation-target.test.ts §6).
+
+The critical distinction: the executor may choose WHICH declared-safe target
+to navigate to, but it must NOT get to expand the trusted set. The trusted set
+originates from the journey authority (the journey-bound declaration), not
+from the executor-constructed plan.
+
+## 5. Verification summary
 ## 5. Verification summary (on the implementation branch)
 
-- WORK-065 browser-validation suite: 79 tests (33 navigation-target + 21
-  agent execution [14 original + 7 navigation-safety] + 15 enforcement/plan
-  + 8 PlaywrightDriver URL-validation + 2 real-browser) — all green.
+- WORK-065 browser-validation suite: 83 tests (39 navigation-target + 23
+  agent execution [14 original + 7 navigation-safety + 2 binding-validation]
+  + 15 enforcement/plan + 8 PlaywrightDriver URL-validation + 2 real-browser)
+  — all green.
 - WORK-064 continuous-validation suite: 135 tests — unchanged, all green.
 - static-architecture: 820/820 (16 new WORK-065 invariants + 804 existing;
-  2 new: navigation-target boundary (o) + driver URL validation (p)).
+  invariant (o) updated to pin the journey-bound provenance).
 - typecheck: 0 errors. lint: 0 errors (2 pre-existing warnings in
   work-032-benchmark.spec.ts, untouched).
 - governance:status: exit 0 (WORK-065 recognized as in_flight on branch

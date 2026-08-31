@@ -78,14 +78,19 @@ export {
   // §4 the typed domain error
   BrowserValidationError,
   BROWSER_VALIDATION_ERROR_CODES,
+  // §4b the journey-bound navigation-safety declaration constructor
+  // (the AUTHORITATIVE provenance — PR #97 third architect review correction)
+  defineJourneyNavigationSafety,
 } from './types.js';
 export type {
   // §1 the action vocabulary
   BrowserAction,
   BrowserActionEffect,
-  // §2 the plan
+  // §2 the plan (carries NO allowlist)
   BrowserPlanStep,
   BrowserJourneyPlan,
+  // §2b the journey-bound navigation-safety declaration (the authoritative allowlist)
+  JourneyNavigationSafetyDeclaration,
   // §3 the agent contract
   BrowserValidationAgent,
   ExecuteValidationRunInput,

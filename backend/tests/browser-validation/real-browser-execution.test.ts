@@ -33,6 +33,7 @@ import {
 import {
   DefaultBrowserValidationAgent,
   defineBrowserJourneyPlan,
+  defineJourneyNavigationSafety,
   PlaywrightBrowserDriver,
 } from '../../src/browser-validation/index.js';
 import { createLogger } from '@platform/logger.js';
@@ -176,7 +177,6 @@ describe('WORK-065 real-browser integration — the execution path against a rea
     const realPlan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
-        readonlySafeNavigationTargets: [`${baseUrl}/sign-in`],
         steps: [
           {
             stepId: 'step-open',
@@ -198,6 +198,7 @@ describe('WORK-065 real-browser integration — the execution path against a rea
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: realPlan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(journey, [`${baseUrl}/sign-in`]),
       verificationRunId: 'ver-real-1',
       projectId: 'proj-real-1',
       runId: 'run-real-browser-1',
@@ -237,7 +238,6 @@ describe('WORK-065 real-browser integration — the execution path against a rea
     const missingPlan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
-        readonlySafeNavigationTargets: [`${baseUrl}/sign-in`],
         steps: [
           {
             stepId: 'step-open',
@@ -258,6 +258,7 @@ describe('WORK-065 real-browser integration — the execution path against a rea
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: missingPlan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(journey, [`${baseUrl}/sign-in`]),
       verificationRunId: 'ver-real-2',
       projectId: 'proj-real-2',
       runId: 'run-real-browser-miss',

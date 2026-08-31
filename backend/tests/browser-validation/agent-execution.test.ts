@@ -25,6 +25,7 @@ import type { AuthenticatedPrincipal } from '@modules/auth/index.js';
 import {
   DefaultBrowserValidationAgent,
   defineBrowserJourneyPlan,
+  defineJourneyNavigationSafety,
 } from '../../src/browser-validation/index.js';
 import { createLogger } from '@platform/logger.js';
 import { FakeBrowserDriver, FakeVerificationService } from './helpers.js';
@@ -129,11 +130,18 @@ const forbiddenJourney: ValidationJourney = defineValidationJourney({
   successCriteria: [{ id: 'crit-checkout', description: 'checkout completes', requiresObservationIds: ['obs-confirmation'] }],
 });
 
+// The AUTHORITATIVE journey-bound navigation-safety declarations (PR #97 third
+// architect review correction). These are the JOURNEY AUTHORITY's trusted
+// declarations — NOT plan fields, NOT executor assertions. The executor
+// constructs the plan but CANNOT expand these sets.
+const readJourneyNavSafety = defineJourneyNavigationSafety(readJourney, ['https://example.com/sign-in']);
+const mutationJourneyNavSafety = defineJourneyNavigationSafety(mutationJourney, []);
+const forbiddenJourneyNavSafety = defineJourneyNavigationSafety(forbiddenJourney, ['https://example.com/checkout']);
+
 /** The read journey's plan: navigate (satisfies obs-status) + extract (satisfies obs-heading). */
 const readPlan = defineBrowserJourneyPlan(
   {
     journeyId: readJourney.id,
-    readonlySafeNavigationTargets: ['https://example.com/sign-in'],
     steps: [
       {
         stepId: 'step-open',
@@ -219,6 +227,7 @@ describe('WORK-065 agent §1 — happy path (healthy read-only run)', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-1',
       projectId: 'proj-1',
       runId: 'run-happy-1',
@@ -279,6 +288,7 @@ describe('WORK-065 agent §2 — browser unavailable → environment_error', () 
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-2',
       projectId: 'proj-2',
       runId: 'run-no-driver',
@@ -316,6 +326,7 @@ describe('WORK-065 agent §3 — FORBIDDEN policy → effect_policy_violation', 
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: forbiddenPlan,
+      journeyNavigationSafety: forbiddenJourneyNavSafety,
       verificationRunId: 'ver-run-3',
       projectId: 'proj-3',
       runId: 'run-forbidden',
@@ -361,7 +372,6 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
     const roClickPlan = defineBrowserJourneyPlan(
       {
         journeyId: readOnlyClickJourney.id,
-        readonlySafeNavigationTargets: ['https://example.com'],
         steps: [
           {
             stepId: 'step-attempt-click',
@@ -386,6 +396,7 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: roClickPlan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(readOnlyClickJourney, ['https://example.com']),
       verificationRunId: 'ver-run-4',
       projectId: 'proj-4',
       runId: 'run-ro-click',
@@ -421,6 +432,7 @@ describe('WORK-065 agent §5 — selector miss → validation_failure', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-5',
       projectId: 'proj-5',
       runId: 'run-selector-miss',
@@ -455,6 +467,7 @@ describe('WORK-065 agent §6 — driver timeout → environment_error', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-6',
       projectId: 'proj-6',
       runId: 'run-timeout',
@@ -517,6 +530,7 @@ describe('WORK-065 agent §7 — missing expected observation → validation_fai
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: partialPlan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(twoObsJourney, []),
       verificationRunId: 'ver-run-7',
       projectId: 'proj-7',
       runId: 'run-missing-obs',
@@ -551,6 +565,7 @@ describe('WORK-065 agent §8 — mutation journey (SAFE_MUTATION)', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: mutationPlan,
+      journeyNavigationSafety: mutationJourneyNavSafety,
       verificationRunId: 'ver-run-8',
       projectId: 'proj-8',
       runId: 'run-mutation-happy',
@@ -578,6 +593,7 @@ describe('WORK-065 agent §9 — rejected admission → no run, no evidence', ()
       mode: 'POST_RELEASE',
       trigger: 'RELEASE',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-9',
       projectId: 'proj-9',
       runId: 'run-rejected',
@@ -613,6 +629,7 @@ describe('WORK-065 agent §10 — identity binding (presented, never minted)', (
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-10',
       projectId: 'proj-10',
       runId: 'run-unauth',
@@ -649,6 +666,7 @@ describe('WORK-065 agent §10 — identity binding (presented, never minted)', (
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: mutationPlan,
+      journeyNavigationSafety: mutationJourneyNavSafety,
       verificationRunId: 'ver-run-10b',
       projectId: 'proj-10b',
       runId: 'run-human',
@@ -684,6 +702,7 @@ describe('WORK-065 agent §11 — evidence mapping failure → run preserved, ev
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-missing',
       projectId: 'proj-11',
       runId: 'run-map-fail',
@@ -717,6 +736,7 @@ describe('WORK-065 agent §12 — no second verification authority', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-12',
       projectId: 'proj-12',
       runId: 'run-no-second-auth',
@@ -749,6 +769,7 @@ describe('WORK-065 agent §13 — deterministic outcomes', () => {
         mode: 'PRE_MERGE',
         trigger: 'PR',
         plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety,
         verificationRunId: 'ver-run-13',
         projectId: 'proj-13',
         runId: 'run-deterministic',
@@ -794,7 +815,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
-        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
         steps: [
           {
             stepId: 'step-navigate',
@@ -813,7 +833,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/sign-in']),
       verificationRunId: 'ver-nav-1',
       projectId: 'proj-nav-1',
       runId: 'run-nav-safe',
@@ -839,7 +860,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       {
         journeyId: navJourney.id,
         // The allowlist declares /sign-in safe — /delete/123 is NOT in it.
-        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
         steps: [
           {
             stepId: 'step-navigate',
@@ -858,7 +878,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/sign-in']),
       verificationRunId: 'ver-nav-2',
       projectId: 'proj-nav-2',
       runId: 'run-nav-delete-rejected',
@@ -881,7 +902,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       {
         journeyId: navJourney.id,
         // Empty allowlist — no navigation is proven read-only-safe.
-        readonlySafeNavigationTargets: [],
         steps: [
           {
             stepId: 'step-navigate',
@@ -900,7 +920,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, []),
       verificationRunId: 'ver-nav-3',
       projectId: 'proj-nav-3',
       runId: 'run-nav-query-rejected',
@@ -924,7 +945,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
-        readonlySafeNavigationTargets: ['https://example.com/confirm?token=abc'],
         steps: [
           {
             stepId: 'step-navigate',
@@ -943,7 +963,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/confirm?token=abc']),
       verificationRunId: 'ver-nav-4',
       projectId: 'proj-nav-4',
       runId: 'run-nav-query-allowlisted',
@@ -963,7 +984,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
-        readonlySafeNavigationTargets: [],
         steps: [
           {
             stepId: 'step-navigate',
@@ -982,7 +1002,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, []),
       verificationRunId: 'ver-nav-5',
       projectId: 'proj-nav-5',
       runId: 'run-nav-file-rejected',
@@ -1028,7 +1049,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: forbiddenNavJourney.id,
-        readonlySafeNavigationTargets: ['https://example.com/checkout'],
         steps: [
           {
             stepId: 'step-navigate',
@@ -1047,7 +1067,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: forbiddenEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(forbiddenNavJourney, ['https://example.com/checkout']),
       verificationRunId: 'ver-nav-6',
       projectId: 'proj-nav-6',
       runId: 'run-nav-forbidden',
@@ -1089,7 +1110,6 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       {
         journeyId: mutationNavJourney.id,
         // No allowlist — /delete/123 is unverified, but SAFE_MUTATION admits it.
-        readonlySafeNavigationTargets: [],
         steps: [
           {
             stepId: 'step-navigate',
@@ -1108,7 +1128,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       environment: previewMutationEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan,
+plan,
+      journeyNavigationSafety: defineJourneyNavigationSafety(mutationNavJourney, []),
       verificationRunId: 'ver-nav-7',
       projectId: 'proj-nav-7',
       runId: 'run-nav-mutation-admitted',
@@ -1118,5 +1139,81 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     expect(outcome.run!.outcome!.kind).toBe('healthy');
     // The driver WAS called (the navigation executed):
     expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §15  Journey-binding validation — the agent rejects a journeyNavigationSafety
+//      declaration bound to a DIFFERENT journey (the provenance proof)
+// ---------------------------------------------------------------------------
+
+describe('WORK-065 agent §15 — the agent validates the journeyNavigationSafety binding (the provenance proof)', () => {
+  it('a journeyNavigationSafety declaration bound to a DIFFERENT journey → the agent rejects the run (admitted: false, no execution)', async () => {
+    // The journey authority declares the allowlist bound to a journey id.
+    // The agent validates journeyNavigationSafety.journeyId === journey.id.
+    // A declaration bound to a different journey is rejected — the executor
+    // cannot supply a declaration from another journey to authorize this run.
+    const otherJourney: ValidationJourney = defineValidationJourney({
+      id: 'journey-other-for-binding-test',
+      name: 'Another journey',
+      identityRequirement: 'unauthenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'READ_ONLY',
+      steps: [
+        { id: 's', name: 's', expectedObservations: [{ id: 'o', stepId: 's', kind: 'network', description: 'o', matcher: { kind: 'status_code', status: 200 } }] },
+      ],
+      successCriteria: [{ id: 'c', description: 'c', requiresObservationIds: ['o'] }],
+    });
+    // A navigation safety declaration bound to `otherJourney` (NOT readJourney):
+    const wrongNavSafety = defineJourneyNavigationSafety(otherJourney, ['https://example.com/sign-in']);
+    const driver = new FakeBrowserDriver({});
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+
+    const outcome = await agent.executeValidationRun({
+      journey: readJourney, // the run is for readJourney...
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan: readPlan,
+      journeyNavigationSafety: wrongNavSafety, // ...but the declaration is bound to otherJourney
+      verificationRunId: 'ver-binding-1',
+      projectId: 'proj-binding-1',
+      runId: 'run-binding-mismatch',
+      now: fixedClock,
+    });
+
+    // The agent rejected the run — the declaration is not bound to this journey:
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.run).toBeNull();
+    expect(outcome.evidenceReference).toBeNull();
+    expect(outcome.admissionReason).toMatch(/not bound to journey/);
+    // CRITICAL PROOF: the driver was NEVER called:
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('a journeyNavigationSafety declaration bound to THIS journey → the run proceeds (the provenance is valid)', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
+      extract: [{ matched: true, text: 'Sign in to your account', finalUrl: 'https://example.com/sign-in' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+
+    const outcome = await agent.executeValidationRun({
+      journey: readJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan: readPlan,
+      journeyNavigationSafety: readJourneyNavSafety, // bound to readJourney
+      verificationRunId: 'ver-binding-2',
+      projectId: 'proj-binding-2',
+      runId: 'run-binding-valid',
+      now: fixedClock,
+    });
+
+    expect(outcome.admitted).toBe(true);
+    expect(outcome.run!.outcome!.kind).toBe('healthy');
   });
 });
