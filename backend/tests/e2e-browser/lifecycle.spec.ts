@@ -33,7 +33,9 @@
  *   → VERIFIED
  */
 import { test, expect, type Page } from '@playwright/test';
-import { buildAuthStack, type TestAuthStack } from '../helpers/test-auth-stack.js';
+import { buildIdentityStack, type TestIdentityStack } from '../helpers/test-identity-stack.js';
+import { buildAuthPluginDeps, buildIdentityRouteDeps, buildOrganizationsRouteDeps } from '../helpers/test-identity-server.js';
+import { loginWithServerSession } from '../helpers/browser-session.js';
 import { buildServer } from '@api/server.js';
 import { InMemoryQueue, buildHandlerRegistry, WorkerHost, createLogger, generateExecutionId } from '@platform/index.js';
 import { CaptureStream } from '../helpers/capture-stream.js';
@@ -57,7 +59,7 @@ import { DefaultAuditService } from '../../src/modules/audit/internal/audit-serv
 import type { FastifyInstance } from 'fastify';
 import { AllowAllCheckpointGate } from '../helpers/allow-all-checkpoint-gate.js';
 
-let stack: TestAuthStack;
+let stack: TestIdentityStack;
 let server: FastifyInstance;
 let worker: WorkerHost;
 let queue: InMemoryQueue;
@@ -72,10 +74,9 @@ const API_KEY = 'raw-key-browser-e2e';
 const WEBHOOK_SECRET = 'browser-e2e-webhook-secret';
 
 test.beforeAll(async () => {
-  stack = await buildAuthStack({
-    WFOS_TEST_BROWSER_KEY: API_KEY,
-    WFOS_TEST_BROWSER_WEBHOOK: WEBHOOK_SECRET,
-  });
+  process.env['WFOS_TEST_BROWSER_KEY'] = API_KEY;
+  process.env['WFOS_TEST_BROWSER_WEBHOOK'] = WEBHOOK_SECRET;
+  stack = await buildIdentityStack();
 
   const org = await stack.organizationRepository.create({ name: 'Browser E2E Org' });
   const user = await stack.userRepository.upsertByExternalId({ externalId: 'browser-e2e-user', displayName: 'Browser User' });
@@ -138,7 +139,9 @@ test.beforeAll(async () => {
     queue,
     logger: stack.db.logger,
     health: { database: stack.db.client, objectStore: stack.objectStore },
-    auth: { authProvider: stack.authProvider, userRepository: stack.userRepository },
+    auth: buildAuthPluginDeps(stack),
+    identity: buildIdentityRouteDeps(stack),
+    organizations: buildOrganizationsRouteDeps(stack),
     projects: {
       authorizationService: stack.authorizationService,
       projectRepository: stack.projectRepository,
@@ -239,12 +242,18 @@ test.afterAll(async () => {
 });
 
 /** Helper: inject the API key + navigate to the app. */
-async function loginAndNavigate(page: Page) {
-  // Set the API key in localStorage (simulating the login flow)
+async function loginAndNavigate(page: Page): Promise<void> {
+  // WORK-074: the demo-key localStorage login is RETIRED from the frontend
+  // (the customer login path is the human login; the API-key path remains
+  // automation-only). The specs seed a REAL server-side session through the
+  // SAME SessionService the /auth routes use and attach the HttpOnly
+  // `wfos_session` cookie — the production transport.
+  const user = await stack.userRepository.upsertByExternalId({
+    externalId: 'browser-e2e-user',
+    displayName: 'Browser User',
+  });
+  await loginWithServerSession(page, stack.sessionService, user.id);
   await page.goto('/');
-  await page.evaluate((key) => {
-    localStorage.setItem('wfos_api_key', key);
-  }, API_KEY);
 }
 
 test.describe('WORKFLOWOS — Complete A→Z Browser E2E', () => {

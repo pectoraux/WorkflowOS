@@ -15,14 +15,18 @@ import type { TestIdentityStack } from './test-identity-stack.js';
  * The heavier product routes (workbench, specifications, …) are intentionally
  * absent — the identity suites exercise the identity surface.
  */
-export async function buildIdentityTestServer(stack: TestIdentityStack): Promise<FastifyInstance> {
-  const authDeps: AuthPluginDeps = {
+export function buildAuthPluginDeps(stack: TestIdentityStack): AuthPluginDeps {
+  return {
     authProvider: stack.authProvider,
     userRepository: stack.userRepository,
     sessionAuthProvider: stack.sessionAuthProvider,
     sessionCookieName: 'wfos_session',
   };
-  const identityDeps: AuthRouteDeps = {
+}
+
+/** The /auth identity-route deps for a stack (shared by the E2E specs). */
+export function buildIdentityRouteDeps(stack: TestIdentityStack): AuthRouteDeps {
+  return {
     sessionService: stack.sessionService,
     passwordCredentials: stack.passwordCredentials,
     identityResolution: stack.identityResolution,
@@ -35,13 +39,23 @@ export async function buildIdentityTestServer(stack: TestIdentityStack): Promise
     audit: stack.auditService,
     publicUrl: 'http://localhost:5173',
   };
-  const organizationsDeps: OrganizationsRouteDeps = {
+}
+
+/** The /organizations membership-route deps for a stack (shared by the E2E specs). */
+export function buildOrganizationsRouteDeps(stack: TestIdentityStack): OrganizationsRouteDeps {
+  return {
     membershipRepository: stack.membershipRepository,
     organizationRepository: stack.organizationRepository,
     userRepository: stack.userRepository,
     authorizationService: stack.authorizationService,
     audit: stack.auditService,
   };
+}
+
+export async function buildIdentityTestServer(stack: TestIdentityStack): Promise<FastifyInstance> {
+  const authDeps: AuthPluginDeps = buildAuthPluginDeps(stack);
+  const identityDeps: AuthRouteDeps = buildIdentityRouteDeps(stack);
+  const organizationsDeps: OrganizationsRouteDeps = buildOrganizationsRouteDeps(stack);
   return buildServer({
     // ServerDeps requires the queue/logger pair (the jobs routes' deps) — the
     // identity suites use the in-memory queue + the harness capture logger.
