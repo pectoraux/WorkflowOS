@@ -19147,4 +19147,39 @@ describe('WORK-074 invariants — identity & access runtime boundaries', () => {
     const machineSrc = readFileSync(join(AUTH_DIR, 'internal', 'machine-identity-service.ts'), 'utf8');
     expect(machineSrc).toMatch(/sha256|createHash/); // digest-only persistence
   });
+
+  it('the OAuth callback is BOUND to the initiating browser (login-CSRF remediation — PR #99 review)', () => {
+    // The single-use state alone is NOT enough: the callback must require the
+    // initiating browser's pre-auth transaction binding, checked BEFORE any
+    // provider assertion is accepted, consumed atomically WITH the state.
+    const routeSrc = readFileSync(join(BACKEND_ROOT, 'src', 'api', 'routes', 'auth.route.ts'), 'utf8');
+    // The start mints/reuses the transaction cookie and the callback reads it.
+    expect(routeSrc).toMatch(/OAUTH_TRANSACTION_COOKIE_NAME/);
+    expect(routeSrc).toMatch(/readCookie\(req\.headers\.cookie,\s*OAUTH_TRANSACTION_COOKIE_NAME\)/);
+    // The consume carries the transaction binding (state + binding spent together).
+    expect(routeSrc).toMatch(/oauthStateStore\.consume\([^)]*transactionId\)/s);
+    // The binding is checked BEFORE the provider assertion exchange happens.
+    const callbackStart = routeSrc.indexOf("/auth/oauth/:provider/callback'");
+    const exchangeIdx = routeSrc.indexOf('exchangeAuthorizationCode', callbackStart);
+    const consumeIdx = routeSrc.indexOf('oauthStateStore.consume', callbackStart);
+    const txCheckIdx = routeSrc.indexOf('if (!transactionId)', callbackStart);
+    expect(txCheckIdx).toBeGreaterThan(-1);
+    expect(consumeIdx).toBeGreaterThan(txCheckIdx);
+    expect(exchangeIdx).toBeGreaterThan(consumeIdx);
+    // The store enforces the binding inside the SAME atomic single-use DELETE,
+    // persisted DIGEST-ONLY (the raw transaction id never sits in a table).
+    const storeSrc = readFileSync(join(AUTH_DIR, 'internal', 'oauth-state-store.ts'), 'utf8');
+    expect(storeSrc).toMatch(/transaction_digest = \$3/);
+    expect(storeSrc).toMatch(/createHash\('sha256'\)\.update\(transactionId\)/);
+    expect(storeSrc.match(/INSERT INTO wfos_oauth_states[\s\S]*?VALUES[\s\S]*?\)/)?.[0]).not.toContain('transactionId,');
+    // The transaction cookie carries the session-cookie discipline:
+    // HttpOnly + SameSite=Lax (+ Secure in production), set by the start.
+    const cookieSrc = readFileSync(join(BACKEND_ROOT, 'src', 'api', 'routes', 'session-cookie.ts'), 'utf8');
+    const txBuilder = cookieSrc.slice(cookieSrc.indexOf('buildOAuthTransactionCookie'));
+    expect(txBuilder).toContain('HttpOnly');
+    expect(txBuilder).toContain('SameSite=Lax');
+    // The binding expires WITH the state it binds: the two TTLs agree.
+    expect(cookieSrc).toMatch(/OAUTH_TRANSACTION_COOKIE_TTL_SECONDS = 600/);
+    expect(storeSrc).toMatch(/DEFAULT_TTL_SECONDS = 600/);
+  });
 });

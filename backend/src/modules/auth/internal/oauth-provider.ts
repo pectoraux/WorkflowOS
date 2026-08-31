@@ -33,7 +33,8 @@ export interface OAuthProviderAssertion {
 }
 
 export interface OAuthProviderAdapter {
-  readonly id: 'google' | 'github';
+  /** The provider identifier ('google' | 'github' ship; a new provider is a new adapter). */
+  readonly id: string;
   /** Whether the provider's client credentials are configured in this environment. */
   isConfigured(): boolean;
   /** Build the provider's authorization redirect URL (the state is minted by the /auth route). */

@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import {
+  OAUTH_TRANSACTION_COOKIE_NAME,
+  buildOAuthTransactionCookie,
+} from '../../../src/api/routes/session-cookie.js';
 import {
   buildIdentityStack,
   type TestIdentityStack,
@@ -258,6 +263,10 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
     expect(authorizeUrl).toContain('state=');
     const state = new URL(authorizeUrl).searchParams.get('state')!;
     expect(state.length).toBeGreaterThanOrEqual(32);
+    // The initiating browser holds the transaction binding for this flow.
+    const txCookie = setCookiesOf(start.headers).find((c) => c.startsWith(`${OAUTH_TRANSACTION_COOKIE_NAME}=`));
+    expect(txCookie, 'the start mints the browser-binding transaction cookie').toBeDefined();
+    const txHeaderValue = `${OAUTH_TRANSACTION_COOKIE_NAME}=${extractCookieValue(txCookie!)}`;
 
     // Journey 1: a fresh GitHub identity → a NEW user + session.
     const code = 'oauth-code-erin-github';
@@ -271,6 +280,7 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
     const callback = await server.inject({
       method: 'GET',
       url: `/auth/oauth/github/callback?code=${code}&state=${state}`,
+      headers: { cookie: txHeaderValue },
     });
     expect(callback.statusCode).toBe(302);
     const sessionCookie = sessionCookieOf(callback.headers);
@@ -293,6 +303,8 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
     const start2 = await server.inject({ method: 'GET', url: '/auth/oauth/google/start' });
     const { authorizeUrl: authorizeUrl2 } = JSON.parse(start2.body) as { authorizeUrl: string };
     const state2 = new URL(authorizeUrl2).searchParams.get('state')!;
+    const txCookie2 = setCookiesOf(start2.headers).find((c) => c.startsWith(`${OAUTH_TRANSACTION_COOKIE_NAME}=`));
+    const txHeaderValue2 = `${OAUTH_TRANSACTION_COOKIE_NAME}=${extractCookieValue(txCookie2!)}`;
     const code2 = 'oauth-code-erin-google';
     assertions.set(code2, {
       provider: 'google',
@@ -304,6 +316,7 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
     const callback2 = await server.inject({
       method: 'GET',
       url: `/auth/oauth/google/callback?code=${code2}&state=${state2}`,
+      headers: { cookie: txHeaderValue2 },
     });
     expect(callback2.statusCode).toBe(302);
     const sessionCookie2 = sessionCookieOf(callback2.headers);
@@ -334,15 +347,19 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
     const start = await server.inject({ method: 'GET', url: '/auth/oauth/github/start' });
     const { authorizeUrl } = JSON.parse(start.body) as { authorizeUrl: string };
     const state = new URL(authorizeUrl).searchParams.get('state')!;
+    const txCookie = setCookiesOf(start.headers).find((c) => c.startsWith(`${OAUTH_TRANSACTION_COOKIE_NAME}=`));
+    const txHeaderValue = `${OAUTH_TRANSACTION_COOKIE_NAME}=${extractCookieValue(txCookie!)}`;
     const first = await server.inject({
       method: 'GET',
       url: `/auth/oauth/github/callback?code=unused-code&state=${state}`,
+      headers: { cookie: txHeaderValue },
     });
     // The code is unknown to the fake → error redirect, but the STATE row was consumed.
     expect(first.statusCode).toBe(302);
     const replay = await server.inject({
       method: 'GET',
       url: `/auth/oauth/github/callback?code=unused-code&state=${state}`,
+      headers: { cookie: txHeaderValue },
     });
     expect(replay.statusCode).toBe(302);
     expect(replay.headers.location).toContain('login_error=invalid_state');
@@ -490,6 +507,198 @@ describe('WORK-074 — identity runtime E2E on the real server', () => {
         }
       }
     }
+  });
+
+  // --- OAuth browser binding (the login-CSRF remediation) -----------------------
+  //
+  // The architect's review of PR #99: single-use CSRF state alone does NOT
+  // bind the authorization request to the browser that initiated it — an
+  // attacker could complete a login flow and have the victim's browser present
+  // the callback (login-CSRF / session swapping). The server-side state MUST
+  // be correlated with an initiating-browser transaction binding (a random,
+  // HttpOnly pre-auth cookie) that is consumed atomically WITH the state,
+  // BEFORE any provider assertion is accepted.
+  describe('OAuth browser binding — the state is bound to the initiating browser', () => {
+    // A dedicated fake provider id so this block never collides with the
+    // adapters registered by the journey test above (find() is first-match).
+    const PROVIDER = 'bindprov';
+    const assertions = new Map<string, OAuthProviderAssertion>();
+
+    beforeAll(() => {
+      stack.oauthProviders.register({
+        id: PROVIDER,
+        isConfigured: () => true,
+        authorizationUrl: (input) =>
+          `https://fake-bind.example.com/auth?state=${input.state}&redirect_uri=${encodeURIComponent(input.redirectUri)}`,
+        exchangeAuthorizationCode: async (input) => {
+          const assertion = assertions.get(input.code);
+          if (!assertion) throw new Error('bad verification code');
+          return assertion;
+        },
+      });
+    });
+
+    function transactionCookieOf(headers: Record<string, unknown>): string | undefined {
+      return setCookiesOf(headers).find((c) => c.startsWith(OAUTH_TRANSACTION_COOKIE_NAME + '='));
+    }
+
+    it('the start response mints an HttpOnly, SameSite=Lax transaction cookie with an unpredictable one-time value', async () => {
+      const start = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      expect(start.statusCode).toBe(200);
+      const tx = transactionCookieOf(start.headers);
+      expect(tx, 'the start response must set the pre-auth transaction cookie').toBeDefined();
+      expect(tx).toContain('HttpOnly');
+      expect(tx).toContain('SameSite=Lax');
+      expect(tx).toMatch(/Path=\//);
+      expect(tx).toMatch(/Max-Age=\d+/);
+      const value = extractCookieValue(tx!);
+      expect(value.length, 'the binding must be cryptographically unpredictable').toBeGreaterThanOrEqual(32);
+      // A second start mints a DIFFERENT transaction (never reused).
+      const start2 = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      expect(extractCookieValue(transactionCookieOf(start2.headers)!)).not.toBe(value);
+      // The https (production) builder marks the cookie Secure.
+      const secureCookie = buildOAuthTransactionCookie('some-transaction-id', 600, true);
+      expect(secureCookie).toContain('Secure');
+      expect(secureCookie).toContain('HttpOnly');
+      expect(secureCookie).toContain('SameSite=Lax');
+    });
+
+    it('browser A creates the state, browser B presents it → callback MUST reject with NO session (the login-CSRF discrimination)', async () => {
+      // Browser A initiates an OAuth login and receives the binding cookie.
+      const start = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      const state = new URL((JSON.parse(start.body) as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!;
+      const txA = transactionCookieOf(start.headers);
+      expect(txA).toBeDefined();
+
+      // The assertion B tries to cash in (attacker-controlled identity).
+      const codeB = 'bind-code-browser-b';
+      assertions.set(codeB, {
+        provider: PROVIDER,
+        subject: 'bind-sub-browser-b',
+        email: 'browserb@bind.example.com',
+        emailVerified: true,
+        displayName: 'Browser B',
+      });
+
+      // Browser B presents the callback with browser A's state but WITHOUT
+      // browser A's transaction cookie → rejected, NO session.
+      const byB = await server.inject({
+        method: 'GET',
+        url: `/auth/oauth/${PROVIDER}/callback?code=${codeB}&state=${state}`,
+      });
+      expect(byB.statusCode).toBe(302);
+      expect(byB.headers.location).toContain('login_error=invalid_state');
+      expect(sessionCookieOf(byB.headers), 'no WorkflowOS session may be created for browser B').toBeUndefined();
+
+      // Even when B presents a DIFFERENT (its own) transaction cookie, the
+      // mismatched binding is rejected fail-closed.
+      const byBWithOwnTx = await server.inject({
+        method: 'GET',
+        url: `/auth/oauth/${PROVIDER}/callback?code=${codeB}&state=${state}`,
+        headers: { cookie: `${OAUTH_TRANSACTION_COOKIE_NAME}=a-different-browsers-transaction-value-0123456789` },
+      });
+      expect(byBWithOwnTx.statusCode).toBe(302);
+      expect(byBWithOwnTx.headers.location).toContain('login_error=invalid_state');
+      expect(sessionCookieOf(byBWithOwnTx.headers)).toBeUndefined();
+
+      // The flow never reached identity resolution: no user row for B's subject.
+      expect(await stack.userRepository.findByExternalId(`${PROVIDER}:bind-sub-browser-b`)).toBeNull();
+    });
+
+    it('browser A creates the state, browser A returns with the provider callback → succeeds and a session IS created', async () => {
+      const start = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      const state = new URL((JSON.parse(start.body) as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!;
+      const txA = transactionCookieOf(start.headers);
+      expect(txA).toBeDefined();
+
+      const codeA = 'bind-code-browser-a';
+      assertions.set(codeA, {
+        provider: PROVIDER,
+        subject: 'bind-sub-browser-a',
+        email: 'browsera@bind.example.com',
+        emailVerified: true,
+        displayName: 'Browser A',
+      });
+
+      // The SAME browser returns: its transaction cookie rides along.
+      const callback = await server.inject({
+        method: 'GET',
+        url: `/auth/oauth/${PROVIDER}/callback?code=${codeA}&state=${state}`,
+        headers: { cookie: `${OAUTH_TRANSACTION_COOKIE_NAME}=${extractCookieValue(txA!)}` },
+      });
+      expect(callback.statusCode).toBe(302);
+      expect(callback.headers.location, 'the honest flow redirects to the post-login target, not an error').not.toContain('login_error');
+      const session = sessionCookieOf(callback.headers);
+      expect(session, 'the honest browser gets its WorkflowOS session').toBeDefined();
+      const who = await server.inject({
+        method: 'GET',
+        url: '/auth/session',
+        headers: { cookie: `wfos_session=${extractCookieValue(session!)}` },
+      });
+      expect(who.statusCode).toBe(200);
+      expect((JSON.parse(who.body) as { user: { displayName: string } }).user.displayName).toBe('Browser A');
+    });
+
+    it('a replayed state is still rejected even when presented WITH the correct binding (single-use holds)', async () => {
+      const start = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      const state = new URL((JSON.parse(start.body) as { authorizeUrl: string }).authorizeUrl).searchParams.get('state')!;
+      const txValue = extractCookieValue(transactionCookieOf(start.headers)!);
+
+      assertions.set('bind-code-replay', {
+        provider: PROVIDER,
+        subject: 'bind-sub-replay',
+        email: 'replay@bind.example.com',
+        emailVerified: true,
+        displayName: 'Replay',
+      });
+      const first = await server.inject({
+        method: 'GET',
+        url: `/auth/oauth/${PROVIDER}/callback?code=bind-code-replay&state=${state}`,
+        headers: { cookie: `${OAUTH_TRANSACTION_COOKIE_NAME}=${txValue}` },
+      });
+      expect(first.statusCode).toBe(302);
+      expect(first.headers.location).not.toContain('login_error');
+
+      const replay = await server.inject({
+        method: 'GET',
+        url: `/auth/oauth/${PROVIDER}/callback?code=bind-code-replay&state=${state}`,
+        headers: { cookie: `${OAUTH_TRANSACTION_COOKIE_NAME}=${txValue}` },
+      });
+      expect(replay.statusCode).toBe(302);
+      expect(replay.headers.location).toContain('login_error=invalid_state');
+      expect(sessionCookieOf(replay.headers)).toBeUndefined();
+    });
+
+    it('the transaction binding is consumed atomically WITH the state and persisted DIGEST-ONLY (the raw value is in no wfos_* row)', async () => {
+      const start = await server.inject({ method: 'GET', url: `/auth/oauth/${PROVIDER}/start` });
+      const txValue = extractCookieValue(transactionCookieOf(start.headers)!);
+
+      // The raw transaction value must appear in NO wfos_* text column…
+      const tables = await stack.db.client.query<{ table_name: string }>(
+        `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'wfos_%' AND table_schema = current_schema()`,
+      );
+      for (const { table_name } of tables.rows) {
+        const cols = await stack.db.client.query<{ column_name: string }>(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_name = $1 AND table_schema = current_schema() AND data_type IN ('text','character varying')`,
+          [table_name],
+        );
+        for (const { column_name } of cols.rows) {
+          const hit = await stack.db.client.query<{ count: string }>(
+            `SELECT count(*)::text AS count FROM "${table_name}" WHERE "${column_name}" = $1`,
+            [txValue],
+          );
+          expect(hit.rows[0]!.count, `${table_name}.${column_name} must not hold the raw transaction id`).toBe('0');
+        }
+      }
+      // …while the state row binds its SHA-256 digest for the atomic consume.
+      const digest = createHash('sha256').update(txValue).digest('hex');
+      const bound = await stack.db.client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM wfos_oauth_states WHERE transaction_digest = $1`,
+        [digest],
+      );
+      expect(bound.rows[0]!.count, 'the state row is bound to the digest of the initiating browser transaction').toBe('1');
+    });
   });
 });
 

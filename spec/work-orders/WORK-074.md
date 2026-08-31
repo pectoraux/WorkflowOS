@@ -74,6 +74,27 @@ on the live topology. NOT in this change: WORK-071/072/073, SSO/SAML (a
 recorded future extension), and the dogfooding run itself (the gate also
 requires WORK-071).
 
+**Security remediation (architect review of PR #99 — login-CSRF):** the
+original OAuth state proved single-use but did NOT bind the authorization
+request to the initiating browser — an attacker could obtain a valid state and
+have a victim's browser present the callback (OAuth login-CSRF / session
+swapping). Remediation: `/auth/oauth/:provider/start` now mints (or reuses) a
+cryptographically random pre-auth transaction cookie (`wfos_oauth_tx`,
+HttpOnly, SameSite=Lax, Secure in production, Max-Age locked to the state TTL)
+and the state row stores its SHA-256 DIGEST (`transaction_digest`); the
+callback REQUIRES the presenting browser to carry the SAME transaction value
+and the consume checks state + provider + binding + expiry in ONE atomic
+single-use DELETE, BEFORE any provider assertion is accepted — a state minted
+for browser A is rejected when presented by browser B (no session, no user
+row; an unmatched attempt leaves A's transaction intact for A to complete).
+Regression discriminations added: cross-browser (no cookie / foreign cookie)
+rejection with no session and no identity resolution, the honest same-browser
+success, replay-with-correct-binding rejection, cookie attribute + one-time
+value checks, and digest-only persistence (the raw transaction value appears
+in no `wfos_*` column). A static-architecture invariant pins the boundary
+(binding checked before exchange, atomic digest-bound consume, cookie
+discipline, TTL agreement).
+
 > **Canonical identity and the WORK-063-RUNTIME alias.** WORK-074 is the
 > canonical numeric identity for this Work Order, per the repository's
 > identity-surface invariant (the 2026-08-29 architect verdict, enforced in

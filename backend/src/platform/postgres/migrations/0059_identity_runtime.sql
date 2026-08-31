@@ -103,14 +103,21 @@ CREATE INDEX wfos_api_key_credentials_service_account_idx
 
 -- ---------------------------------------------------------------------------
 -- OAuth authorization-request states (WORK-074: callback state/CSRF
--- protection). Short-lived, single-use server-side records binding the
--- authorization redirect to this browser flow. Nothing here is secret
--- material: the state is a random CSRF nonce, consumed on first use.
+-- protection; PR #99 remediation). Short-lived, single-use server-side
+-- records binding the authorization redirect to THIS initiating browser:
+-- transaction_digest is the SHA-256 of the pre-auth transaction cookie the
+-- /start response issued, and the callback consume REQUIRES the same value —
+-- a state presented by any other browser never yields a session (login-CSRF
+-- protection). The digest is checked in the SAME atomic single-use DELETE as
+-- the state itself. Nothing here is secret material: the state is a random
+-- CSRF nonce and the transaction digest is not invertible — the raw
+-- transaction id never persists.
 -- ---------------------------------------------------------------------------
 CREATE TABLE wfos_oauth_states (
-  state       TEXT PRIMARY KEY,
-  provider    TEXT NOT NULL,
-  redirect_to TEXT NOT NULL DEFAULT '/',
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  expires_at  TIMESTAMPTZ NOT NULL
+  state              TEXT PRIMARY KEY,
+  provider           TEXT NOT NULL,
+  redirect_to        TEXT NOT NULL DEFAULT '/',
+  transaction_digest TEXT NOT NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at         TIMESTAMPTZ NOT NULL
 );

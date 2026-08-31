@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { randomBytes } from 'node:crypto';
 import type {
   AuthorizationService,
   SessionService,
@@ -16,7 +17,16 @@ import {
   requireUser,
   runAuthed,
 } from '../plugins/auth.plugin.js';
-import { buildSessionCookie, clearSessionCookie } from './session-cookie.js';
+import {
+  OAUTH_TRANSACTION_COOKIE_NAME,
+  OAUTH_TRANSACTION_COOKIE_TTL_SECONDS,
+  SESSION_COOKIE_NAME,
+  buildOAuthTransactionCookie,
+  buildSessionCookie,
+  clearOAuthTransactionCookie,
+  clearSessionCookie,
+  readCookie,
+} from './session-cookie.js';
 
 /**
  * WORK-074 — the identity runtime routes (the human login surface + the
@@ -46,7 +56,10 @@ import { buildSessionCookie, clearSessionCookie } from './session-cookie.js';
  * Security:
  *   - raw passwords/keys/tokens are never logged or audited (digest-only storage);
  *   - OAuth callbacks validate + atomically consume the server-side state
- *     (single use; replay → typed redirect error, no session);
+ *     TOGETHER WITH the initiating browser's pre-auth transaction binding
+ *     (single use; a state presented by any other browser → typed redirect
+ *     error, no session — the login-CSRF remediation); the binding is checked
+ *     BEFORE any provider assertion is accepted;
  *   - unconfigured providers fail closed (503 / configured:false — the honest
  *     state the frontend renders);
  *   - machine principals are NEVER treated as users here (whoami 401s them).
@@ -97,7 +110,7 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
         password: body.password,
         displayName: body.displayName,
       });
-      await issueSessionCookie(reply, deps, user.id, 'password');
+      reply.header('Set-Cookie', await issueSessionCookie(deps, user.id, 'password'));
       return reply.code(201).send({ user: publicUser(user) });
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -121,7 +134,7 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
       // Uniform rejection — no user enumeration.
       return reply.code(401).send({ error: 'invalid-credentials' });
     }
-    await issueSessionCookie(reply, deps, result.user.id, 'password');
+    reply.header('Set-Cookie', await issueSessionCookie(deps, result.user.id, 'password'));
     return { user: publicUser(result.user) };
   });
 
@@ -136,8 +149,18 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
     const query = req.query as { redirectTo?: string } | null;
     // Redirect target: a relative path only (never an open redirect).
     const redirectTo = sanitizeRedirect(query?.redirectTo);
-    const state = await deps.oauthStateStore.create({ provider, redirectTo });
+    // The pre-auth transaction binding: reuse the browser's in-flight
+    // transaction when it has one, otherwise mint one (cryptographically
+    // random, HttpOnly, never logged — its DIGEST binds the state row).
+    const transactionId =
+      readCookie(req.headers.cookie, OAUTH_TRANSACTION_COOKIE_NAME) ??
+      randomBytes(32).toString('base64url');
+    const state = await deps.oauthStateStore.create({ provider, redirectTo, transactionId });
     const redirectUri = buildRedirectUri(deps.publicUrl, provider);
+    reply.header(
+      'Set-Cookie',
+      buildOAuthTransactionCookie(transactionId, OAUTH_TRANSACTION_COOKIE_TTL_SECONDS, isSecure(deps)),
+    );
     return { authorizeUrl: adapter.authorizationUrl({ state: state.state, redirectUri }) };
   });
 
@@ -148,9 +171,18 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
     if (!adapter || !adapter.isConfigured()) {
       return redirectWithError(reply, 'provider-not-configured');
     }
-    // CSRF: validate + atomically consume the single-use server-side state.
+    // Login-CSRF protection (PR #99 remediation): the presenting browser MUST
+    // carry the transaction binding that initiated this flow. Checked BEFORE
+    // the state consume and BEFORE any provider assertion is accepted.
+    const transactionId = readCookie(req.headers.cookie, OAUTH_TRANSACTION_COOKIE_NAME);
+    if (!transactionId) {
+      return redirectWithError(reply, 'invalid_state');
+    }
+    // CSRF: validate + atomically consume the single-use server-side state
+    // TOGETHER WITH the browser binding (one statement — state and transaction
+    // are spent together; a foreign browser's binding never matches).
     const consumed = query?.state
-      ? await deps.oauthStateStore.consume(query.state, provider)
+      ? await deps.oauthStateStore.consume(query.state, provider, transactionId)
       : null;
     if (!consumed) {
       return redirectWithError(reply, 'invalid_state');
@@ -176,7 +208,12 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
         emailVerified: assertion.emailVerified,
         displayName: assertion.displayName,
       });
-      await issueSessionCookie(reply, deps, resolution.user.id, provider);
+      // The OAuth transaction is spent: the session cookie and the retirement
+      // of the pre-auth binding ride on this 302 together.
+      reply.header('Set-Cookie', [
+        await issueSessionCookie(deps, resolution.user.id, provider),
+        clearOAuthTransactionCookie(isSecure(deps)),
+      ]);
       return reply.code(302).header('Location', consumed.redirectTo).send();
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -348,23 +385,16 @@ function publicUser(user: { id: string; displayName: string; email: string | nul
 }
 
 async function issueSessionCookie(
-  reply: FastifyReply,
   deps: AuthRouteDeps,
   userId: string,
   provider: string,
-): Promise<void> {
+): Promise<string> {
   const created = await deps.sessionService.create({ userId, provider });
-  reply.header('Set-Cookie', buildSessionCookie(created.token, created.session.expiresAt, isSecure(deps)));
+  return buildSessionCookie(created.token, created.session.expiresAt, isSecure(deps));
 }
 
 function readSessionToken(req: { headers: Record<string, unknown> }): string | null {
-  const header = req.headers.cookie;
-  if (typeof header !== 'string' || header.length === 0) return null;
-  for (const part of header.split(';')) {
-    const [name, ...rest] = part.trim().split('=');
-    if (name === 'wfos_session') return rest.join('=') || null;
-  }
-  return null;
+  return readCookie(req.headers.cookie, SESSION_COOKIE_NAME);
 }
 
 function buildRedirectUri(publicUrl: string | undefined, provider: string): string {
