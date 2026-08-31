@@ -113,10 +113,12 @@ validation sub-evolution) approval by the architecture authority.
 - `spec/development-state/program-state.json` — the canonical program
   state. `workOrders[]` records the activated Work Orders (all 60 records
   are `complete` — the WORK-067 post-merge finalization: 60/60 recorded work
-  orders complete, NOTHING in flight, 15/15 merged work orders finalized;
-  the ADR-0003 coordination on WORK-067's record is durable history).
-  PLANNED Work Orders
-  (WORK-053..061, WORK-068..070, WORK-072..073) are spec files only — they
+  orders complete, 15/15 merged work orders finalized. WORK-068 (Feedback →
+  Governed Work Items) is now IN FLIGHT (activated 2026-08-31 by the
+  architect's implementation instruction — the ONE live implementation on
+  branch feat/WORK-068-feedback-conversion; the ADR-0003 coordination on
+  WORK-067's record is durable history). The remaining PLANNED Work Orders
+  (WORK-053..061, WORK-069..070, WORK-072..073) are spec files only — they
   are NOT in `program-state.json` until the architect activates them.
 - `spec/development-state/dependency-state.json` — the canonical
   dependency mapping. `futureGeneration` maps each planned Work Order
@@ -231,7 +233,12 @@ product validation roadmap):
   c3514512cb5bcf7694f551d1f1bac9b1ee2d3c3b; the domain/model authority is on
   main at `backend/src/continuous-validation/`).
 - WORK-053..061 are `planned` (spec files only; NOT in program-state).
-- WORK-068..070 are `planned` (spec files only; NOT in program-state).
+- **WORK-068 is `in_flight`** (activated by the architect 2026-08-31 — the
+  implementation instruction; implemented on branch
+  `feat/WORK-068-feedback-conversion`, the conversion layer at
+  `backend/src/feedback-conversion/`; the architect's review + merge are the
+  completion gate).
+- WORK-069..070 are `planned` (spec files only; NOT in program-state).
 - **WORK-066 is `complete` + FINALIZED** (recorded in program-state with its
   merge evidence): activated by the architect 2026-09-01 on
   `feat/WORK-066-validation-scheduling`, merged by the architect as
@@ -294,11 +301,14 @@ via PR #103 on 2026-08-31T18:30:23Z (squash-merged at the approved head
 `0fe9c48` — the post-#104 reconciliation head; the ADR-0003 coordination
 with the now-complete WORK-066 is durable history), and FINALIZED
 §34.8/ADR-0007 by the WORK-067 post-merge finalization (complete — 60/60
-recorded work orders, NOTHING in flight). The ACR-002 frontier is the
-wave-10 pair: WORK-068 (Feedback → Governed Work Items — its hard WORK-067
-edge is SATISFIED) and WORK-069 (Progressive Release & Runtime Validation
-— its hard edges were already complete), BOTH dependency-eligible, PLANNED,
-NOT activated, NOT started; WORK-070 (wave 11) remains blocked on WORK-069.
+recorded work orders — 60/60 at the WORK-067 finalization; WORK-068 has since
+been ACTIVATED). The ACR-002 frontier update (2026-08-31, the WORK-068
+activation): WORK-068 (Feedback → Governed Work Items) is IN FLIGHT on
+branch feat/WORK-068-feedback-conversion (the conversion layer implemented,
+awaiting architect review — NOT merged, NOT complete); WORK-069 (Progressive
+Release & Runtime Validation — its hard edges were already complete) remains
+dependency-eligible, PLANNED, NOT activated, NOT started; WORK-070 (wave 11)
+remains blocked on WORK-069.
 The two dogfooding-gate enablersissued by the 2026-08-30 customer dogfooding experiment's governed follow-up —
 WORK-071 (Local Development Runtime Substrate) and WORK-074 (Identity & Access
 Runtime Activation — the "WORK-063-RUNTIME" of the experiment's design) — were
@@ -487,11 +497,12 @@ decision layer that would drive continuous validation is likewise on main
 §34.8/ADR-0007 by PR #104), and the signal correlation layer that turns
 observations into advisory Engineering Signals is likewise on main
 (WORK-067 is COMPLETE — merged `bde33cc` via PR #103, finalized
-§34.8/ADR-0007 by the WORK-067 post-merge finalization), but the
-continuous-validation
-Work Orders that DRIVE the closed loop (WORK-068..070) remain PLANNED, NOT
-activated (the capabilities exist but still do NOT
-start the run), andthe run is NOT claimed to have been performed.
+§34.8/ADR-0007 by the WORK-067 post-merge finalization), and the
+feedback→Work-Item converter (WORK-068) is IN FLIGHT — implemented on
+branch feat/WORK-068-feedback-conversion, NOT merged — but the remaining
+closed-loop drivers (WORK-069..070) are PLANNED, NOT activated (the
+capabilities exist but still do NOT start the run), and the run is NOT
+claimed to have been performed.
 
 **The dogfooding experiment was ATTEMPTED on 2026-08-30 and STOPPED at
 onboarding** (the runtime does not yet provide the required production
@@ -557,10 +568,13 @@ into an ungoverned code change.
 The 2026-08-30 customer dogfooding experiment (see
 `spec/architecture/v1.1/dogfooding-evidence/2026-08-30-onboarding-attempt.md`)
 produced empirical findings that became governed Work Orders — through the
-EXISTING authority, NOT through the not-yet-implemented WORK-068 feedback
-converter (WORK-067's advisory signal correlation layer is COMPLETE on
-main; WORK-068, the converter that turns its signals into governed Work
-Items, is PLANNED and NOT activated). The flow that actually operated:
+EXISTING authority, NOT through the WORK-068 feedback converter (at the
+2026-08-30 experiment's time it was not-yet-implemented; the findings were
+governed by hand through the architect-issued Work Order authority. As of
+2026-08-31 WORK-068 is IN FLIGHT — implemented on branch
+feat/WORK-068-feedback-conversion, NOT merged — so the 2026-08-31
+customer-experiment follow-up would flow through it once it lands). The
+flow that actually operated (the 2026-08-30 historical record):
 
 ```text
 dogfooding evidence (the evidence artifact — provenance preserved)

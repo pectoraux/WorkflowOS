@@ -185,24 +185,29 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     const a052 = report.assessments.find((a) => a.workOrderId === 'WORK-052')!;
     expect(a046.dependencyEligible).toBe(true);
     expect(a052.dependencyEligible).toBe(true);
-    // Evaluating the merged pair as candidates: the post-finalization
-    // truth is NOTHING in flight (WORK-067 — the last in-flight item, the
-    // ADR-0003 coordination partner of the former parallel WORK-066 — was
-    // MERGED as bde33cc via PR #103 on 2026-08-31T18:30:23Z and FINALIZED
-    // §34.8/ADR-0007 by the WORK-067 post-merge finalization), so NO live
-    // in-flight conflict partner exists for the merged pair: every
-    // former in-flight surface partner (WORK-064/065/066/067/071/074 —
-    // WORK-066 merged as 0a506b1 via PR #102 and finalized by PR #104;
-    // WORK-065 merged as 5de5e83 via PR #97; WORK-064 merged c351451 via
-    // PR #86; WORK-050 merged 8f27cc7; WORK-062 merged f0855d2 via PR #82;
-    // WORK-071 merged 8604c8a5 via PR #96; WORK-074 merged cdedd0ca via
-    // PR #99) is durable history — conflictsWith is EMPTY for both
-    // complete candidates. The frontier is the authoritative live view:
-    // NOTHING is in flight.
-    expect(a046.conflictsWith).toEqual([]);
-    expect(a052.conflictsWith).toEqual([]);
+    // Evaluating the merged pair as candidates surfaces the ONE live
+    // in-flight conflict partner: WORK-068 (Feedback → Governed Work
+    // Items — the conversion layer, activated 2026-08-31 by the
+    // architect's implementation instruction on branch
+    // feat/WORK-068-feedback-conversion, grown from 8985dab — the WORK-067
+    // post-merge finalization mainline) shares the static-architecture
+    // suite surface with WORK-046 and WORK-052 — the SAME durable-history
+    // surface pattern WORK-064/065/066/067/071/074 each shared while in
+    // flight (WORK-067 was the prior live partner, merged as bde33cc via
+    // PR #103 and finalized by the WORK-067 post-merge finalization —
+    // PR #105; WORK-066 merged as 0a506b1 via PR #102 and finalized by PR
+    // #104; WORK-065 merged as 5de5e83 via PR #97; WORK-064 merged
+    // c351451 via PR #86; WORK-050 merged 8f27cc7; WORK-062 merged
+    // f0855d2 via PR #82; WORK-071 merged 8604c8a5 via PR #96; and
+    // WORK-074 merged cdedd0ca via PR #99 — all merged items are durable
+    // history). The frontier is the authoritative live view: the ONE
+    // in-flight item is WORK-068 (it declares the static-architecture
+    // suite in sharedIntegrationSurfaces, so the surface flag discipline
+    // holds for the live pair).
+    expect(a046.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-068']);
+    expect(a052.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-068']);
     const frontier = realService.getFrontier();
-    expect(frontier.inFlight.map((w) => w.id)).toEqual([]);
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-068']);
   });
 
   it('W052-AC03 / PR #62 round 1 BLOCKER 2 — the frontier reports TRUTHFUL coordination (an UNDECLARED in-flight conflict is coordinated: false, never a silent pass)', () => {
@@ -460,15 +465,19 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     // squash-merged at the approved head 0fe9c48 — the post-#104
     // reconciliation head) and is recorded complete per §34.8/ADR-0007 by
     // the WORK-067 post-merge finalization — 60/60 recorded work orders
-    // complete, NOTHING in flight (the in-flight era ended with the WORK-067
-    // finalization; the ADR-0003 coordination with the former parallel
-    // WORK-066 is durable history on WORK-067's record).
-    // Nothing is blocked
-    // (WORK-053..061 and WORK-068..070 are future-generation items not
-    // recorded in program-state; the ACR-002 frontier pair WORK-068/WORK-069
-    // is dependency-eligible per dependency-state futureGenerationEligibility
-    // — NOT activated).
-    expect(frontier.inFlight.map((w) => w.id)).toEqual([]);
+    // complete — and then WORK-068 (Feedback → Governed Work Items — the
+    // conversion layer) was ACTIVATED by the architect on 2026-08-31 (the
+    // implementation instruction; the hard WORK-067 edge satisfied by the
+    // bde33cc merge + finalization): the ONE in-flight implementation on
+    // branch feat/WORK-068-feedback-conversion (61 recorded work orders =
+    // 60 complete + WORK-068 in flight; the ADR-0003 coordination with the
+    // former parallel WORK-066 is durable history on WORK-067's record —
+    // WORK-068 has NO live conflict: the single-in-flight discipline).
+    // Nothing is blocked (WORK-053..061 and WORK-069..070 are
+    // future-generation items not recorded in program-state; the ACR-002
+    // frontier's WORK-069 is dependency-eligible per dependency-state
+    // futureGenerationEligibility — NOT activated).
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-068']);
     expect(frontier.blocked).toEqual([]);
     expect(frontier.complete.length).toBeGreaterThanOrEqual(60);
   });

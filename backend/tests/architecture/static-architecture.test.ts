@@ -20557,3 +20557,301 @@ describe('WORK-067 invariants — Engineering Signal & Regression Correlation (t
     }
   });
 });
+
+// ============================================================================
+// WORK-068 — Feedback → Governed Work Items (the conversion layer, not a
+// second authority — the 16 static architecture invariants)
+// ============================================================================
+
+describe('WORK-068 invariants — Feedback → Governed Work Items (the conversion layer, not a second authority)', () => {
+  const FC_DIR = join(BACKEND_ROOT, 'src', 'feedback-conversion');
+  const FC_INTERNAL = join(FC_DIR, 'internal');
+  const FC_TYPES = join(FC_DIR, 'types.ts');
+  const FC_BARREL = join(FC_DIR, 'index.ts');
+  const FC_IDENTITY = join(FC_INTERNAL, 'conversion-identity.ts');
+  const FC_ASSESSMENT = join(FC_INTERNAL, 'assessment.ts');
+  const FC_PRIORITY = join(FC_INTERNAL, 'priority.ts');
+  const FC_SERVICE = join(FC_INTERNAL, 'feedback-conversion-service.ts');
+  const FC_RECORDS = join(FC_INTERNAL, 'in-memory-conversion-record-repository.ts');
+  const FC_INTERNAL_INDEX = join(FC_INTERNAL, 'index.ts');
+  const MIGRATIONS_DIR_W68 = join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations');
+  const APP_TS_W68 = join(BACKEND_ROOT, 'src', 'app.ts');
+  const SRC_ROOT_W68 = SRC_ROOT;
+  const MODULES_DIR_W68 = MODULES_DIR;
+
+  function stripCodeCommentsW68(src: string): string {
+    return src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  }
+
+  function readFcFiles(): { path: string; src: string }[] {
+    if (!existsSync(FC_DIR)) return [];
+    const out: { path: string; src: string }[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const stat = statSync(full);
+        if (stat.isDirectory()) walk(full);
+        else if (entry.endsWith('.ts')) {
+          out.push({ path: full, src: readFileSync(full, 'utf8') });
+        }
+      }
+    };
+    walk(FC_DIR);
+    return out;
+  }
+
+  // --- (a) the domain exists + is NOT a frozen module -----------------------
+
+  it('the feedback-conversion domain exists at src/feedback-conversion/ (index.ts + types.ts + internal/) and is NOT an 18th frozen module', () => {
+    expect(existsSync(FC_DIR), 'src/feedback-conversion/ must exist').toBe(true);
+    expect(existsSync(FC_BARREL), 'src/feedback-conversion/index.ts must exist').toBe(true);
+    expect(existsSync(FC_TYPES), 'src/feedback-conversion/types.ts must exist').toBe(true);
+    expect(existsSync(FC_INTERNAL), 'src/feedback-conversion/internal/ must exist').toBe(true);
+    for (const file of [FC_IDENTITY, FC_ASSESSMENT, FC_PRIORITY, FC_SERVICE, FC_RECORDS, FC_INTERNAL_INDEX]) {
+      expect(existsSync(file), `${relative(BACKEND_ROOT, file)} must exist`).toBe(true);
+    }
+    expect(existsSync(join(MODULES_DIR_W68, 'feedback-conversion'))).toBe(false);
+    expect(FROZEN_MODULE_NAMES, 'feedback-conversion must not be a frozen module').not.toContain('/feedback-conversion');
+    expect(FROZEN_MODULE_NAMES, 'the frozen module set is unchanged (17)').toHaveLength(17);
+  });
+
+  // --- (b) the domain imports ONLY the allowed surfaces ----------------------
+
+  it('the domain imports only allowed surfaces: @platform/*, node:* — and NO module/barrel imports at all (the authority handles arrive through the context contract, never direct imports: no /work-items internals, no engineering-signals internals, no workflows/verification/review/github, no browser/scheduling/planner domains)', () => {
+    const files = readFcFiles();
+    expect(files.length).toBeGreaterThan(0);
+    for (const { path, src } of files) {
+      const stripped = stripCodeCommentsW68(src);
+      const importLines = stripped.match(/from\s+'[^']+'/g) ?? [];
+      for (const importLine of importLines) {
+        const target = importLine.replace(/^from\s+'/, '').replace(/'$/, '');
+        if (target.startsWith('.')) continue; // intra-domain relative imports
+        expect(
+          target.startsWith('@platform/') || target.startsWith('node:'),
+          `${relative(BACKEND_ROOT, path)} imports forbidden surface '${target}' (allowed: @platform/*, node:* — the consumed authorities bind through the CONTEXT contract types, never direct imports)`,
+        ).toBe(true);
+      }
+      // The consumed authorities arrive as CONTEXT TYPES (the structural
+      // interfaces in types.ts) — the domain NEVER imports the authority
+      // modules directly (no import of /work-items, engineering-signals,
+      // workflows, verification, reviews, github, agents execution,
+      // development-planner, browser-validation, validation-scheduling):
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not import the /work-items module (the intake binds via the context contract)`).not.toMatch(/from\s+'[^']*work-items[^']*'/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not import the engineering-signals module (the signal read binds via the context contract)`).not.toMatch(/from\s+'[^']*engineering-signals[^']*'/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not import the workflows module`).not.toMatch(/from\s+'[^']*\/workflows[^']*'/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not import the verification module`).not.toMatch(/from\s+'[^']*verification[^']*'/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not import the development-planner module`).not.toMatch(/from\s+'[^']*development-planner[^']*'/);
+    }
+  });
+
+  // --- invariant 1: ONE Work Item authority (the intake is the existing public create) ----
+
+  it('INVARIANT 1 — ONE Work Item authority: the conversion creates Work Items ONLY through the existing /work-items public intake (ctx.workItemRepository.create) — no second repository/model/store/controller/lifecycle, no direct SQL on wfos_work_items', () => {
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    expect(service).toMatch(/ctx\.workItemRepository\.create\(/);
+    expect(service).toMatch(/ctx\.workItemRepository\.findByArchitectureVersion\(/);
+    // The only authority mutation surfaces are create + update (the append-only
+    // provenance convergence) — no second persistence, no direct SQL:
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not touch the work-item tables directly`).not.toMatch(/wfos_work_items|INSERT INTO|DELETE FROM/i);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not define a second work-item model/store`).not.toMatch(/class\s+\w*WorkItem(Repository|Store|Model)\b/);
+    }
+    // The domain owns NO tables: the only persistence port is the conversion
+    // RECORD log (the decision history) — the authoritative Work Item state
+    // stays in wfos_work_items through the intake.
+    const records = readFileSync(FC_RECORDS, 'utf8');
+    expect(records).toMatch(/FeedbackConversionRecordRepository/);
+  });
+
+  // --- invariant 2: no silent autonomous creation -----------------------------
+
+  it('INVARIANT 2 — no silent autonomous creation: a signal NEVER becomes a Work Item without the governed assessment/decision step — no timers, intervals, cron, queue consumers, polling loops, or automatic signal scanning anywhere in the domain; conversion happens ONLY through the explicit convertSignal invocation', () => {
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not contain an autonomous path (timer/interval/cron/loop/poll/consume)`).not.toMatch(/\b(setInterval|setTimeout\s*\(\s*[^,]*,\s*[0-9]|cron\b|new\s+CronJob|while\s*\(\s*true\b|\.consume\(|poll\(|startBackgroundLoop)/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not auto-scan signals`).not.toMatch(/listSignalsForProject|scanForSignals|autoConvert/);
+    }
+    // The service exposes exactly the explicit governed invocation + the read:
+    const barrel = readFileSync(FC_BARREL, 'utf8');
+    expect(barrel).toMatch(/FeedbackConversionService/);
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    expect(service).toMatch(/convertSignal\(/);
+    expect(service).toMatch(/listConversions\(/);
+    // Every create is preceded by the assessment (the structural chain):
+    expect(service).toMatch(/assessSignal\(signal/);
+    expect(service).toMatch(/deriveConversionPriority\(/);
+  });
+
+  // --- invariant 3: provenance preserved --------------------------------------
+
+  it('INVARIANT 3 — provenance: every create embeds metadata.feedbackConversion carrying the signal identity + assessment + decision + priority (the chain is reconstructable; never a hash alone; never inferred)', () => {
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    // The create call embeds the provenance payload:
+    expect(service).toMatch(/metadata:\s*\{\s*feedbackConversion:\s*metadata\s*\}/);
+    // The payload preserves the signal identity EXACTLY:
+    const types = readFileSync(FC_TYPES, 'utf8');
+    expect(types).toMatch(/readonly signalId: string/);
+    expect(types).toMatch(/readonly identityFingerprint: string/);
+    expect(types).toMatch(/readonly contributingSignals: readonly ContributingSignal\[\]/);
+    // Never a hash alone — the payload carries the full evidence:
+    expect(types).toMatch(/readonly reasoning: string/);
+    expect(types).toMatch(/readonly provenanceNote: string/);
+    // The dedup convergence appends the contributing signal (append-only):
+    expect(service).toMatch(/contributingSignals: \[\.\.\.existingMetadata\.contributingSignals, contributing\]/);
+  });
+
+  // --- invariant 4: the existing intake ---------------------------------------
+
+  it('INVARIANT 4 — the existing intake: a proposed Work Item enters through the /work-items public intake (create) — never a bypass, never a parallel write path; the convergence appends provenance through the PUBLIC update', () => {
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    expect(service).toMatch(/ctx\.workItemRepository\.create\(/);
+    expect(service).toMatch(/ctx\.workItemRepository\.update\(existing\.id/);
+    // The context contract types are the authority's public shapes:
+    const types = readFileSync(FC_TYPES, 'utf8');
+    expect(types).toMatch(/interface WorkItemIntake/);
+    expect(types).toMatch(/interface EngineeringSignalReader/);
+    // The unique-violation convergence (the DB constraint fence):
+    expect(service).toMatch(/isUniqueViolation/);
+  });
+
+  // --- invariant 5: the planner remains authoritative -------------------------
+
+  it('INVARIANT 5 — the planner remains authoritative: the conversion priority is RELATIVE + explanatory only (P0..P3 + factors + backlogRelation) — never a backlog ordering engine, never scheduling, never a second planning vocabulary', () => {
+    const priority = readFileSync(FC_PRIORITY, 'utf8');
+    const types = readFileSync(FC_TYPES, 'utf8');
+    expect(types).toMatch(/CONVERSION_PRIORITY_RANKS/);
+    expect(priority).toMatch(/RANK_BY_NUMBER/);
+    // The relative statement declares the planner's authority:
+    expect(priority).toMatch(/the WORK-040 planner owns all backlog ordering/);
+    // The domain never reorders/assigns/schedules backlog:
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not re-order the backlog`).not.toMatch(/reorderBacklog|assignScheduling|scheduleNext|backlogOrder/);
+    }
+  });
+
+  // --- invariant 6: the full governance lifecycle stays intact ----------------
+
+  it('INVARIANT 6 — the governance lifecycle stays intact: the conversion NEVER transitions workflow state, NEVER starts implementation, NEVER creates/merges PRs, NEVER approves, NEVER bypasses checkpoints/verification/review — it only proposes work through the intake', () => {
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not transition workflow state`).not.toMatch(/transitionWorkflow|workflowRepository\.|startImplementation|createPullRequest|mergePullRequest|approveReview|bypassCheckpoint/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not mutate the completion flag (the authority's internal-only signal)`).not.toMatch(/markCompleted|completed\s*=\s*true/);
+    }
+    // The conversion result never claims a lifecycle transition:
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    expect(service).toMatch(/'proposed'/);
+    expect(service).toMatch(/'deduplicated'/);
+    expect(service).toMatch(/'recurrence-recorded'/);
+  });
+
+  // --- the closed vocabularies + fail-closed errors ---------------------------
+
+  it('the closed vocabularies + the typed fail-closed error surface are exported through the barrel', () => {
+    const barrel = readFileSync(FC_BARREL, 'utf8');
+    expect(barrel).toMatch(/CONVERSION_DECISION_STATUSES/);
+    expect(barrel).toMatch(/CONVERSION_PRIORITY_RANKS/);
+    expect(barrel).toMatch(/FEEDBACK_CONVERSION_ERROR_CODES/);
+    expect(barrel).toMatch(/FeedbackConversionError/);
+    const types = readFileSync(FC_TYPES, 'utf8');
+    expect(types).toMatch(/'FEEDBACK_SIGNAL_NOT_FOUND'/);
+    expect(types).toMatch(/'FEEDBACK_SIGNAL_TENANT_MISMATCH'/);
+    expect(types).toMatch(/'FEEDBACK_SIGNAL_PROJECT_MISMATCH'/);
+    expect(types).toMatch(/'FEEDBACK_INTAKE_UNAVAILABLE'/);
+    expect(types).toMatch(/'FEEDBACK_CONVERSION_IDENTITY_CONFLICT'/);
+  });
+
+  // --- the tenant/project-scoped deterministic identity -----------------------
+
+  it('the conversion identity is deterministic and tenant/project-scoped (the mandatory boundaries; environment deliberately absent — the multi-environment convergence)', () => {
+    const identity = readFileSync(FC_IDENTITY, 'utf8');
+    expect(identity).toMatch(/tenantId/);
+    expect(identity).toMatch(/projectId/);
+    expect(identity).toMatch(/logicalFailureKey/);
+    expect(identity).toMatch(/SIGWI-/);
+    expect(identity).toMatch(/deriveConversionRecordId/);
+    // The canonicalization includes exactly the three scope dimensions:
+    expect(identity).toMatch(/JSON\.stringify\(\[\s*input\.tenantId,\s*input\.projectId,\s*input\.logicalFailureKey,\s*\]\)/);
+  });
+
+  // --- the assessment cites recorded evidence only ----------------------------
+
+  it('the assessment derives ONLY from the recorded signal evidence + the authority backlog read — no invented release/deployment/GitHub/provider/business evidence', () => {
+    const assessment = readFileSync(FC_ASSESSMENT, 'utf8');
+    expect(assessment).toMatch(/latestSeverity/);
+    expect(assessment).toMatch(/deriveRecurrenceSpan/);
+    expect(assessment).toMatch(/deriveBacklogContext/);
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not invent release identities`).not.toMatch(/inferRelease|inventRelease|deriveReleaseIdentity/);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not invent deployment/GitHub state`).not.toMatch(/fetchGitHub|providerHealth|businessOutcome/);
+    }
+  });
+
+  // --- NO unauthorized migration ----------------------------------------------
+
+  it('NO unauthorized migration: the migration set is unchanged (the WORK-068 parallel-execution metadata declares migrations: [] — the in-memory record port precedent)', () => {
+    const migrations = readdirSync(MIGRATIONS_DIR_W68).filter((f) => f.endsWith('.sql'));
+    expect(migrations).toHaveLength(59);
+    for (const { path, src } of readFcFiles()) {
+      const stripped = stripCodeCommentsW68(src);
+      expect(stripped, `${relative(BACKEND_ROOT, path)} must not declare a schema migration`).not.toMatch(/CREATE TABLE|ALTER TABLE|0060_|0061_/);
+    }
+  });
+
+  // --- the no-autonomous-route-surface discipline ------------------------------
+
+  it('NO route surface exists for feedback-conversion (the future governed consumers wire the drive surfaces; the service is exposed on AppDeps only)', () => {
+    const routesDir = join(BACKEND_ROOT, 'src', 'api', 'routes');
+    for (const entry of readdirSync(routesDir)) {
+      expect(entry, 'no feedback-conversion route surface exists').not.toMatch(/feedback|conversion/i);
+    }
+  });
+
+  // --- composition pin: buildApp wires the service on AppDeps -----------------
+
+  it('the app.ts composition pins: the service + the in-memory record repository + the injected clock + the AppDeps field', () => {
+    const appTs = readFileSync(APP_TS_W68, 'utf8');
+    expect(appTs).toMatch(/import\s*\{[^}]*DefaultFeedbackConversionService[^}]*\}\s*from\s*'\.\/feedback-conversion\/index\.js'/);
+    expect(appTs).toMatch(/feedbackConversionService = new DefaultFeedbackConversionService\(/);
+    expect(appTs).toMatch(/recordRepository: new InMemoryFeedbackConversionRecordRepository\(\)/);
+    expect(appTs).toMatch(/now: \(\) => new Date\(\)/);
+    expect(appTs).toMatch(/feedbackConversionService\?: FeedbackConversionService;/);
+    expect(appTs).toMatch(/^\s*feedbackConversionService,$/m);
+  });
+
+  // --- no second signal-correlation/consumption surface -----------------------
+
+  it('only WORK-068 owns the feedback-conversion surface: no other src surface re-implements signal→Work-Item conversion (the one-conversion-layer rule)', () => {
+    const conversionSurfaces: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const st = statSync(full);
+        if (st.isDirectory()) {
+          if (full === FC_DIR) continue; // the owner
+          walk(full);
+        } else if (entry.endsWith('.ts')) {
+          const src = stripCodeCommentsW68(readFileSync(full, 'utf8'));
+          if (/class\s+\w*FeedbackConversionService\b|interface\s+FeedbackConversionService\b|deriveConversionIdentity\b/.test(src)) {
+            conversionSurfaces.push(relative(SRC_ROOT_W68, full));
+          }
+        }
+      }
+    };
+    walk(SRC_ROOT_W68);
+    expect(conversionSurfaces, `feedback-conversion surfaces must exist ONLY in feedback-conversion (found elsewhere: ${conversionSurfaces.join(', ')})`).toEqual([]);
+  });
+
+  // --- the unique-violation convergence discipline (the planner precedent) ----
+
+  it('the concurrent-create convergence: a unique-violation re-queries and converges (the DB constraint is the hard fence — never a silent failure, never a fallback second intake)', () => {
+    const service = readFileSync(FC_SERVICE, 'utf8');
+    expect(service).toMatch(/isUniqueViolation\(err\)/);
+    expect(service).toMatch(/FEEDBACK_INTAKE_UNAVAILABLE/);
+    // …and no fallback: the intake failure is typed + thrown, never retried
+    // silently, never routed to a second creation path:
+    expect(service).not.toMatch(/fallbackIntake|secondIntake|retryCreate/);
+  });
+});

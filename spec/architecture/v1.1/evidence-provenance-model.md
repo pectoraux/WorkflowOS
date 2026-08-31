@@ -222,7 +222,8 @@ Engineering Signal occurrence (preserving run → journey → step →
     environment → observedAt + the raw failure record)
     ↑ converged by (the deterministic signal identity)
 Engineering Signal (deduplicated, release-correlated, regression-assessed)
-    ↑ ADVISORY — consumed by the FUTURE governed converters
+    ↑ ADVISORY — consumed by the governed converter (WORK-068 — IN FLIGHT,
+      implemented on branch feat/WORK-068-feedback-conversion, NOT merged)
 governed Work Item (WORK-068, through the EXISTING /work-items authority)
 ```
 

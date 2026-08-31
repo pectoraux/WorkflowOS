@@ -33,6 +33,7 @@ export default defineConfig({
       '@onboarding': fileURLToPath(new URL('./src/onboarding', import.meta.url)),
       '@repository-intelligence': fileURLToPath(new URL('./src/repository-intelligence', import.meta.url)),
       '@development-planner': fileURLToPath(new URL('./src/development-planner', import.meta.url)),
+      '@feedback-conversion': fileURLToPath(new URL('./src/feedback-conversion', import.meta.url)),
       '@maintenance': fileURLToPath(new URL('./src/maintenance', import.meta.url)),
       '@root': fileURLToPath(new URL('./src', import.meta.url)),
       '@': fileURLToPath(new URL('../frontend/src', import.meta.url)),
@@ -64,6 +65,12 @@ export default defineConfig({
       // tests/integration/engineering-signals/ and gate on
       // WORKFLOWOS_DATABASE_URL).
       'tests/engineering-signals/**/*.test.ts',
+      // WORK-068: the feedback-conversion suite (the signal → governed Work
+      // Item conversion layer — pure domain + composition tests; the
+      // real-PG two-actor concurrency proofs live under
+      // tests/integration/feedback-conversion/ and gate on
+      // WORKFLOWOS_DATABASE_URL).
+      'tests/feedback-conversion/**/*.test.ts',
     ],
     testTimeout: 15000,
     hookTimeout: 15000,

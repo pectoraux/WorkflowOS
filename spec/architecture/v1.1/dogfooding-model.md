@@ -184,9 +184,12 @@ evidence:
 - the GitHub/Vercel integration works;
 - the deployment works;
 - the browser validation works (once WORK-064..070 are implemented —
-  WORK-064/065/066/067 are COMPLETE; WORK-068..070 remain);
-- the feedback→Work Item loop works (once WORK-068 is implemented — the
-  WORK-067 advisory signal correlation layer is COMPLETE on main).
+  WORK-064/065/066/067 are COMPLETE; WORK-068 is IN FLIGHT (the conversion
+  layer, branch feat/WORK-068-feedback-conversion); WORK-069/070 remain);
+- the feedback→Work Item loop works (WORK-068 is implemented on the branch
+  — the conversion layer composing the COMPLETE WORK-067 advisory signal
+  correlation layer on main; the architect's review + merge are the
+  completion gate).
 
 A release that does NOT pass the dogfood run is not honestly complete.
 The dogfood run is the canonical acceptance journey.
@@ -260,7 +263,9 @@ PERMITTED and NOT started (the architect's authorization governs the run;
 item 4 is now ALSO SATISFIED — WORK-065 is COMPLETE and the
 browser-validation CAPABILITY exists — but that does NOT start the run: the
 scheduling/feedback/release Work Orders that drive continuous validation
-(WORK-068..070 remain PLANNED, NOT activated; WORK-066, the scheduling
+(WORK-068 is IN FLIGHT — the conversion layer implemented on branch
+feat/WORK-068-feedback-conversion, NOT merged; WORK-069/070 remain PLANNED,
+NOT activated; WORK-066, the scheduling
 decision layer, is COMPLETE — merged `0a506b1` via PR #102 on
 2026-08-31T16:37:09Z and finalized §34.8/ADR-0007 by the WORK-066
 post-merge finalization PR #104, the decision layer is on main at
@@ -306,3 +311,51 @@ product-defect fixes (findings F-3 and F-4) that do NOT gate the
 dogfood run, but they remove P2 UX defects a real customer would encounter.
 See `spec/architecture/v1.1/dogfooding-evidence/2026-08-30-onboarding-attempt.md`
 for the full experiment record and the finding→Work-Order mapping.
+
+## 9. The feedback→Work-Item conversion model (WORK-068 — implemented 2026-08-31, awaiting architect review)
+
+The §2 loop's WORK-068 stage is now implemented (the conversion layer at
+`backend/src/feedback-conversion/`, composed as `feedbackConversionService`
+on AppDeps; branch `feat/WORK-068-feedback-conversion`). The model — the
+definition-of-done persistence surface:
+
+```text
+Engineering Signal (WORK-067 — advisory, provenance-bound)
+    ↓ (the public findSignal boundary + the tenant/project scope assertions)
+assessment (deterministic: severity interpretation, blast radius over the
+            recorded occurrence evidence, recurrence, the backlog context
+            read through the authority — never invented evidence)
+    ↓
+deduplication (the deterministic SIGWI-<sha256-24> conversion key over
+               tenant + project + logicalFailureKey — environment
+               deliberately absent: the same logical failure across
+               environments is ONE engineering problem; the existing
+               UNIQUE(architecture_version_id, work_item_id) DB constraint
+               is the persistence-level fence)
+    ↓
+conversion-relative priority (P0..P3 + discrete factors + the explanatory
+                              backlogRelation — the WORK-040 planner owns
+                              all backlog ordering)
+    ↓
+PROPOSED Work Item through the EXISTING /work-items public intake
+    ↓
+the existing governance lifecycle (unchanged)
+```
+
+The closed decision vocabulary: `proposed` (created through the intake,
+`metadata.feedbackConversion` embedded — the full reconstructable chain
+signal → assessment → decision → Work Item, contributing signals appended
+through the authority's public update path), `deduplicated` (an open
+equivalent exists — converge, NO second Work Item), `recurrence-recorded`
+(the problem was completed in this version and is observed again — record
+with the completed item's reference, NO create, NO mutation). Failures are
+typed and fail closed (never "no work needed / healthy / success"); the
+conversion is NEVER autonomous (the explicit `convertSignal` invocation is
+the only entry point — no timers/queues/routes); the decision log is the
+in-memory record PORT (NO migration; the durable binding point is a
+documented future ACR at the same port).
+
+The 2026-08-31 dogfooding findings informed the acceptance cases'
+realism (dependency-blocked admission, project-access creation-path,
+agent-output visibility, GitHub installation linking) WITHOUT being
+absorbed — WORK-068 owns none of those fixes.

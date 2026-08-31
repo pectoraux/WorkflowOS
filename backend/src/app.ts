@@ -402,6 +402,19 @@ import {
   InMemoryEngineeringSignalRepository,
 } from './engineering-signals/index.js';
 import type { EngineeringSignalService } from './engineering-signals/index.js';
+// WORK-068: the feedback-conversion domain (the application-layer pattern —
+// NOT a frozen module). The conversion layer that turns WORK-067 advisory
+// Engineering Signals into PROPOSED Work Items entering the EXISTING
+// /work-items authority through its public intake. Composed over the
+// WORK-067 service + the existing work-item/architecture repositories
+// (their public boundaries) + the in-memory decision-record port (NO
+// migration is authorized). NEVER autonomous, NEVER a second Work Item /
+// planning / workflow authority.
+import {
+  DefaultFeedbackConversionService,
+  InMemoryFeedbackConversionRecordRepository,
+} from './feedback-conversion/index.js';
+import type { FeedbackConversionService } from './feedback-conversion/index.js';
 // WORK-047: the application-layer agent-intelligence domain (advisory/ranking
 // only — consumes the WORK-044 routing result + the WORK-045 role catalog +
 // read-only historical evidence from the EXISTING stores via their public
@@ -567,6 +580,13 @@ export interface AppDeps {
    *  (the validation-originated source). Future consumers: WORK-068
    *  (governed Work Item conversion), WORK-070 (architecture fitness). */
   engineeringSignalService?: EngineeringSignalService;
+  /** WORK-068: the feedback-conversion service (the conversion layer —
+   *  advisory Engineering Signals → PROPOSED Work Items through the
+   *  EXISTING /work-items public intake). Present when DB is configured.
+   *  Consumes the WORK-067 service (the signal source) + the existing
+   *  work-item repository (the ONE intake) + the architecture scope
+   *  re-assertion. Never autonomous; never a second authority. */
+  feedbackConversionService?: FeedbackConversionService;
   /** WORK-016: review service. Present when DB configured. */
   reviewService?: ReviewService;
   /** WORK-015: CI evidence ingestion service. Present when DB configured. */
@@ -925,6 +945,7 @@ export async function buildApp(
   let validationScheduler: ValidationScheduler | undefined;
   // WORK-067: the engineering signal correlation service (the advisory layer).
   let engineeringSignalService: EngineeringSignalService | undefined;
+  let feedbackConversionService: FeedbackConversionService | undefined;
   let reviewService: ReviewService | undefined;
   let ciEvidenceIngestionService: CiEvidenceIngestionService | undefined;
   let webhookProcessingService: WebhookProcessingService | undefined;
@@ -1222,6 +1243,25 @@ export async function buildApp(
       signalRepository: new InMemoryEngineeringSignalRepository(),
       continuousValidationService: continuousValidationService!,
       logger,
+      now: () => new Date(),
+    });
+    // WORK-068: the feedback-conversion service — the conversion layer that
+    // turns WORK-067 advisory Engineering Signals into PROPOSED Work Items
+    // entering the EXISTING /work-items authority through its existing
+    // public intake (WorkItemRepository.create — the single creation path,
+    // the WORK-040 planner precedent). Composed over the WORK-067 service
+    // (the public signal read), the existing work-item repository (the
+    // public intake + the public update path for the append-only provenance
+    // convergence), the architecture repositories (the scope re-assertion),
+    // and the in-memory decision-record port (the documented non-durable
+    // boundary — NO migration is authorized by WORK-068). The clock is
+    // INJECTED (deterministic decisions). The conversion is NEVER
+    // autonomous: it happens only through the explicit governed
+    // convertSignal invocation; the domain never transitions workflow
+    // state, starts implementation, creates/merges PRs, or reorders the
+    // backlog (the WORK-040 planner remains the ONE planning authority).
+    feedbackConversionService = new DefaultFeedbackConversionService({
+      recordRepository: new InMemoryFeedbackConversionRecordRepository(),
       now: () => new Date(),
     });
     // WORK-008/009: webhook event repository + processing service.
@@ -2337,6 +2377,7 @@ export async function buildApp(
       browserValidationAgent,
       validationScheduler,
       engineeringSignalService,
+      feedbackConversionService,
       reviewService,
       ciEvidenceIngestionService,
       webhookProcessingService,
