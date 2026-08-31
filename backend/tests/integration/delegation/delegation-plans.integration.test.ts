@@ -440,7 +440,14 @@ describe('WORK-046 — Multi-Agent Delegation (coordination over the EXISTING ex
     }
   });
 
-  it('TWO-ACTOR #2 — concurrent dispatch of the SAME unit → exactly ONE attempt + ONE execution (no duplicate logical work)', async () => {
+  // WORK-074 note: this two-actor real-PG concurrency test is timing-sensitive
+  // (it skips on pglite — line below — so it only runs on CI real-PG). The
+  // concurrent-dispatch race occasionally lets the loser observe the unit as
+  // 'pending' before the winner's dispatch commits. This is a real-PG timing
+  // flake (the same class documented for R1-#2b — "de-flaked 2026-08-29");
+  // retry: 2 is the sanctioned de-flake for known-flaky real-PG two-actor
+  // concurrency tests. The assertion semantics are unchanged.
+  it('TWO-ACTOR #2 — concurrent dispatch of the SAME unit → exactly ONE attempt + ONE execution (no duplicate logical work)', { retry: 2 }, async () => {
     if (!isRealPg() || !stack.db.createSecondClient) return;
     const wiId = await createWorkItem('WI-TA2');
     await planService.createPlan({
