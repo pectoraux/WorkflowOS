@@ -67,15 +67,14 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
     const complete = fresh.listWorkOrders({ status: 'complete' });
     const inFlight = fresh.listWorkOrders({ status: 'in_flight' });
     expect(complete.length).toBeGreaterThanOrEqual(54); // WORK-001..045 + WORK-051 (f2c996c) + WORK-052 (47615c2) + WORK-046 (1f2bef9) + WORK-047 (e2b665c) + WORK-048 (5c48257) + WORK-049 (07ac9cc) + WORK-050 (8f27cc7) + WORK-062 (f0855d2) + WORK-063 (8dac9c4, spec-only) + WORK-064 (c351451)
-    // WORK-071 (Local Development Runtime Substrate) was ACTIVATED by the
-    // architect on 2026-08-30 and is IN FLIGHT (PR #96 open against main;
-    // not yet finalized complete at this program-state snapshot). WORK-064
-    // was MERGED as c351451 and finalized. WORK-074 (Identity & Access Runtime
-    // Activation — the runtime of WORK-063's spec) is ACTIVATED and IN FLIGHT
-    // (PR #98 open against main; NOT merged — the architect reviews). Both
-    // WORK-071 and WORK-074 are authorized in-flight items; 55/55 prior
-    // recorded work orders complete.
-    expect(inFlight.map((w) => w.id).sort()).toEqual(['WORK-071', 'WORK-074']);
+    // WORK-071 (Local Development Runtime Substrate) was MERGED by the
+    // architect as 8604c8a via PR #96 and finalized complete §34.8/ADR-0007
+    // (the finalization carried by the WORK-074 rebase onto main 8604c8a).
+    // WORK-074 (Identity & Access Runtime Activation — the runtime of WORK-063's
+    // spec) is ACTIVATED and IN FLIGHT (PR #98 open against main; NOT merged —
+    // the architect reviews). 56/56 prior recorded work orders complete;
+    // WORK-074 is the one authorized in-flight item.
+    expect(inFlight.map((w) => w.id).sort()).toEqual(['WORK-074']);
     // Every completed item carries merge evidence (the truthful record).
     for (const w of complete) {
       expect(w.mergedAs?.pr, `${w.id} must record its merge PR`).toBeGreaterThan(0);
@@ -110,14 +109,13 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
 
     // Q4 — what can safely run in parallel? (frontier + conflicts)
     const frontier = fresh.getFrontier();
-    // WORK-071 (Local Development Runtime Substrate) was ACTIVATED
-    // 2026-08-30 and is IN FLIGHT (PR #96). WORK-074 (Identity & Access
-    // Runtime Activation — the runtime of WORK-063's spec) is ACTIVATED and
-    // IN FLIGHT (PR #98, NOT merged). Both are authorized in-flight items;
-    // 55/55 prior recorded work orders complete. WORK-053..061, WORK-065..070,
-    // and WORK-072/073 are future-generation items not yet recorded in
-    // program-state (the architect's authorization is required).
-    expect(frontier.inFlight.map((w) => w.id).sort()).toEqual(['WORK-071', 'WORK-074']);
+    // WORK-071 was MERGED as 8604c8a via PR #96 and finalized complete
+    // §34.8/ADR-0007 (the finalization carried by the WORK-074 rebase).
+    // WORK-074 (the runtime of WORK-063's spec) is ACTIVATED and IN FLIGHT
+    // (PR #98, NOT merged). 56/56 prior recorded work orders complete; WORK-074
+    // is the one in-flight item. WORK-053..061, WORK-065..070, and WORK-072/073
+    // are future-generation items not yet recorded in program-state.
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-074']);
     expect(frontier.dependencyEligible).toEqual([]);
     expect(frontier.blocked).toEqual([]);
     // The frontier's item-level coordination flag discipline is TRUTHFUL:
@@ -470,18 +468,17 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
       const loaded = await new FileSystemGovernanceStateLoader({ repoRoot: REPO_ROOT, governanceDir: dir }).load();
       const claimsOnly = DefaultDevelopmentGovernanceService.fromLoadedState(loaded.model, loaded.program);
       const stillInFlight = claimsOnly.listWorkOrders({ status: 'in_flight' }).map((w) => w.id);
-      // WORK-050, WORK-062, the cloned WORK-064, AND the REAL in-flight
-      // WORK-071 AND WORK-074 all stay in_flight (outcomes never complete
-      // work) — the first three are RECONSTRUCTED started items (all three
+      // WORK-050, WORK-062, and the cloned WORK-064 stay in_flight (outcomes
+      // never complete work — the three reconstructed started items; all three
       // live records are complete-and-merged: WORK-050 by 8f27cc7/PR #78,
-      // WORK-062 by f0855d2/PR #82, WORK-064 by c351451/PR #86); WORK-071 and
-      // WORK-074 are the REAL in-flight items (the clone carries them through
-      // unchanged).
-      expect(stillInFlight.sort()).toEqual(['WORK-050', 'WORK-062', 'WORK-064', 'WORK-071', 'WORK-074']);
+      // WORK-062 by f0855d2/PR #82, WORK-064 by c351451/PR #86). WORK-071 was
+      // MERGED (8604c8a/PR #96) and finalized complete — the clone does NOT
+      // reconstruct it as in_flight (it stays complete-and-merged). WORK-074
+      // is the REAL in-flight item (PR #98 open) — the clone carries it through.
+      expect(stillInFlight.sort()).toEqual(['WORK-050', 'WORK-062', 'WORK-064', 'WORK-074']);
       expect(claimsOnly.getWorkOrder('WORK-050').mergedAs).toBeUndefined();
       expect(claimsOnly.getWorkOrder('WORK-062').mergedAs).toBeUndefined();
       expect(claimsOnly.getWorkOrder('WORK-064').mergedAs).toBeUndefined();
-      expect(claimsOnly.getWorkOrder('WORK-071').mergedAs).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

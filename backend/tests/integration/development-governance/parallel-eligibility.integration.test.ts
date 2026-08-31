@@ -185,21 +185,20 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
     const a052 = report.assessments.find((a) => a.workOrderId === 'WORK-052')!;
     expect(a046.dependencyEligible).toBe(true);
     expect(a052.dependencyEligible).toBe(true);
-    // Evaluating the merged pair as candidates surfaces the TWO live
-    // in-flight conflict partners: WORK-071 (Local Development Runtime
-    // Substrate — PR #96) and WORK-074 (Identity & Access Runtime Activation
-    // — PR #98). Both share the static-architecture suite surface AND app.ts
-    // with WORK-046 (and the suite surface with WORK-052) — the SAME
-    // durable-history surface pattern WORK-064 shared while it was in flight.
-    // WORK-064 itself (merged c351451 via PR #86 and finalized complete
-    // §34.8/ADR-0007), WORK-050 (merged 8f27cc7), and WORK-062 (merged
-    // f0855d2 via PR #82 and finalized complete per §34.8/ADR-0007) are NOT
-    // live partners — merged items are durable history. The frontier is the
-    // authoritative live view: WORK-071 and WORK-074 are the in-flight items.
-    expect(a046.conflictsWith.map((c) => c.workOrderId).sort()).toEqual(['WORK-071', 'WORK-074']);
-    expect(a052.conflictsWith.map((c) => c.workOrderId).sort()).toEqual(['WORK-071', 'WORK-074']);
+    // Evaluating the merged pair as candidates surfaces the ONE live
+    // in-flight conflict partner: WORK-074 (Identity & Access Runtime
+    // Activation — PR #98) shares the static-architecture suite surface AND
+    // app.ts with WORK-046 (and the suite surface with WORK-052). WORK-071
+    // (Local Development Runtime Substrate) was MERGED as 8604c8a via PR #96
+    // and finalized complete §34.8/ADR-0007 — merged items are durable
+    // history, not live partners. WORK-064 (merged c351451 via PR #86),
+    // WORK-050 (merged 8f27cc7), and WORK-062 (merged f0855d2 via PR #82)
+    // are likewise NOT live partners. The frontier is the authoritative live
+    // view: WORK-074 is the one in-flight item.
+    expect(a046.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-074']);
+    expect(a052.conflictsWith.map((c) => c.workOrderId)).toEqual(['WORK-074']);
     const frontier = realService.getFrontier();
-    expect(frontier.inFlight.map((w) => w.id).sort()).toEqual(['WORK-071', 'WORK-074']);
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-074']);
   });
 
   it('W052-AC03 / PR #62 round 1 BLOCKER 2 — the frontier reports TRUTHFUL coordination (an UNDECLARED in-flight conflict is coordinated: false, never a silent pass)', () => {
@@ -426,19 +425,20 @@ describe('WORK-052 — parallel eligibility, conflicts, and assurance selection'
 
   // --- the real frontier (W052-AC03 applied to the live program) -----------------
 
-  it('W052-AC03 — the REAL frontier: 55/55 prior recorded items complete (WORK-064 merged c351451 via PR #86 and finalized §34.8/ADR-0007); WORK-071 and WORK-074 are the in-flight items (PRs #96/#98 open against main); nothing is dependency-eligible among the remaining recorded items; nothing is blocked', () => {
+  it('W052-AC03 — the REAL frontier: 56/56 prior recorded items complete (WORK-071 merged 8604c8a via PR #96 + WORK-064 merged c351451 via PR #86, both finalized §34.8/ADR-0007); WORK-074 is the one in-flight item (PR #98 open against main); nothing is dependency-eligible among the remaining recorded items; nothing is blocked', () => {
     const frontier = realService.getFrontier();
     expect(frontier.dependencyEligible).toEqual([]);
-    // WORK-071 (Local Development Runtime Substrate) was ACTIVATED by the
-    // architect on 2026-08-30 and is IN FLIGHT (PR #96). WORK-074 (Identity &
-    // Access Runtime Activation — the runtime of WORK-063's spec) is ACTIVATED
-    // and IN FLIGHT (PR #98, NOT merged — the architect reviews). 55/55 prior
-    // recorded work orders complete; WORK-071 and WORK-074 are the in-flight
-    // items; nothing is blocked (WORK-053..061 and WORK-065..070 are
-    // future-generation items not yet recorded in program-state; WORK-065 and
-    // WORK-067 are dependency-eligible on the complete WORK-064 but NOT activated).
-    expect(frontier.inFlight.map((w) => w.id).sort()).toEqual(['WORK-071', 'WORK-074']);
+    // WORK-071 (Local Development Runtime Substrate) was MERGED as 8604c8a
+    // via PR #96 and finalized complete §34.8/ADR-0007 (the finalization
+    // carried by the WORK-074 rebase onto main). WORK-074 (Identity & Access
+    // Runtime Activation — the runtime of WORK-063's spec) is ACTIVATED and
+    // IN FLIGHT (PR #98, NOT merged — the architect reviews). 56/56 prior
+    // recorded work orders complete; WORK-074 is the one in-flight item;
+    // nothing is blocked (WORK-053..061 and WORK-065..070 are future-generation
+    // items not yet recorded in program-state; WORK-065 and WORK-067 are
+    // dependency-eligible on the complete WORK-064 but NOT activated).
+    expect(frontier.inFlight.map((w) => w.id)).toEqual(['WORK-074']);
     expect(frontier.blocked).toEqual([]);
-    expect(frontier.complete.length).toBeGreaterThanOrEqual(55);
+    expect(frontier.complete.length).toBeGreaterThanOrEqual(56);
   });
 });
