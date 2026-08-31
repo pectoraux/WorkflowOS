@@ -404,7 +404,6 @@ replace the declaration. The declaration now has exactly the same provenance
 as the journey's effect policy and steps — the journey authority's own
 canonical state.
 
-## 5. Verification summary
 ## 5. Verification summary (on the implementation branch, post-fourth-correction)
 
 - WORK-065 browser-validation suite: 91 tests (39 navigation-target [the §1
@@ -426,20 +425,69 @@ canonical state.
   surface in browser-validation + the closed ExecuteValidationRunInput
   interface + the agent's runtime provenance gate + the canonical
   allowlist read).
-- FULL suite, real PostgreSQL (the CI-equivalent): 134 files / 2890 tests /
-  0 failed. FULL suite, PGlite: 2846 passed / 0 failed / 44 real-PG-only
-  skipped. typecheck: 0 errors. lint: 0 errors (2 pre-existing warnings in
-  work-032-benchmark.spec.ts, untouched).
-- governance:status: exit 1 with the PRE-EXISTING WORK-074 gap (MERGED
-  cdedd0ca but canonical in_flight — the §34.8 post-merge finalization
-  window that PR #100 owns, NOT this change; the branch's governance
-  snapshot tests expect exactly this gap and pass). Zero governance-state
-  files touched by the correction commits.
-- CI (the 0b6b518 backend failure): discriminated as the known
-  cross-mode-handoff relay-drain CI-starvation flake (zero coupling with
-  this PR's diff; the same signature on main's own cdedd0ca run and a week
-  of unrelated PRs; ~1.4s local convergence) — the R1-#2a/#2b budgets
-  recalibrated 45s→120s as a separate reviewable commit.
+- FULL suite, real PostgreSQL (the CI-equivalent, on the reconciled head):
+  134 files / 2891 tests / 0 failed. FULL suite, PGlite: 2847 passed /
+  0 failed / 44 real-PG-only skipped. typecheck: 0 errors. lint: 0 errors
+  (2 pre-existing warnings in work-032-benchmark.spec.ts, untouched).
+- governance:status: exit 0 — complete: 57; in flight: WORK-065 (this
+  branch, correctly recognized); post-merge finalization 12/12 finalized,
+  NO gaps. The pre-existing WORK-074 red window is GONE: the WORK-074
+  post-merge finalization landed (PR #100, merged as 1e279a2) and this
+  reconciliation recomputed the branch's governance state onto it
+  (WORK-074 complete + finalized; the branch's snapshot tests assert
+  exactly that).
+- The relay-drain budget recalibration (45s→120s,
+  `backend/tests/integration/agents/cross-mode-handoff.regression.test.ts`)
+  that briefly rode this branch was REMOVED: out of WORK-065 scope, the
+  file restored byte-identical to main truth. CI runs fresh on the
+  reconciled head; any cross-mode-handoff failure on it is discriminated
+  against main first (the known CI-starvation flake signature), never
+  masked by budget changes in this PR.
+
+NOT merged; NOT verified — the architect's review and the merge gate remain
+the only completion event (§34.8/ADR-0007).
+
+---
+
+## 6. The post-#100 reconciliation (2026-08-31 — the rebase onto 1e279a2)
+
+The WORK-074 post-merge finalization landed as PR #100 (merged as
+`1e279a2`) while this branch carried the fourth-correction head `595aaba`
+(rebased onto the pre-finalization mainline `cdedd0ca`). The branch was
+REBASED onto `1e279a2`:
+
+- The rebase dropped the out-of-scope relay-drain recalibration commit
+  entirely (§5 above): `backend/tests/integration/agents/cross-mode-handoff.regression.test.ts`
+  is byte-identical to current main — the WORK-042/WORK-065 scope boundary
+  restored. No separate PR was created for it (not authorized).
+- The governance state was recomputed onto the finalization truth:
+  WORK-071 complete (8604c8a/PR #96), WORK-074 complete + finalized
+  (cdedd0ca/PR #99 + PR #100/1e279a2), WORK-065 the ONE in-flight item
+  (this branch, PR #97); the stale WORK-074 in-flight/red-window claims
+  the pre-rebase branch carried (its snapshot tests asserted
+  `inFlight: ['WORK-065', 'WORK-074']`) were corrected to
+  `['WORK-065']` — 57/57 mainline work orders complete. The
+  `merged-finalization` suite is main's version (the branch's
+  WORK-071-gap accommodations were stale and reverted).
+- The navigation-safety architecture is UNCHANGED by the reconciliation:
+  the JOURNEY-OWNED declaration model (§4d) — `readonlySafeNavigationTargets`
+  on the WORK-064 ValidationJourney, no executor-side declaration surface,
+  the runtime provenance gate, the driver-never-called proofs.
+- Scope audit: `git diff origin/main...HEAD --name-only` = 31 files, all
+  WORK-065 implementation/tests/spec/governance — the relay test file is
+  NOT among them.
+- The full verification battery was re-run on the reconciled head:
+  development-governance 68/68; browser-validation 91/91 (including the
+  real-Chromium pair); continuous-validation 144/144; static architecture
+  839/839 (the WORK-065 migration-set pin re-pinned 58 → 59 for WORK-074's
+  0059_identity_runtime — the pin the rebase had to recover from the
+  flattened merge resolution); backend typecheck 0 errors; backend lint
+  0 errors (2 pre-existing warnings untouched); frontend typecheck
+  0 errors / lint 0 errors (1 pre-existing warning) / 127 tests; full
+  backend regression on real PostgreSQL 134 files / 2891 tests / 0 failed;
+  PGlite 2847 passed / 0 failed / 44 real-PG-only skipped;
+  governance:status exit 0 (complete: 57; in flight: WORK-065; 12/12
+  merged finalized, no gaps).
 
 NOT merged; NOT verified — the architect's review and the merge gate remain
 the only completion event (§34.8/ADR-0007).

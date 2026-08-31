@@ -21,19 +21,30 @@ agent executes underneath). The browser agent is the EXECUTION MECHANISM
 for ValidationJourneys; WORK-064 is the AUTHORITY that defines them and the
 EffectPolicy that binds them. That dependency edge is SATISFIED — WORK-064 is COMPLETE (implemented on branch feat/work-064-continuous-validation, merged by the architect as `c351451` via PR #86 on 2026-08-30 and finalized per §34.8/ADR-0007; the domain/model authority is on main at backend/src/continuous-validation/). WORK-065 was accordingly DEPENDENCY-ELIGIBLE and was ACTIVATED by the architect on 2026-08-30 (see the Status header above; the earlier "NOT activated, NOT started" wording of this file predates the activation and is superseded by it).
 
-Reconciliation (2026-08-31): the implementation branch was reconciled onto
-the post-#99 mainline (cdedd0ca — the WORK-074 PR #99 merge) as merge
-commit 53248d5. The reconciliation resolved the governance-only conflicts
-(program-state / frontier-state / dependency-state / future-roadmap + the
-governance snapshot suites), declared the ADR-0003 mutual coordination
-between the two live in-flight records (WORK-065 ↔ WORK-074 on the shared
-static-architecture suite surface), re-pinned the merged-finalization
-red-window expectations to the pre-existing WORK-074 gap (closed by the
-finalization PR #100, NOT this change), and advanced the WORK-065
-migration-set pin 58 → 59 for WORK-074's 0059_identity_runtime (credit
-comment). WORK-074's canonical record is preserved exactly as main carries
-it; the §34.8/ADR-0007 post-merge finalization remains a separate
-governance change that owns the status transition.
+Reconciliation (2026-08-31): the implementation branch was first
+reconciled onto the post-#99 mainline (cdedd0ca — the WORK-074 PR #99
+merge) resolving the governance-only conflicts, declaring the ADR-0003
+mutual coordination between the then-two live in-flight records
+(WORK-065 ↔ WORK-074 on the shared static-architecture suite surface),
+and advancing the WORK-065 migration-set pin 58 → 59 for WORK-074's
+0059_identity_runtime (credit comment). The WORK-074 post-merge
+finalization then LANDED as PR #100 (merged as 1e279a2 — the canonical
+state records WORK-074 complete + finalized, 57/57 mainline work orders
+complete), and the branch was REBASED onto that finalization head: the
+governance state (program-state / frontier-state / dependency-state /
+future-roadmap + the governance snapshot suites) is recomputed onto the
+finalization truth — WORK-074 carries its complete + finalized record
+exactly as main carries it, the earlier merged-finalization red-window
+expectations (the pre-existing WORK-074 gap that PR #100 has now closed)
+are re-pinned to the NO-gap truth, and WORK-065 is the ONE in-flight
+record this branch carries. The historical ADR-0003 coordination
+declaration remains on the WORK-065 record (durable history — both
+parallel-era partners are now complete/merged). The rebase also REMOVED
+an out-of-scope commit that briefly rode the branch (the WORK-042
+cross-mode-handoff relay-drain budget recalibration):
+backend/tests/integration/agents/cross-mode-handoff.regression.test.ts
+is byte-identical to current main truth — this Work Order's scope
+boundary is restored.
 
 Downstream: WORK-066 (Validation Scheduling & Change Triggers) decides
 when this agent runs; WORK-067 (Engineering Signal & Regression Correlation)

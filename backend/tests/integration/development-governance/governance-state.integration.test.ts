@@ -441,16 +441,17 @@ describe('WORK-052 — repository source of truth (fresh-checkout reconstruction
     const dir = mkdtempSync(join(tmpdir(), 'wfos-gov-claims-only-'));
     try {
       const program: ProgramState = structuredClone(realProgram);
-      // WORK-065 + WORK-071 are in flight in the real program-state and are
-      // NOT part of this claims-only discrimination (WORK-050/062/064).
-      // Strip BOTH: WORK-065 depends on WORK-064 (which the discrimination
-      // reconstructs as in_flight — would require a coordination record
-      // covering WORK-064); WORK-071's coordination record references
-      // WORK-065 (which would be an unknown reference once WORK-065 is
-      // stripped). The discrimination reconstructs exactly the three intended
-      // started items (WORK-050/062/064 — all three are complete-and-merged
-      // in the live record, so the discrimination rebuilds the pre-merge state).
-      program.workOrders = program.workOrders.filter((w) => w.id !== 'WORK-065' && w.id !== 'WORK-071');
+      // WORK-065 is in flight in the real program-state and is NOT part of
+      // this claims-only discrimination (WORK-050/062/064). Strip it: WORK-065
+      // depends on WORK-064 (which the discrimination reconstructs as
+      // in_flight — would require a coordination record covering WORK-064).
+      // WORK-071 and WORK-074 are complete-and-merged in the real
+      // program-state; their live records carry merge evidence and are NOT
+      // reconstructed — they survive the fixture rebuild untouched. The
+      // discrimination reconstructs exactly the three intended started items
+      // (WORK-050/062/064 — all three are complete-and-merged in the live
+      // record, so the discrimination rebuilds the pre-merge state).
+      program.workOrders = program.workOrders.filter((w) => w.id !== 'WORK-065');
       const w050 = program.workOrders.find((w) => w.id === 'WORK-050')!;
       w050.status = 'in_flight';
       delete (w050 as { mergedAs?: unknown }).mergedAs;

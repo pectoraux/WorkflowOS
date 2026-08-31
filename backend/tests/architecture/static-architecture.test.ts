@@ -19617,9 +19617,11 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
         `${relative(BACKEND_ROOT, path)} must not touch a database (durable validation state is the WORK-064 in-memory boundary; an ACR is required for durability)`,
       ).toBe(true);
     }
-    // The migration set is unchanged (WORK-065 authorizes NO migration):
+    // The migration set is unchanged by WORK-065 (it authorizes NO migration).
+    // The set grew 58 → 59 through WORK-074's 0059_identity_runtime migration
+    // (the PR #99 merge — credit comment; the pin advances with the tree).
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
-    expect(migrationFiles).toHaveLength(58);
+    expect(migrationFiles).toHaveLength(59);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(
