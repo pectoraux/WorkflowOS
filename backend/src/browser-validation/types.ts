@@ -74,31 +74,14 @@ import type {
 export type BrowserAction =
   | {
       readonly kind: 'navigate';
-      /** An absolute http(s) URL (the driver enforces the scheme; the gate
-       *  classifies the target). */
+      /** An absolute http(s) URL. The agent verifies this URL against the
+       *  plan's authoritative {@link BrowserJourneyPlan.readonlySafeNavigationTargets}
+       *  allowlist BEFORE the browser is called — a navigate is admitted under
+       *  READ_ONLY ONLY when the URL is in the allowlist (the journey's trusted
+       *  declaration of read-only-safe targets). A navigate carries NO
+       *  per-action safety assertion — the executor cannot turn an assertion
+       *  into authoritative safety. */
       readonly url: string;
-      /**
-       * The caller's EXPLICIT declaration of this navigation's effect class.
-       * The agent VERIFIES this declaration against the URL structure before
-       * the browser is called:
-       *
-       *   - 'read_only_safe' — the caller asserts the navigation observes
-       *     state and performs no mutation. The agent REJECTS this declaration
-       *     when the URL carries a query string (GET ≠ read-only; a query
-       *     string MAY mutate), a non-http(s) scheme, or embedded userinfo
-       *     (the declaration is provably false). A verified 'read_only_safe'
-       *     navigation is admitted under READ_ONLY + every non-FORBIDDEN
-       *     policy.
-       *   - 'requires_mutation_policy' — the caller honestly admits the
-       *     navigation may mutate (e.g. a plain-path RESTful GET-mutation
-       *     like /delete/123, or any URL with a query string). Admitted under
-       *     SAFE_MUTATION / ISOLATED_MUTATION only; rejected under READ_ONLY.
-       *
-       * This is the explicit, testable boundary that answers "what makes a
-       * navigation READ_ONLY-safe?" — a caller declaration verified against
-       * the URL structure (no query string, http(s) only, no userinfo).
-       */
-      readonly targetPolicy: NavigationTargetPolicy;
       /** The expected observation this navigation satisfies (a network status_code expectation). */
       readonly satisfiesObservationId?: string;
       readonly timeoutMs?: number;
@@ -137,14 +120,6 @@ export type BrowserAction =
 /** The effect classification of a browser action (the enforcement input). */
 export type BrowserActionEffect = 'read' | 'mutation';
 
-/**
- * The caller's declaration of a navigation's effect class (carried on the
- * `navigate` action). The agent VERIFIES this declaration against the URL
- * structure before the browser is called — see
- * {@link classifyNavigationTarget} (internal/navigation-target.ts).
- */
-export type NavigationTargetPolicy = 'read_only_safe' | 'requires_mutation_policy';
-
 // ============================================================================
 // §2  The browser journey plan (the execution plan derived from a journey)
 // ============================================================================
@@ -167,10 +142,30 @@ export interface BrowserPlanStep {
  * at plan construction — a plan referencing an unknown observation is
  * rejected). A plan that satisfies NO expected observation is rejected (the
  * agent observes nothing the journey declared — health would be vacuous).
+ *
+ * THE AUTHORITATIVE NAVIGATION-SAFETY ALLOWLIST (PR #97 second architect
+ * review correction): {@link readonlySafeNavigationTargets} is the journey's
+ * TRUSTED declaration of which navigation targets are read-only-safe. A
+ * `navigate` action is admitted under READ_ONLY ONLY when its URL is in this
+ * allowlist — the executor CANNOT turn a per-action assertion into
+ * authoritative safety (there is no per-action `targetPolicy` field). The
+ * allowlist is the authoritative mechanism; the URL structure checks
+ * (scheme/userinfo) are defense-in-depth. An empty allowlist means NO
+ * navigation is proven read-only-safe (every navigate under READ_ONLY is
+ * rejected — the safe default).
  */
 export interface BrowserJourneyPlan {
   readonly journeyId: string;
   readonly steps: readonly BrowserPlanStep[];
+  /**
+   * The authoritative TRUSTED declaration of navigation targets that are
+   * read-only-safe. A `navigate` action's URL must be in this allowlist (exact
+   * string match) to be admitted under READ_ONLY. Each entry MUST be a
+   * parseable http(s) URL with no embedded userinfo (validated at plan
+   * construction). May be empty (the safe default — no navigation is proven
+   * read-only-safe).
+   */
+  readonly readonlySafeNavigationTargets: readonly string[];
 }
 
 // ============================================================================

@@ -134,7 +134,7 @@ export class DefaultBrowserValidationAgent {
       outer: for (const planStep of input.plan.steps) {
         for (const action of planStep.actions) {
           // 2a. Enforce the EffectPolicy BEFORE execution.
-          const decision = enforceEffectPolicy(action, run.effectPolicy, identity, input.environment);
+          const decision = enforceEffectPolicy(action, run.effectPolicy, identity, input.environment, input.plan.readonlySafeNavigationTargets);
           if (!decision.admitted && decision.executionError !== null) {
             executionError = decision.executionError;
             this.deps.logger.warn(

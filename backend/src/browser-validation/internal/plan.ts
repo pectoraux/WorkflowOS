@@ -23,6 +23,7 @@
 import type { BrowserJourneyPlan, BrowserAction } from '../types.js';
 import type { ValidationJourney } from '../../continuous-validation/types.js';
 import { BrowserValidationError } from '../types.js';
+import { validateAllowlistEntry } from './navigation-target.js';
 
 /** A plan step input (the mutable shape the caller supplies). */
 export interface BrowserPlanStepInput {
@@ -34,6 +35,15 @@ export interface BrowserPlanStepInput {
 export interface BrowserJourneyPlanInput {
   readonly journeyId: string;
   readonly steps: readonly BrowserPlanStepInput[];
+  /**
+   * The authoritative TRUSTED declaration of navigation targets that are
+   * read-only-safe. A `navigate` action's URL must be in this allowlist
+   * (exact string match) to be admitted under READ_ONLY. Each entry MUST be
+   * a parseable http(s) URL with no embedded userinfo (validated at plan
+   * construction). May be empty (the safe default — no navigation is proven
+   * read-only-safe, so every navigate under READ_ONLY is rejected).
+   */
+  readonly readonlySafeNavigationTargets?: readonly string[];
 }
 
 /**
@@ -112,20 +122,6 @@ export function defineBrowserJourneyPlan(
         );
       }
       const satisfiesId = (action as { satisfiesObservationId?: unknown }).satisfiesObservationId;
-      // navigate MUST declare its targetPolicy (the caller's explicit
-      // declaration of the navigation's effect class — the navigation-target
-      // safety boundary, PR #97 architect review correction). A navigate
-      // without a targetPolicy is rejected — the caller must answer "is this
-      // navigation read_only_safe or requires_mutation_policy?"
-      if (action.kind === 'navigate') {
-        const tp = (action as { targetPolicy?: unknown }).targetPolicy;
-        if (tp !== 'read_only_safe' && tp !== 'requires_mutation_policy') {
-          throw new BrowserValidationError(
-            'BROWSER_PLAN_INVALID',
-            `plan for journey ${journey.id}: step ${planStep.stepId} — a navigate action must declare targetPolicy 'read_only_safe' | 'requires_mutation_policy' (the navigation safety boundary)`,
-          );
-        }
-      }
       // extract MUST satisfy an observation (an extraction that observes
       // nothing the journey declared is meaningless).
       if (action.kind === 'extract' && (typeof satisfiesId !== 'string' || satisfiesId.trim() === '')) {
@@ -173,6 +169,20 @@ export function defineBrowserJourneyPlan(
     );
   }
 
+  // Validate the authoritative readonlySafeNavigationTargets allowlist. Each
+  // entry MUST be a parseable http(s) URL with no embedded userinfo — the
+  // trusted declaration must be syntactically safe. An invalid entry is
+  // rejected (the plan is not constructed).
+  const allowlist = Array.isArray(input.readonlySafeNavigationTargets)
+    ? input.readonlySafeNavigationTargets
+    : [];
+  for (const entry of allowlist) {
+    const violation = validateAllowlistEntry(entry);
+    if (violation !== null) {
+      throw new BrowserValidationError('BROWSER_PLAN_INVALID', `plan for journey ${journey.id}: ${violation}`);
+    }
+  }
+
   return Object.freeze({
     journeyId: input.journeyId,
     steps: Object.freeze(
@@ -183,5 +193,6 @@ export function defineBrowserJourneyPlan(
         }),
       ),
     ),
+    readonlySafeNavigationTargets: Object.freeze([...allowlist]),
   });
 }

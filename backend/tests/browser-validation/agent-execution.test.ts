@@ -133,11 +133,12 @@ const forbiddenJourney: ValidationJourney = defineValidationJourney({
 const readPlan = defineBrowserJourneyPlan(
   {
     journeyId: readJourney.id,
+    readonlySafeNavigationTargets: ['https://example.com/sign-in'],
     steps: [
       {
         stepId: 'step-open',
         actions: [
-          { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
+          { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
           { kind: 'extract', selector: 'h1', satisfiesObservationId: 'obs-heading' },
         ],
       },
@@ -171,7 +172,7 @@ const forbiddenPlan = defineBrowserJourneyPlan(
       {
         stepId: 'step-checkout',
         actions: [
-          { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-confirmation' },
+          { kind: 'navigate', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-confirmation' },
           { kind: 'click', selector: 'button#pay' },
         ],
       },
@@ -360,11 +361,12 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
     const roClickPlan = defineBrowserJourneyPlan(
       {
         journeyId: readOnlyClickJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com'],
         steps: [
           {
             stepId: 'step-attempt-click',
             actions: [
-              { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com', satisfiesObservationId: 'obs-ro-status' },
+              { kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-ro-status' },
               { kind: 'click', selector: 'button', satisfiesObservationId: 'obs-ro-clicked' },
             ],
           },
@@ -784,7 +786,7 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
   });
 
-  it('READ_ONLY + a safe navigation (http, no query, read_only_safe) → the driver IS called → healthy', async () => {
+  it('READ_ONLY + a positively authorized safe navigation (URL in the allowlist) → the driver IS called → healthy', async () => {
     const driver = new FakeBrowserDriver({
       navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
     });
@@ -792,11 +794,12 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/sign-in', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -822,19 +825,26 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
   });
 
-  it('READ_ONLY + a query-string navigation (requires_mutation_policy) → the driver is NEVER called → effect_policy_violation', async () => {
+  // THE ATTACK SHAPE the architect required: a plain-path GET that may mutate
+  // (e.g. /delete/123) under READ_ONLY. The OLD model (per-action targetPolicy)
+  // would admit it if the caller asserted 'read_only_safe'; the NEW model
+  // (authoritative allowlist) rejects it because /delete/123 is NOT in the
+  // allowlist (unverified — no authoritative proof of safety).
+  it('READ_ONLY + /delete/123 (a plain-path GET that may mutate, NOT in the allowlist) → the driver is NEVER called → effect_policy_violation', async () => {
     const driver = new FakeBrowserDriver({
-      navigate: [{ finalUrl: 'https://example.com/unsubscribe?token=abc', status: 200, title: 'Unsubscribed' }],
+      navigate: [{ finalUrl: 'https://example.com/delete/123', status: 200, title: 'Deleted' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
+        // The allowlist declares /sign-in safe — /delete/123 is NOT in it.
+        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/unsubscribe?token=abc', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/delete/123', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -851,32 +861,32 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       plan,
       verificationRunId: 'ver-nav-2',
       projectId: 'proj-nav-2',
-      runId: 'run-nav-query-rejected',
+      runId: 'run-nav-delete-rejected',
       now: fixedClock,
     });
 
     expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
     if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
-      expect(outcome.run!.outcome!.reason).toMatch(/requires a mutation policy/);
+      expect(outcome.run!.outcome!.reason).toMatch(/not proven read-only-safe|unverified/);
     }
     // CRITICAL PROOF: the driver was NEVER called (the navigation was rejected
     // before page.goto()):
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('READ_ONLY + a file: URL navigation → the driver is NEVER called → effect_policy_violation (forbidden target)', async () => {
-    const driver = new FakeBrowserDriver({
-      navigate: [{ finalUrl: 'file:///etc/passwd', status: 200, title: 'passwd' }],
-    });
+  it('READ_ONLY + a query-string URL NOT in the allowlist → the driver is NEVER called → effect_policy_violation (unverified)', async () => {
+    const driver = new FakeBrowserDriver({});
     const { agent } = buildAgent(driver, new FakeVerificationService());
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
+        // Empty allowlist — no navigation is proven read-only-safe.
+        readonlySafeNavigationTargets: [],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'file:///etc/passwd', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/?action=delete', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -893,32 +903,33 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       plan,
       verificationRunId: 'ver-nav-3',
       projectId: 'proj-nav-3',
-      runId: 'run-nav-file-rejected',
+      runId: 'run-nav-query-rejected',
       now: fixedClock,
     });
 
     expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
-    if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
-      expect(outcome.run!.outcome!.reason).toMatch(/forbidden/);
-      expect(outcome.run!.outcome!.reason).toMatch(/file:/);
-    }
+    expect(outcome.run!.outcome!.kind === 'effect_policy_violation' && outcome.run!.outcome!.reason).toMatch(/not proven read-only-safe|unverified/);
     // CRITICAL PROOF: the driver was NEVER called:
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('READ_ONLY + a query-string URL declared read_only_safe (provably false) → the driver is NEVER called → effect_policy_violation (forbidden)', async () => {
-    // The caller LIED: a query string declared read_only_safe. The agent
-    // rejects the declaration before the browser is called.
-    const driver = new FakeBrowserDriver({});
+  it('READ_ONLY + a query-string URL IN the allowlist → the driver IS called → healthy (the journey authority declared it safe)', async () => {
+    // The architect's ruling: "a query string is one possible signal, not a
+    // proof of mutation." The allowlist is the authority. A query-string URL
+    // the journey declared read-only-safe is admitted under READ_ONLY.
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/confirm?token=abc', status: 200, title: 'Confirmed' }],
+    });
     const { agent } = buildAgent(driver, new FakeVerificationService());
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: navJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com/confirm?token=abc'],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/?action=delete', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/confirm?token=abc', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -935,12 +946,54 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       plan,
       verificationRunId: 'ver-nav-4',
       projectId: 'proj-nav-4',
-      runId: 'run-nav-false-declaration',
+      runId: 'run-nav-query-allowlisted',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('healthy');
+    // The driver WAS called (the navigation executed):
+    expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
+  });
+
+  it('READ_ONLY + a file: URL navigation → the driver is NEVER called → effect_policy_violation (forbidden target)', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'file:///etc/passwd', status: 200, title: 'passwd' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        readonlySafeNavigationTargets: [],
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'file:///etc/passwd', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-5',
+      projectId: 'proj-nav-5',
+      runId: 'run-nav-file-rejected',
       now: fixedClock,
     });
 
     expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
-    expect(outcome.run!.outcome!.kind === 'effect_policy_violation' && outcome.run!.outcome!.reason).toMatch(/forbidden/);
+    if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
+      expect(outcome.run!.outcome!.reason).toMatch(/forbidden/);
+      expect(outcome.run!.outcome!.reason).toMatch(/file:/);
+    }
     // CRITICAL PROOF: the driver was NEVER called:
     expect(driver.recordedCalls).toHaveLength(0);
   });
@@ -975,11 +1028,12 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: forbiddenNavJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com/checkout'],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/checkout', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -994,8 +1048,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan,
-      verificationRunId: 'ver-nav-5',
-      projectId: 'proj-nav-5',
+      verificationRunId: 'ver-nav-6',
+      projectId: 'proj-nav-6',
       runId: 'run-nav-forbidden',
       now: fixedClock,
     });
@@ -1006,9 +1060,10 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('SAFE_MUTATION + a query-string navigation (requires_mutation_policy) → the driver IS called (admitted under a mutation policy)', async () => {
-    // A SAFE_MUTATION journey that navigates with a query string (honestly
-    // declared requires_mutation_policy). The navigation is admitted.
+  it('SAFE_MUTATION + an unverified navigation (not in the allowlist) → the driver IS called (admitted under a mutation policy)', async () => {
+    // A SAFE_MUTATION journey that navigates to /delete/123 (not in the
+    // allowlist — unverified). The run has a mutation policy, so the
+    // potentially-mutating navigation is within policy and admitted.
     const mutationNavJourney: ValidationJourney = defineValidationJourney({
       id: 'journey-nav-mutation',
       name: 'A mutation navigation journey',
@@ -1027,17 +1082,19 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
     });
     const driver = new FakeBrowserDriver({
-      navigate: [{ finalUrl: 'https://example.com/save?name=value', status: 200, title: 'Saved' }],
+      navigate: [{ finalUrl: 'https://example.com/delete/123', status: 200, title: 'Deleted' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: mutationNavJourney.id,
+        // No allowlist — /delete/123 is unverified, but SAFE_MUTATION admits it.
+        readonlySafeNavigationTargets: [],
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/save?name=value', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: 'https://example.com/delete/123', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
@@ -1052,8 +1109,8 @@ describe('WORK-065 agent §14 — the driver is never called for a rejected navi
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan,
-      verificationRunId: 'ver-nav-6',
-      projectId: 'proj-nav-6',
+      verificationRunId: 'ver-nav-7',
+      projectId: 'proj-nav-7',
       runId: 'run-nav-mutation-admitted',
       now: fixedClock,
     });

@@ -323,59 +323,103 @@ run's declared EffectPolicy:
   binding to match the environment's isolated tenant; a cross-tenant
   mutation is rejected before execution.
 
-#### 9.4.1 Navigation-target safety (the navigation is NOT unconditionally read)
+#### 9.4.1 Navigation-target safety (the AUTHORITATIVE allowlist model)
 
 A browser navigation is NOT unconditionally a read action. A navigation can
 have externally observable side effects even without a DOM mutation:
 
 - a GET endpoint that performs state changes (e.g. `?action=delete`, a
-  one-time token consumption, an unsubscription link);
+  one-time token consumption, an unsubscription link, a plain-path RESTful
+  GET-mutation like `/delete/123`);
 - a download/navigation chain that hits internal services;
 - effects outside the target application's DOM.
 
-"HTTP GET" ≠ "no side effect." The model answers the question:
+"HTTP GET" ≠ "no side effect." The URL structure alone CANNOT prove safety —
+a plain-path GET may still mutate server state, and a query string is one
+possible signal of mutation, not a proof of it. The agent cannot know whether
+a target GET mutates server state merely from the URL.
 
-> **What makes a navigation "READ_ONLY-safe"?**
+THE INVARIANT (the authoritative boundary):
 
-A navigation is `read_only_safe` ONLY when BOTH hold:
+> The browser executor must not turn an executor-supplied assertion into
+> authoritative safety.
 
-1. the caller EXPLICITLY declares `targetPolicy: 'read_only_safe'` (the
-   caller's honest assertion that the navigation observes state and performs
-   no mutation); AND
-2. the URL structure VERIFIES the declaration — the scheme is http(s), there
-   is NO embedded userinfo, and there is NO query string (a query string is
-   the canonical signal that a GET MAY mutate; a declared `read_only_safe`
-   navigation whose URL carries a query string is PROVABLY FALSE and rejected
-   before the browser is called).
+A per-action assertion (e.g. a `targetPolicy` field on the `navigate` action)
+is an executor-supplied assertion — the executor could assert safety for
+`/delete/123` and the agent would have no way to verify it. The model
+therefore requires an **authoritative trusted declaration**:
 
-The caller-declares + agent-verifies model:
+The `BrowserJourneyPlan` carries a `readonlySafeNavigationTargets` allowlist —
+the journey's TRUSTED declaration of which navigation targets are
+read-only-safe. A `navigate` action is admitted under READ_ONLY ONLY when its
+URL is in this allowlist (exact string match). There is NO per-action safety
+field on the `navigate` action — the executor cannot assert safety; the
+journey declares it.
 
-- the caller declares the navigation's effect class (`targetPolicy` on the
-  `navigate` action);
-- the agent VERIFIES the declaration against the URL structure (a
-  `read_only_safe` declaration for a URL with a query string is rejected —
-  the caller lied; the declaration is provably false);
-- the agent ENFORCES the verified class against the run's EffectPolicy:
+Classification:
 
-  - `read_only_safe` (verified) → admitted under READ_ONLY + every
-    non-FORBIDDEN policy;
-  - `requires_mutation_policy` → admitted under SAFE_MUTATION /
-    ISOLATED_MUTATION only; rejected under READ_ONLY;
-  - `forbidden` (non-http(s) scheme, embedded userinfo, or a provably-false
-    `read_only_safe` declaration with a query string) → rejected under
-    EVERY policy before the browser is called.
+- `forbidden` — the URL has a non-http(s) scheme or embedded userinfo
+  (categorically rejected under EVERY policy, regardless of the allowlist —
+  syntactic safety, defense in depth);
+- `read_only_safe` — the URL is http(s), no userinfo, AND is in the
+  allowlist (the journey authoritatively declared it read-only-safe) →
+  admitted under READ_ONLY + every non-FORBIDDEN policy;
+- `unverified` — the URL is http(s), no userinfo, but NOT in the allowlist
+  (no authoritative proof of safety) → rejected under READ_ONLY (the
+  executor cannot assert safety; the journey must declare the target
+  read-only-safe); admitted under SAFE_MUTATION / ISOLATED_MUTATION (the
+  run has a mutation policy, so a potentially-mutating navigation is within
+  policy).
+
+An empty allowlist means NO navigation is proven read-only-safe (the safe
+default — every navigate under READ_ONLY is rejected).
+
+The allowlist entries are validated at plan construction: each MUST be a
+parseable http(s) URL with no embedded userinfo (the trusted declaration must
+be syntactically safe). A query string in an allowlist entry is permitted —
+the journey authority may declare a query-string URL read-only-safe (a query
+string is not proof of mutation; the allowlist is the authority, not the URL
+structure).
 
 Defense in depth: the `PlaywrightBrowserDriver` ALSO validates the URL
 scheme + userinfo before `page.goto()` (the documented "http(s) URLs only"
-guarantee made real). The gate is the primary enforcement; the driver is
-the backstop. The browser driver is NEVER called for a navigation that the
+guarantee made real). The gate is the primary enforcement; the driver is the
+backstop. The browser driver is NEVER called for a navigation that the
 policy boundary rejected (discrimination-proven).
 
-This is discrimination-proven: an agent that does NOT enforce the policy
-(mutating under a READ_ONLY declaration, or performing a FORBIDDEN action,
-or navigating to a query-string target under READ_ONLY) must be rejected by
-the surrounding control system, and the corresponding test must FAIL when
-the enforcement is removed.
+This is discrimination-proven: the attack shape `GET /delete/123` under
+READ_ONLY is REJECTED (not in the allowlist → unverified → rejected). An
+agent that does NOT enforce the allowlist (trusting the URL structure alone,
+or a per-action assertion) would admit it — the corresponding test FAILS
+when the allowlist check is removed.
+
+#### 9.4.2 The attack shape (the discrimination proof)
+
+```text
+GET /delete/123
+EffectPolicy = READ_ONLY
+readonlySafeNavigationTargets = ['https://example.com/sign-in']  # /delete/123 NOT in it
+        ↓
+classified: unverified (not in the allowlist)
+        ↓
+rejected under READ_ONLY (effect_policy_violation)
+        ↓
+the browser driver is NEVER called (page.goto() is never reached)
+```
+
+A positively authorized safe navigation:
+
+```text
+GET /sign-in
+EffectPolicy = READ_ONLY
+readonlySafeNavigationTargets = ['https://example.com/sign-in']  # /sign-in IS in it
+        ↓
+classified: read_only_safe (in the authoritative allowlist)
+        ↓
+admitted under READ_ONLY
+        ↓
+the browser driver IS called → healthy
+```
 
 ### 9.5 Evidence capture (provenance preserved)
 

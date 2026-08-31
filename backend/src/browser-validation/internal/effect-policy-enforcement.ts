@@ -46,22 +46,32 @@ export interface EffectEnforcementDecision {
 
 /**
  * Decide whether `action` may execute under `policy`, given the run's
- * identity tenant binding and the target environment. Pure, deterministic,
- * side-effect free. Fail closed: every violation produces a typed
- * effect_policy_violation ExecutionError (the WORK-064 finalization boundary
- * records it as the run's outcome — never healthy).
+ * identity tenant binding, the target environment, and the plan's authoritative
+ * navigation-safety allowlist. Pure, deterministic, side-effect free. Fail
+ * closed: every violation produces a typed effect_policy_violation
+ * ExecutionError (the WORK-064 finalization boundary records it as the run's
+ * outcome — never healthy).
  *
  * Evaluation order:
  *   1. FORBIDDEN policy — rejects EVERY action (the browser agent performs no
  *      forbidden actions; the architect-approved safe mechanism is the WORK-064
  *      admission contract, NOT a browser-execution path);
- *   2. navigate — the navigation-target safety boundary (PR #97 architect
- *      review correction): the agent classifies the navigation target
- *      (scheme/userinfo/query-string + the caller's declared targetPolicy)
- *      and enforces the verified class against the run's EffectPolicy. A
- *      forbidden target (non-http(s), userinfo, or a provably-false
- *      read_only_safe declaration with a query string) is rejected under EVERY
- *      policy. A requires_mutation_policy target is rejected under READ_ONLY.
+ *   2. navigate — the AUTHORITATIVE navigation-target safety boundary (PR #97
+ *      second architect review correction): the agent classifies the
+ *      navigation target against the plan's `readonlySafeNavigationTargets`
+ *      allowlist (the journey's trusted declaration) and enforces the
+ *      verified class:
+ *        - `forbidden` (non-http(s) scheme, embedded userinfo) → rejected
+ *          under EVERY policy before the browser is called;
+ *        - `read_only_safe` (URL is in the allowlist) → admitted under every
+ *          non-FORBIDDEN policy (the journey authoritatively declared it
+ *          read-only-safe);
+ *        - `unverified` (URL is NOT in the allowlist) → rejected under
+ *          READ_ONLY (no authoritative proof of safety — the executor cannot
+ *          assert safety; the journey must declare the target read-only-safe);
+ *          admitted under SAFE_MUTATION / ISOLATED_MUTATION (the run has a
+ *          mutation policy, so a potentially-mutating navigation is within
+ *          policy).
  *      The browser driver is NEVER called for a rejected navigation;
  *   3. read actions (extract, screenshot) — admitted under every non-FORBIDDEN
  *      policy;
@@ -70,16 +80,24 @@ export interface EffectEnforcementDecision {
  *   5. ISOLATED_MUTATION — cross-tenant mutation rejected before execution;
  *   6. SAFE_MUTATION / ISOLATED_MUTATION (with a matching tenant) — admitted.
  *
+ * The `allowlist` is the plan's authoritative `readonlySafeNavigationTargets`
+ * — the journey's trusted declaration of read-only-safe navigation targets.
+ * The executor CANNOT turn a per-action assertion into authoritative safety
+ * (there is no per-action `targetPolicy` field on the navigate action).
+ *
  * The `identity` and `environment` are REQUIRED for ISOLATED_MUTATION
  * cross-tenant enforcement (defense in depth — the WORK-064 admission
  * boundary already verified the tenant match; this re-verifies before the
  * mutation executes).
+ *
+ * @param allowlist the plan's authoritative readonlySafeNavigationTargets
  */
 export function enforceEffectPolicy(
   action: BrowserAction,
   policy: EffectPolicy,
   identity: TestIdentityBinding,
   environment: Environment,
+  allowlist: readonly string[] = [],
 ): EffectEnforcementDecision {
   // 1. FORBIDDEN — the browser agent performs NO forbidden actions. The safe
   //    mechanism is the WORK-064 admission contract; the agent treats FORBIDDEN
@@ -94,16 +112,15 @@ export function enforceEffectPolicy(
     };
   }
 
-  // 2. navigate — the navigation-target safety boundary. A navigation is NOT
-  //    unconditionally a read action (PR #97 architect review correction): a
-  //    browser navigation can have externally observable side effects even
-  //    without a DOM mutation (a GET endpoint that mutates, a query string
-  //    that carries mutation semantics, a non-http(s) scheme, embedded
-  //    userinfo). The agent classifies the target against the caller's
-  //    declared targetPolicy and the run's EffectPolicy BEFORE the browser is
+  // 2. navigate — the AUTHORITATIVE navigation-target safety boundary. A
+  //    navigation is NOT unconditionally a read action (PR #97 architect
+  //    review correction): a browser navigation can have externally observable
+  //    side effects even without a DOM mutation. The agent classifies the
+  //    target against the plan's authoritative allowlist (the journey's
+  //    trusted declaration) and the run's EffectPolicy BEFORE the browser is
   //    called. The driver is NEVER called for a rejected navigation.
   if (action.kind === 'navigate') {
-    const decision = classifyNavigationTarget(action.url, action.targetPolicy);
+    const decision = classifyNavigationTarget(action.url, allowlist);
     if (decision.targetClass === 'forbidden') {
       return {
         admitted: false,
@@ -113,17 +130,18 @@ export function enforceEffectPolicy(
         },
       };
     }
-    if (decision.targetClass === 'requires_mutation_policy' && policy === 'READ_ONLY') {
+    if (decision.targetClass === 'unverified' && policy === 'READ_ONLY') {
       return {
         admitted: false,
         executionError: {
           kind: 'effect_policy_violation',
-          reason: `navigation target requires a mutation policy — ${decision.reason} (a READ_ONLY run cannot perform a navigation that may have side effects; the browser driver is never called for a rejected navigation)`,
+          reason: `navigation target is not proven read-only-safe — ${decision.reason} (a READ_ONLY run cannot perform a navigation without an authoritative safety declaration; the browser driver is never called for an unverified navigation under READ_ONLY)`,
         },
       };
     }
     // read_only_safe under READ_ONLY/SAFE_MUTATION/ISOLATED_MUTATION, OR
-    // requires_mutation_policy under SAFE_MUTATION/ISOLATED_MUTATION — admitted.
+    // unverified under SAFE_MUTATION/ISOLATED_MUTATION (the run has a mutation
+    // policy, so a potentially-mutating navigation is within policy) — admitted.
     return { admitted: true, executionError: null };
   }
 

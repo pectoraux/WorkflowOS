@@ -220,39 +220,65 @@ boundary (effect-policy enforcement, navigation-target classification,
 no-second-authority matrix) must exist and be proven BEFORE a production
 driver is wired.
 
-## 4c. Navigation-target safety boundary (PR #97 architect review correction)
+## 4c. Navigation-target safety boundary (PR #97 architect review — the AUTHORITATIVE allowlist model)
 
 The original implementation classified EVERY `navigate` action as a `read`
-action (admitted under READ_ONLY). The architect's REQUEST CHANGES correctly
-identified this as a real safety defect: a browser navigation can have
-externally observable side effects even without a DOM mutation (a GET
-endpoint that mutates, a query string, a non-http(s) scheme, embedded
-userinfo). "HTTP GET" ≠ "no side effect."
+action (admitted under READ_ONLY). The architect's first REQUEST CHANGES
+correctly identified this as a real safety defect. The first correction
+introduced a per-action `targetPolicy` field verified against the URL
+structure. The architect's **second REQUEST CHANGES** correctly identified
+that this STILL did not close the defect: a plain-path GET like `/delete/123`
+declared `read_only_safe` (no query string) was still admitted under
+READ_ONLY. The agent cannot know whether a target GET mutates server state
+merely from the URL structure — "no query string" is not proof of safety, and
+"query string" is not proof of mutation. The per-action `targetPolicy` was an
+**executor-supplied assertion**, and the agent was turning it into
+authoritative safety.
 
-The correction introduces the **navigation-target safety boundary**:
+THE INVARIANT (the architect's ruling):
 
-- the `navigate` action carries an EXPLICIT `targetPolicy` declaration
-  (`'read_only_safe' | 'requires_mutation_policy'`) — the caller's honest
-  assertion of the navigation's effect class;
-- the agent VERIFIES the declaration against the URL structure
-  (`classifyNavigationTarget`): a `read_only_safe` declaration for a URL
-  with a query string is PROVABLY FALSE → `forbidden` (rejected under every
-  policy); a non-http(s) scheme or embedded userinfo → `forbidden`;
-- the agent ENFORCES the verified class: `read_only_safe` admitted under
-  READ_ONLY+; `requires_mutation_policy` admitted under SAFE_MUTATION/
-  ISOLATED_MUTATION only; `forbidden` rejected under every policy;
+> The browser executor must not turn an executor-supplied assertion into
+> authoritative safety.
+
+THE AUTHORITATIVE MODEL (the final correction):
+
+- the `navigate` action carries **NO** per-action safety field — the executor
+  cannot assert safety;
+- the `BrowserJourneyPlan` carries an AUTHORITATIVE
+  `readonlySafeNavigationTargets` allowlist — the journey's TRUSTED
+  declaration of which navigation targets are read-only-safe;
+- the agent VERIFIES each navigate URL against the allowlist
+  (`classifyNavigationTarget(url, allowlist)`):
+  - `forbidden` (non-http(s) scheme, embedded userinfo) → rejected under
+    every policy (syntactic safety, defense in depth — regardless of the
+    allowlist);
+  - `read_only_safe` (URL is in the allowlist) → admitted under READ_ONLY +
+    every non-FORBIDDEN policy;
+  - `unverified` (URL NOT in the allowlist) → rejected under READ_ONLY (no
+    authoritative proof of safety); admitted under SAFE_MUTATION/
+    ISOLATED_MUTATION (the run has a mutation policy);
 - the `PlaywrightBrowserDriver.open()` ALSO validates the URL scheme +
   userinfo before `page.goto()` (the documented "http(s) URLs only"
   guarantee made real — defense in depth).
 
-The critical proof: the browser driver is NEVER called for a navigation
-that the policy boundary rejected (6 discriminating tests in
-agent-execution.test.ts §14 + 8 driver-level URL-validation tests).
+THE ATTACK SHAPE (the architect's required regression): `GET /delete/123`
+under READ_ONLY with `/delete/123` NOT in the allowlist → `unverified` →
+REJECTED before `page.goto()`. The OLD model (per-action `targetPolicy`)
+would admit it if the caller asserted `read_only_safe`; the NEW model
+(authoritative allowlist) rejects it because the journey did not declare
+`/delete/123` read-only-safe.
+
+The critical proof: the browser driver is NEVER called for a navigation that
+the policy boundary rejected (7 discriminating tests in agent-execution.test.ts
+§14, including the `/delete/123` attack shape + 8 driver-level URL-validation
+tests). The allowlist entries are validated at plan construction (each MUST be
+a parseable http(s) URL with no userinfo). An empty allowlist is the safe
+default (no navigation is proven read-only-safe).
 
 ## 5. Verification summary (on the implementation branch)
 
-- WORK-065 browser-validation suite: 75 tests (30 navigation-target + 20
-  agent execution [14 original + 6 navigation-safety] + 15 enforcement/plan
+- WORK-065 browser-validation suite: 79 tests (33 navigation-target + 21
+  agent execution [14 original + 7 navigation-safety] + 15 enforcement/plan
   + 8 PlaywrightDriver URL-validation + 2 real-browser) — all green.
 - WORK-064 continuous-validation suite: 135 tests — unchanged, all green.
 - static-architecture: 820/820 (16 new WORK-065 invariants + 804 existing;

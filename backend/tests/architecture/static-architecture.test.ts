@@ -19673,37 +19673,48 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
     expect(appSrc).not.toMatch(/new PlaywrightBrowserDriver\(/);
   });
 
-  // --- (o) the navigation-target safety boundary is pinned (PR #97 review) --
+  // --- (o) the navigation-target safety boundary is pinned (PR #97 second review) --
 
-  it('the navigation-target safety boundary is pinned: a navigate is NOT unconditionally read — the targetPolicy is declared, verified against the URL structure, and enforced', () => {
+  it('the navigation-target safety boundary is pinned: the AUTHORITATIVE allowlist — a navigate is admitted under READ_ONLY ONLY when the URL is in the plan\'s readonlySafeNavigationTargets (no per-action assertion)', () => {
     expect(existsSync(BV_NAVIGATION_TARGET), 'navigation-target.ts must exist').toBe(true);
     const navSrc = stripCodeComments(readFileSync(BV_NAVIGATION_TARGET, 'utf8'));
-    // The closed classification vocabulary:
+    // The closed classification vocabulary (read_only_safe / unverified / forbidden):
     expect(navSrc).toMatch(/'read_only_safe'/);
-    expect(navSrc).toMatch(/'requires_mutation_policy'/);
+    expect(navSrc).toMatch(/'unverified'/);
     expect(navSrc).toMatch(/'forbidden'/);
+    // NO per-action 'requires_mutation_policy' / 'targetPolicy' — the executor
+    // cannot assert safety (the authoritative-allowlist invariant):
+    expect(navSrc).not.toMatch(/'requires_mutation_policy'/);
+    expect(navSrc).not.toMatch(/declaredPolicy/);
     // Non-http(s) scheme → forbidden:
     expect(navSrc).toMatch(/protocol !== 'http:' && parsed.protocol !== 'https:'/);
     // Embedded userinfo → forbidden:
     expect(navSrc).toMatch(/parsed\.username/);
     expect(navSrc).toMatch(/parsed\.password/);
-    // A query string declared read_only_safe → forbidden (GET ≠ read-only):
-    expect(navSrc).toMatch(/parsed\.search/);
-    expect(navSrc).toMatch(/declaredPolicy === 'read_only_safe'/);
-    // The enforcement gate calls classifyNavigationTarget for navigate actions:
+    // THE AUTHORITATIVE CHECK: the URL must be in the allowlist to be read_only_safe:
+    expect(navSrc).toMatch(/allowlist/);
+    expect(navSrc).toMatch(/allowlistSet\.has\(url\)/);
+    // The allowlist-entry validator (the trusted declaration must be syntactically safe):
+    expect(navSrc).toMatch(/export function validateAllowlistEntry/);
+    // The enforcement gate calls classifyNavigationTarget with the allowlist for navigate actions:
     const enforcementSrc = stripCodeComments(readFileSync(BV_EFFECT_POLICY_ENFORCEMENT, 'utf8'));
     expect(enforcementSrc).toMatch(/action\.kind === 'navigate'/);
-    expect(enforcementSrc).toMatch(/classifyNavigationTarget/);
+    expect(enforcementSrc).toMatch(/classifyNavigationTarget\(action\.url, allowlist\)/);
     expect(enforcementSrc).toMatch(/targetClass === 'forbidden'/);
-    expect(enforcementSrc).toMatch(/targetClass === 'requires_mutation_policy' && policy === 'READ_ONLY'/);
-    // The navigate action type carries the required targetPolicy field:
+    expect(enforcementSrc).toMatch(/targetClass === 'unverified' && policy === 'READ_ONLY'/);
+    expect(enforcementSrc).toMatch(/allowlist: readonly string\[\] = \[\]/);
+    // The navigate action type carries NO per-action targetPolicy field (the
+    // executor cannot assert safety). Pin that the navigate variant has url +
+    // satisfiesObservationId + timeoutMs but NOT targetPolicy:
     const typesSrc = stripCodeComments(readFileSync(BV_TYPES, 'utf8'));
-    expect(typesSrc).toMatch(/readonly targetPolicy: NavigationTargetPolicy/);
-    expect(typesSrc).toMatch(/type NavigationTargetPolicy = 'read_only_safe' \| 'requires_mutation_policy'/);
-    // The plan constructor requires targetPolicy on navigate actions:
+    expect(typesSrc).not.toMatch(/readonly targetPolicy:/);
+    expect(typesSrc).not.toMatch(/type NavigationTargetPolicy/);
+    // The BrowserJourneyPlan carries the authoritative readonlySafeNavigationTargets allowlist:
+    expect(typesSrc).toMatch(/readonly readonlySafeNavigationTargets: readonly string\[\]/);
+    // The plan constructor validates the allowlist entries:
     const planSrc = stripCodeComments(readFileSync(BV_PLAN, 'utf8'));
-    expect(planSrc).toMatch(/action\.kind === 'navigate'/);
-    expect(planSrc).toMatch(/targetPolicy/);
+    expect(planSrc).toMatch(/readonlySafeNavigationTargets/);
+    expect(planSrc).toMatch(/validateAllowlistEntry/);
   });
 
   // --- (p) the PlaywrightBrowserDriver URL validation is pinned (defense in depth) ---

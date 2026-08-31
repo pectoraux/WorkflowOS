@@ -1,28 +1,39 @@
 import { describe, it, expect } from 'vitest';
 
 /**
- * WORK-065 — the navigation-target safety boundary (PR #97 architect review
- * correction — REQUEST CHANGES).
+ * WORK-065 — the AUTHORITATIVE navigation-target safety boundary (PR #97
+ * second architect review correction — REQUEST CHANGES).
  *
- * THE DEFECT: the original implementation classified EVERY `navigate` action
- * as a `read` action (admitted under READ_ONLY). That is not safe: a browser
- * navigation can have externally observable side effects even without a DOM
- * mutation (a GET endpoint that mutates, a query string, a non-http(s)
- * scheme, embedded userinfo). "HTTP GET" ≠ "no side effect."
+ * THE DEFECT (the architect's ruling): the first correction introduced a
+ * per-action `targetPolicy` field and verified it against the URL structure.
+ * But that still did NOT close the original safety defect — a plain-path GET
+ * like `/delete/123` with `targetPolicy: 'read_only_safe'` and no query
+ * string was still admitted under READ_ONLY. The agent cannot know whether a
+ * target GET mutates server state merely from the URL structure. The
+ * per-action `targetPolicy` was an executor-supplied assertion, and the agent
+ * was turning that assertion into authoritative safety.
  *
- * THE FIX: the caller EXPLICITLY declares the navigation's effect class
- * (`targetPolicy`), and the agent VERIFIES the declaration against the URL
- * structure before the browser is called. This suite proves every
- * discrimination the architect required:
+ * THE INVARIANT (the architect's ruling):
  *
- *   - READ_ONLY + safe allowed navigation         → executes
- *   - READ_ONLY + disallowed navigation target     → rejected before page.goto()
- *   - unsupported scheme (file:)                    → rejected before page.goto()
- *   - FORBIDDEN + navigate                          → rejected
- *   - SAFE/ISOLATED mutation semantics             → remain unchanged
+ *   > The browser executor must not turn an executor-supplied assertion into
+ *   > authoritative safety.
  *
- * The critical proof: the browser driver is NEVER called for a navigation
- * that the policy boundary rejected (proven in agent-execution.test.ts §14).
+ * THE AUTHORITATIVE MODEL (the fix): a navigation is `read_only_safe` ONLY
+ * when the URL is in the plan's AUTHORITATIVE `readonlySafeNavigationTargets`
+ * allowlist — the journey's TRUSTED declaration of which navigation targets
+ * are read-only-safe. There is NO per-action `targetPolicy` field. The
+ * executor cannot assert safety; the journey declares it.
+ *
+ * Classification:
+ *   - `forbidden` — non-http(s) scheme or embedded userinfo (categorically
+ *     rejected under every policy);
+ *   - `read_only_safe` — http(s), no userinfo, AND in the allowlist;
+ *   - `unverified` — http(s), no userinfo, NOT in the allowlist (no
+ *     authoritative proof of safety; rejected under READ_ONLY, admitted under
+ *     SAFE_MUTATION/ISOLATED_MUTATION).
+ *
+ * This suite proves every discrimination the architect required, including
+ * the attack shape `GET /delete/123` under READ_ONLY → REJECTION.
  */
 import {
   defineValidationJourney,
@@ -35,6 +46,7 @@ import {
 import type { AuthenticatedPrincipal } from '@modules/auth/index.js';
 import {
   classifyNavigationTarget,
+  validateAllowlistEntry,
   classifyActionEffect,
   enforceEffectPolicy,
   defineBrowserJourneyPlan,
@@ -82,201 +94,240 @@ const isolatedEnv: Environment = describeEnvironment({
 });
 
 // ---------------------------------------------------------------------------
-// §1  Navigation-target classification (the explicit, testable boundary)
+// §1  Allowlist entry validation (the trusted declaration must be syntactically safe)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §1 — classification (the explicit boundary)', () => {
-  it('an http(s) URL with no userinfo and no query string, declared read_only_safe → read_only_safe', () => {
-    const d = classifyNavigationTarget('https://example.com/sign-in', 'read_only_safe');
-    expect(d.targetClass).toBe('read_only_safe');
+describe('WORK-065 navigation-target §1 — allowlist entry validation', () => {
+  it('a valid http(s) URL with no userinfo is a valid allowlist entry', () => {
+    expect(validateAllowlistEntry('https://example.com/sign-in')).toBeNull();
+    expect(validateAllowlistEntry('http://127.0.0.1:5173/sign-in')).toBeNull();
   });
 
-  it('an http URL (not just https) with no query, declared read_only_safe → read_only_safe', () => {
-    const d = classifyNavigationTarget('http://127.0.0.1:5173/sign-in', 'read_only_safe');
-    expect(d.targetClass).toBe('read_only_safe');
+  it('an http(s) URL WITH a query string is a valid allowlist entry (the journey authority may declare it safe)', () => {
+    // The allowlist is the authority — a query string is NOT proof of
+    // mutation (the architect's ruling: "a query string is one possible
+    // signal, not a proof of mutation"). The journey may authoritatively
+    // declare a query-string URL read-only-safe (e.g. a confirmation page
+    // whose query is a display parameter, not a mutation).
+    expect(validateAllowlistEntry('https://example.com/confirm?token=abc')).toBeNull();
   });
 
-  it('an http(s) URL WITH a query string, declared read_only_safe → forbidden (GET ≠ read-only; the declaration is provably false)', () => {
-    const d = classifyNavigationTarget('https://example.com/unsubscribe?token=abc', 'read_only_safe');
-    expect(d.targetClass).toBe('forbidden');
-    expect(d.reason).toMatch(/query string/);
-    expect(d.reason).toMatch(/read_only_safe/);
+  it('a non-http(s) scheme is rejected as an allowlist entry', () => {
+    expect(validateAllowlistEntry('file:///etc/passwd')).toMatch(/not http\(s\)/);
+    expect(validateAllowlistEntry('data:text/html,<h1>hi</h1>')).toMatch(/not http\(s\)/);
+    expect(validateAllowlistEntry('javascript:void(0)')).toMatch(/not http\(s\)/);
   });
 
-  it('an http(s) URL WITH a query string, declared requires_mutation_policy → requires_mutation_policy (honest admission)', () => {
-    const d = classifyNavigationTarget('https://example.com/unsubscribe?token=abc', 'requires_mutation_policy');
-    expect(d.targetClass).toBe('requires_mutation_policy');
+  it('embedded userinfo is rejected as an allowlist entry', () => {
+    expect(validateAllowlistEntry('https://user:pass@example.com/sign-in')).toMatch(/userinfo/);
   });
 
-  it('a plain-path URL (no query), declared requires_mutation_policy → requires_mutation_policy (honest — e.g. /delete/123)', () => {
-    // A plain-path RESTful GET-mutation like /delete/123: the caller honestly
-    // admits the navigation may mutate even though there is no query string.
-    // The agent cannot disprove it from the URL alone; the caller's declaration
-    // is the authority, and the agent enforces it as a mutation.
-    const d = classifyNavigationTarget('https://example.com/delete/123', 'requires_mutation_policy');
-    expect(d.targetClass).toBe('requires_mutation_policy');
-  });
-
-  it('a file: URL → forbidden regardless of the declaration (unsupported scheme)', () => {
-    expect(classifyNavigationTarget('file:///etc/passwd', 'read_only_safe').targetClass).toBe('forbidden');
-    expect(classifyNavigationTarget('file:///etc/passwd', 'requires_mutation_policy').targetClass).toBe('forbidden');
-  });
-
-  it('a data: URL → forbidden (unsupported scheme)', () => {
-    expect(classifyNavigationTarget('data:text/html,<h1>hi</h1>', 'read_only_safe').targetClass).toBe('forbidden');
-  });
-
-  it('a javascript: URL → forbidden (unsupported scheme)', () => {
-    expect(classifyNavigationTarget('javascript:void(0)', 'read_only_safe').targetClass).toBe('forbidden');
-  });
-
-  it('an about: URL → forbidden (unsupported scheme)', () => {
-    expect(classifyNavigationTarget('about:blank', 'read_only_safe').targetClass).toBe('forbidden');
-  });
-
-  it('a URL with embedded userinfo → forbidden regardless of the declaration', () => {
-    expect(classifyNavigationTarget('https://user:pass@example.com/sign-in', 'read_only_safe').targetClass).toBe('forbidden');
-    expect(classifyNavigationTarget('https://user:pass@example.com/sign-in', 'requires_mutation_policy').targetClass).toBe('forbidden');
-  });
-
-  it('an unparseable / empty URL → forbidden', () => {
-    expect(classifyNavigationTarget('', 'read_only_safe').targetClass).toBe('forbidden');
-    expect(classifyNavigationTarget('not-a-url', 'read_only_safe').targetClass).toBe('forbidden');
-  });
-
-  it('a URL with a fragment (#) but no query string, declared read_only_safe → read_only_safe (fragments are client-side only)', () => {
-    // A fragment does not cause a request and carries no mutation semantics.
-    const d = classifyNavigationTarget('https://example.com/sign-in#section', 'read_only_safe');
-    expect(d.targetClass).toBe('read_only_safe');
+  it('an unparseable / empty URL is rejected as an allowlist entry', () => {
+    expect(validateAllowlistEntry('')).not.toBeNull();
+    expect(validateAllowlistEntry('not-a-url')).not.toBeNull();
   });
 });
 
 // ---------------------------------------------------------------------------
-// §2  Effect-policy enforcement for navigate (the discriminations)
+// §2  Navigation-target classification (the authoritative allowlist model)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §2 — enforcement (the discriminations)', () => {
+describe('WORK-065 navigation-target §2 — classification (the authoritative allowlist)', () => {
+  const allowlist = ['https://example.com/sign-in', 'https://example.com/dashboard'];
+
+  it('an http(s) URL IN the allowlist → read_only_safe (the journey authoritatively declared it)', () => {
+    expect(classifyNavigationTarget('https://example.com/sign-in', allowlist).targetClass).toBe('read_only_safe');
+    expect(classifyNavigationTarget('https://example.com/dashboard', allowlist).targetClass).toBe('read_only_safe');
+  });
+
+  it('an http(s) URL NOT in the allowlist → unverified (no authoritative proof of safety)', () => {
+    // THE CRITICAL CASE: a plain-path GET like /delete/123 is NOT proven safe
+    // merely because it has no query string. The agent cannot know whether
+    // the target GET mutates server state. It is `unverified` (rejected under
+    // READ_ONLY; admitted under SAFE_MUTATION/ISOLATED_MUTATION).
+    expect(classifyNavigationTarget('https://example.com/delete/123', allowlist).targetClass).toBe('unverified');
+    expect(classifyNavigationTarget('https://example.com/sign-in', []).targetClass).toBe('unverified');
+  });
+
+  it('a query-string URL IN the allowlist → read_only_safe (the journey authority declared it safe; a query string is not proof of mutation)', () => {
+    // The architect's ruling: "a query string is one possible signal, not a
+    // proof of mutation." The allowlist is the authority. A query-string URL
+    // the journey declared read-only-safe is read_only_safe.
+    const allowlistWithQuery = ['https://example.com/confirm?token=abc'];
+    expect(classifyNavigationTarget('https://example.com/confirm?token=abc', allowlistWithQuery).targetClass).toBe('read_only_safe');
+  });
+
+  it('a query-string URL NOT in the allowlist → unverified (not forbidden — the query string is not proof of mutation)', () => {
+    // The OLD heuristic (query string → forbidden) is REMOVED. A query-string
+    // URL not in the allowlist is `unverified` (rejected under READ_ONLY for
+    // lack of authoritative proof, NOT because the query string proves
+    // mutation). The allowlist is the authority.
+    expect(classifyNavigationTarget('https://example.com/unsubscribe?token=abc', allowlist).targetClass).toBe('unverified');
+  });
+
+  it('a non-http(s) scheme → forbidden regardless of the allowlist (syntactic safety)', () => {
+    expect(classifyNavigationTarget('file:///etc/passwd', allowlist).targetClass).toBe('forbidden');
+    expect(classifyNavigationTarget('data:text/html,<h1>hi</h1>', allowlist).targetClass).toBe('forbidden');
+    expect(classifyNavigationTarget('javascript:void(0)', allowlist).targetClass).toBe('forbidden');
+    expect(classifyNavigationTarget('about:blank', allowlist).targetClass).toBe('forbidden');
+  });
+
+  it('embedded userinfo → forbidden regardless of the allowlist', () => {
+    expect(classifyNavigationTarget('https://user:pass@example.com/sign-in', allowlist).targetClass).toBe('forbidden');
+  });
+
+  it('an unparseable / empty URL → forbidden', () => {
+    expect(classifyNavigationTarget('', allowlist).targetClass).toBe('forbidden');
+    expect(classifyNavigationTarget('not-a-url', allowlist).targetClass).toBe('forbidden');
+  });
+
+  it('an empty allowlist means NO navigation is proven read-only-safe (the safe default)', () => {
+    // Every http(s) URL is unverified; every navigate under READ_ONLY is rejected.
+    expect(classifyNavigationTarget('https://example.com/sign-in', []).targetClass).toBe('unverified');
+    expect(classifyNavigationTarget('https://example.com/delete/123', []).targetClass).toBe('unverified');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §3  Effect-policy enforcement for navigate (the architect's required regressions)
+// ---------------------------------------------------------------------------
+
+describe('WORK-065 navigation-target §3 — enforcement (the architect\'s required regressions)', () => {
   const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
   const mutationIdentity = bindTestIdentity(synthetic, previewEnv, 'SAFE_MUTATION');
   const isolatedIdentity = bindTestIdentity(isolatedSynthetic, isolatedEnv, 'ISOLATED_MUTATION');
   const forbiddenIdentity = bindTestIdentity(synthetic, previewEnv, 'SAFE_MUTATION');
 
-  it('READ_ONLY + a safe allowed navigation (http, no query, read_only_safe) → ADMITTED (executes)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in', targetPolicy: 'read_only_safe' };
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv);
+  // THE ATTACK SHAPE the architect required:
+  it('READ_ONLY + /delete/123 (a plain-path GET that may mutate) → REJECTED before page.goto() (the executor cannot assert safety)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
+    // The URL is NOT in the allowlist → unverified → rejected under READ_ONLY.
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, ['https://example.com/sign-in']);
+    expect(d.admitted).toBe(false);
+    expect(d.executionError).not.toBeNull();
+    expect(d.executionError!.kind).toBe('effect_policy_violation');
+    expect(d.executionError!.reason).toMatch(/not proven read-only-safe|unverified/);
+  });
+
+  it('READ_ONLY + a query-string URL not in the allowlist → REJECTED (unverified, not forbidden)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/?action=delete' };
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, []);
+    expect(d.admitted).toBe(false);
+    expect(d.executionError!.kind).toBe('effect_policy_violation');
+    expect(d.executionError!.reason).toMatch(/not proven read-only-safe|unverified/);
+  });
+
+  it('READ_ONLY + a positively authorized safe navigation (URL IN the allowlist) → ADMITTED (executes)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in' };
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, ['https://example.com/sign-in']);
     expect(d.admitted).toBe(true);
     expect(d.executionError).toBeNull();
   });
 
-  it('READ_ONLY + a disallowed navigation target (query string, requires_mutation_policy) → REJECTED before page.goto()', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/unsubscribe?token=abc', targetPolicy: 'requires_mutation_policy' };
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv);
-    expect(d.admitted).toBe(false);
-    expect(d.executionError).not.toBeNull();
-    expect(d.executionError!.kind).toBe('effect_policy_violation');
-    expect(d.executionError!.reason).toMatch(/requires a mutation policy/);
+  it('READ_ONLY + a query-string URL IN the allowlist → ADMITTED (the journey authority declared it safe)', () => {
+    // The architect's ruling: "a query string is one possible signal, not a
+    // proof of mutation." The allowlist is the authority. A query-string URL
+    // the journey declared read-only-safe is admitted under READ_ONLY.
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/confirm?token=abc' };
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, ['https://example.com/confirm?token=abc']);
+    expect(d.admitted).toBe(true);
+    expect(d.executionError).toBeNull();
   });
 
-  it('READ_ONLY + a plain-path navigation declared requires_mutation_policy (e.g. /delete/123) → REJECTED (the caller honestly admits it may mutate)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123', targetPolicy: 'requires_mutation_policy' };
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv);
-    expect(d.admitted).toBe(false);
-    expect(d.executionError!.kind).toBe('effect_policy_violation');
-    expect(d.executionError!.reason).toMatch(/requires a mutation policy/);
-  });
-
-  it('READ_ONLY + a query-string URL declared read_only_safe → REJECTED (the declaration is provably false — forbidden)', () => {
-    // The caller lied: a query string MAY mutate, but the caller declared
-    // read_only_safe. The agent rejects it before the browser is called,
-    // regardless of the run's policy (forbidden target).
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/?action=delete', targetPolicy: 'read_only_safe' };
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv);
-    expect(d.admitted).toBe(false);
-    expect(d.executionError!.kind).toBe('effect_policy_violation');
+  it('unsupported scheme (file:) → REJECTED before page.goto() under EVERY policy (forbidden, regardless of the allowlist)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'file:///etc/passwd' };
+    // Even if the file: URL is (erroneously) in the allowlist, it is forbidden:
+    expect(enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, ['file:///etc/passwd']).admitted).toBe(false);
+    expect(enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv, ['file:///etc/passwd']).admitted).toBe(false);
+    expect(enforceEffectPolicy(nav, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv, ['file:///etc/passwd']).admitted).toBe(false);
+    const d = enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv, []);
     expect(d.executionError!.reason).toMatch(/forbidden/);
   });
 
-  it('unsupported scheme (file:) → REJECTED before page.goto() under EVERY policy (forbidden target)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'file:///etc/passwd', targetPolicy: 'read_only_safe' };
-    // Rejected under READ_ONLY:
-    expect(enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv).admitted).toBe(false);
-    // Rejected under SAFE_MUTATION:
-    expect(enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv).admitted).toBe(false);
-    // Rejected under ISOLATED_MUTATION:
-    expect(enforceEffectPolicy(nav, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv).admitted).toBe(false);
-    // The reason is 'forbidden' (not 'requires a mutation policy'):
-    const d = enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv);
-    expect(d.executionError!.reason).toMatch(/forbidden/);
-    expect(d.executionError!.reason).toMatch(/file:/);
-  });
-
-  it('embedded userinfo → REJECTED before page.goto() under every policy (forbidden target)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://user:pass@example.com/sign-in', targetPolicy: 'read_only_safe' };
-    expect(enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv).admitted).toBe(false);
-    expect(enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv).admitted).toBe(false);
+  it('embedded userinfo → REJECTED before page.goto() under every policy', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://user:pass@example.com/sign-in' };
+    expect(enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, []).admitted).toBe(false);
+    expect(enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv, []).admitted).toBe(false);
   });
 
   it('FORBIDDEN + navigate → REJECTED (the browser agent performs no forbidden actions, including navigation)', () => {
-    // Even a safe navigation target is rejected under a FORBIDDEN run.
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in', targetPolicy: 'read_only_safe' };
-    const d = enforceEffectPolicy(nav, 'FORBIDDEN', forbiddenIdentity, previewEnv);
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in' };
+    const d = enforceEffectPolicy(nav, 'FORBIDDEN', forbiddenIdentity, previewEnv, ['https://example.com/sign-in']);
     expect(d.admitted).toBe(false);
     expect(d.executionError!.kind).toBe('effect_policy_violation');
     expect(d.executionError!.reason).toMatch(/FORBIDDEN/);
   });
 
-  it('SAFE_MUTATION + a navigation declared requires_mutation_policy (query string) → ADMITTED', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/save?name=value', targetPolicy: 'requires_mutation_policy' };
-    const d = enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv);
+  it('SAFE_MUTATION + an unverified navigation (not in the allowlist) → ADMITTED (the run has a mutation policy)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
+    const d = enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv, []);
     expect(d.admitted).toBe(true);
     expect(d.executionError).toBeNull();
   });
 
-  it('ISOLATED_MUTATION + a navigation declared requires_mutation_policy → ADMITTED (with a matching tenant)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/save?name=value', targetPolicy: 'requires_mutation_policy' };
-    const d = enforceEffectPolicy(nav, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv);
+  it('ISOLATED_MUTATION + an unverified navigation → ADMITTED (with a matching tenant)', () => {
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
+    const d = enforceEffectPolicy(nav, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv, []);
     expect(d.admitted).toBe(true);
   });
 
-  it('SAFE_MUTATION + a navigation declared read_only_safe (plain path) → ADMITTED (read_only_safe is admitted under every non-FORBIDDEN policy)', () => {
-    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/dashboard', targetPolicy: 'read_only_safe' };
-    const d = enforceEffectPolicy(nav, 'SAFE_MUTATION', mutationIdentity, previewEnv);
-    expect(d.admitted).toBe(true);
+  it('discrimination: the OLD model (per-action targetPolicy) would admit /delete/123 under READ_ONLY; the NEW model rejects it', () => {
+    // This is the discrimination proof. The OLD model trusted a per-action
+    // `targetPolicy: 'read_only_safe'` declaration for a plain-path GET.
+    // The NEW model requires the URL to be in the authoritative allowlist.
+    // Removing the allowlist check (trusting the URL structure alone) would
+    // let /delete/123 through under READ_ONLY — the corresponding test FAILS.
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
+    // NEW model: /delete/123 not in the allowlist → unverified → rejected.
+    expect(enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, ['https://example.com/sign-in']).admitted).toBe(false);
+    // If the allowlist check were removed (trusting the URL structure alone —
+    // the OLD heuristic), a plain-path GET would be admitted. Proven both ways:
+    const wouldAdmitWithoutAllowlist = (url: string) => {
+      // The OLD heuristic: http(s) + no query + no userinfo → read_only_safe.
+      try {
+        const p = new URL(url);
+        return p.protocol === 'http:' || p.protocol === 'https:';
+      } catch {
+        return false;
+      }
+    };
+    expect(wouldAdmitWithoutAllowlist('https://example.com/delete/123')).toBe(true); // the hole
+    // The NEW model closes it: the allowlist is the authority, not the URL.
   });
 });
 
 // ---------------------------------------------------------------------------
-// §3  SAFE/ISOLATED mutation semantics remain unchanged (click/type)
+// §4  SAFE/ISOLATED mutation semantics remain unchanged (click/type)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §3 — SAFE/ISOLATED mutation semantics unchanged (click/type)', () => {
+describe('WORK-065 navigation-target §4 — SAFE/ISOLATED mutation semantics unchanged (click/type)', () => {
   const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
   const mutationIdentity = bindTestIdentity(synthetic, previewEnv, 'SAFE_MUTATION');
   const isolatedIdentity = bindTestIdentity(isolatedSynthetic, isolatedEnv, 'ISOLATED_MUTATION');
 
   it('click under READ_ONLY → REJECTED (unchanged)', () => {
     const click: BrowserAction = { kind: 'click', selector: 'button' };
-    expect(enforceEffectPolicy(click, 'READ_ONLY', readIdentity, previewEnv).admitted).toBe(false);
+    expect(enforceEffectPolicy(click, 'READ_ONLY', readIdentity, previewEnv, []).admitted).toBe(false);
   });
 
   it('type under READ_ONLY → REJECTED (unchanged)', () => {
     const type: BrowserAction = { kind: 'type', selector: 'input', text: 'hello' };
-    expect(enforceEffectPolicy(type, 'READ_ONLY', readIdentity, previewEnv).admitted).toBe(false);
+    expect(enforceEffectPolicy(type, 'READ_ONLY', readIdentity, previewEnv, []).admitted).toBe(false);
   });
 
   it('click under SAFE_MUTATION → ADMITTED (unchanged)', () => {
     const click: BrowserAction = { kind: 'click', selector: 'button' };
-    expect(enforceEffectPolicy(click, 'SAFE_MUTATION', mutationIdentity, previewEnv).admitted).toBe(true);
+    expect(enforceEffectPolicy(click, 'SAFE_MUTATION', mutationIdentity, previewEnv, []).admitted).toBe(true);
   });
 
   it('type under SAFE_MUTATION → ADMITTED (unchanged)', () => {
     const type: BrowserAction = { kind: 'type', selector: 'input', text: 'hello' };
-    expect(enforceEffectPolicy(type, 'SAFE_MUTATION', mutationIdentity, previewEnv).admitted).toBe(true);
+    expect(enforceEffectPolicy(type, 'SAFE_MUTATION', mutationIdentity, previewEnv, []).admitted).toBe(true);
   });
 
   it('click under ISOLATED_MUTATION (matching tenant) → ADMITTED (unchanged)', () => {
     const click: BrowserAction = { kind: 'click', selector: 'button' };
-    expect(enforceEffectPolicy(click, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv).admitted).toBe(true);
+    expect(enforceEffectPolicy(click, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv, []).admitted).toBe(true);
   });
 
   it('extract/screenshot remain classified as read (unchanged)', () => {
@@ -286,12 +337,12 @@ describe('WORK-065 navigation-target §3 — SAFE/ISOLATED mutation semantics un
 });
 
 // ---------------------------------------------------------------------------
-// §4  Plan construction: navigate without targetPolicy is rejected
+// §5  Plan construction: the allowlist is validated + carried on the plan
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §4 — plan construction requires targetPolicy on navigate', () => {
+describe('WORK-065 navigation-target §5 — plan construction carries + validates the allowlist', () => {
   const journey: ValidationJourney = defineValidationJourney({
-    id: 'journey-nav-targetPolicy',
+    id: 'journey-nav-allowlist',
     name: 'A journey',
     identityRequirement: 'unauthenticated',
     allowedModes: ['PRE_MERGE'],
@@ -308,27 +359,26 @@ describe('WORK-065 navigation-target §4 — plan construction requires targetPo
     successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
   });
 
-  it('a navigate WITHOUT targetPolicy is rejected by the plan constructor (the caller must answer the safety question)', () => {
-    expect(() =>
-      defineBrowserJourneyPlan(
-        {
-          journeyId: journey.id,
-          steps: [
-            {
-              stepId: 'step-open',
-              actions: [
-                // @ts-expect-error — missing targetPolicy on purpose
-                { kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-status' },
-              ],
-            },
-          ],
-        },
-        journey,
-      ),
-    ).toThrow(/targetPolicy/);
+  it('a plan with a valid readonlySafeNavigationTargets allowlist is constructed (the allowlist is carried on the plan)', () => {
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: journey.id,
+        readonlySafeNavigationTargets: ['https://example.com/sign-in'],
+        steps: [
+          {
+            stepId: 'step-open',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      journey,
+    );
+    expect(plan.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
   });
 
-  it('a navigate WITH targetPolicy is accepted', () => {
+  it('a plan with NO readonlySafeNavigationTargets defaults to an empty allowlist (the safe default — no navigation is proven read-only-safe)', () => {
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
@@ -336,13 +386,43 @@ describe('WORK-065 navigation-target §4 — plan construction requires targetPo
           {
             stepId: 'step-open',
             actions: [
-              { kind: 'navigate', url: 'https://example.com', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+              { kind: 'extract', selector: 'h1', satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
       },
       journey,
     );
-    expect(plan.steps).toHaveLength(1);
+    expect(plan.readonlySafeNavigationTargets).toEqual([]);
+  });
+
+  it('a plan with an invalid allowlist entry (non-http(s)) is rejected', () => {
+    expect(() =>
+      defineBrowserJourneyPlan(
+        {
+          journeyId: journey.id,
+          readonlySafeNavigationTargets: ['file:///etc/passwd'],
+          steps: [
+            { stepId: 'step-open', actions: [{ kind: 'navigate', url: 'file:///etc/passwd', satisfiesObservationId: 'obs-status' }] },
+          ],
+        },
+        journey,
+      ),
+    ).toThrow(/allowlist entry/);
+  });
+
+  it('a plan with an allowlist entry with embedded userinfo is rejected', () => {
+    expect(() =>
+      defineBrowserJourneyPlan(
+        {
+          journeyId: journey.id,
+          readonlySafeNavigationTargets: ['https://user:pass@example.com/sign-in'],
+          steps: [
+            { stepId: 'step-open', actions: [{ kind: 'navigate', url: 'https://user:pass@example.com/sign-in', satisfiesObservationId: 'obs-status' }] },
+          ],
+        },
+        journey,
+      ),
+    ).toThrow(/userinfo/);
   });
 });

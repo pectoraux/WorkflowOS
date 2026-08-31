@@ -176,11 +176,12 @@ describe('WORK-065 real-browser integration — the execution path against a rea
     const realPlan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
+        readonlySafeNavigationTargets: [`${baseUrl}/sign-in`],
         steps: [
           {
             stepId: 'step-open',
             actions: [
-              { kind: 'navigate', targetPolicy: 'read_only_safe', url: `${baseUrl}/sign-in`, satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: `${baseUrl}/sign-in`, satisfiesObservationId: 'obs-status' },
               { kind: 'extract', selector: 'h1', satisfiesObservationId: 'obs-heading' },
               { kind: 'extract', selector: 'title', satisfiesObservationId: 'obs-title' },
             ],
@@ -236,11 +237,12 @@ describe('WORK-065 real-browser integration — the execution path against a rea
     const missingPlan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
+        readonlySafeNavigationTargets: [`${baseUrl}/sign-in`],
         steps: [
           {
             stepId: 'step-open',
             actions: [
-              { kind: 'navigate', targetPolicy: 'read_only_safe', url: `${baseUrl}/sign-in`, satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url: `${baseUrl}/sign-in`, satisfiesObservationId: 'obs-status' },
               { kind: 'extract', selector: 'h1.nonexistent', satisfiesObservationId: 'obs-heading' },
             ],
           },
