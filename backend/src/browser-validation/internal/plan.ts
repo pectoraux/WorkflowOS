@@ -159,12 +159,14 @@ export function defineBrowserJourneyPlan(
     );
   }
 
-  // NOTE: the plan carries NO navigation-safety allowlist (PR #97 third
-  // architect review correction). The authoritative allowlist is the
-  // journey-bound JourneyNavigationSafetyDeclaration, carried on
-  // ExecuteValidationRunInput.journeyNavigationSafety — NOT a plan field.
-  // The executor constructs the plan (choosing navigate actions) but CANNOT
-  // expand the trusted safe-target set.
+  // NOTE: the plan carries NO navigation-safety allowlist (PR #97 second +
+  // third + fourth architect review corrections). The authoritative allowlist
+  // is the JOURNEY's own `ValidationJourney.readonlySafeNavigationTargets`
+  // field (declared and validated under WORK-064's authority at
+  // defineValidationJourney) — there is no plan field, no separate declaration
+  // object, and no execution-input field for it. The executor constructs the
+  // plan (choosing navigate actions) but CANNOT create, replace, or expand the
+  // trusted safe-target set.
 
   return Object.freeze({
     journeyId: input.journeyId,

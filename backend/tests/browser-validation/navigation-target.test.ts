@@ -2,55 +2,64 @@ import { describe, it, expect } from 'vitest';
 
 /**
  * WORK-065 — the AUTHORITATIVE navigation-target safety boundary (PR #97
- * second architect review correction — REQUEST CHANGES).
+ * architect review corrections, rounds 1-4).
  *
- * THE DEFECT (the architect's ruling): the first correction introduced a
- * per-action `targetPolicy` field and verified it against the URL structure.
- * But that still did NOT close the original safety defect — a plain-path GET
- * like `/delete/123` with `targetPolicy: 'read_only_safe'` and no query
- * string was still admitted under READ_ONLY. The agent cannot know whether a
- * target GET mutates server state merely from the URL structure. The
- * per-action `targetPolicy` was an executor-supplied assertion, and the agent
- * was turning that assertion into authoritative safety.
+ * THE DEFECT HISTORY (each round closed one forgeable channel):
+ *   - round 1: a per-action `targetPolicy` field verified against the URL
+ *     structure — a plain-path GET like `/delete/123` with an asserted
+ *     `read_only_safe` was still admitted (an executor-supplied assertion
+ *     turned into authoritative safety);
+ *   - round 2: the allowlist moved to the executor-constructed plan;
+ *   - round 3: the allowlist moved to a separate caller-constructed
+ *     declaration — but `defineJourneyNavigationSafety` bound an ARBITRARY
+ *     caller-supplied target list to a real journey id (identity
+ *     correlation, not provenance);
+ *   - round 4 (CURRENT): the declaration is PART OF THE JOURNEY ITSELF —
+ *     `ValidationJourney.readonlySafeNavigationTargets`, declared and
+ *     validated under WORK-064's authority at `defineValidationJourney`.
  *
  * THE INVARIANT (the architect's ruling):
  *
  *   > The browser executor must not turn an executor-supplied assertion into
- *   > authoritative safety.
+ *   > authoritative safety — and the safety proof must originate from the
+ *   > journey's canonical state, never from a second caller-provided object.
  *
  * THE AUTHORITATIVE MODEL (the fix): a navigation is `read_only_safe` ONLY
- * when the URL is in the plan's AUTHORITATIVE `readonlySafeNavigationTargets`
- * allowlist — the journey's TRUSTED declaration of which navigation targets
- * are read-only-safe. There is NO per-action `targetPolicy` field. The
- * executor cannot assert safety; the journey declares it.
+ * when the URL is in the JOURNEY's `readonlySafeNavigationTargets` allowlist
+ * — the trusted declaration OWNED by the WORK-064 journey authority. There
+ * is NO per-action `targetPolicy` field, NO plan-level allowlist, and NO
+ * executor input field. The executor cannot assert safety and cannot
+ * create, replace, or expand the declaration; the journey declares it.
  *
  * Classification:
  *   - `forbidden` — non-http(s) scheme or embedded userinfo (categorically
  *     rejected under every policy);
- *   - `read_only_safe` — http(s), no userinfo, AND in the allowlist;
- *   - `unverified` — http(s), no userinfo, NOT in the allowlist (no
- *     authoritative proof of safety; rejected under READ_ONLY, admitted under
- *     SAFE_MUTATION/ISOLATED_MUTATION).
+ *   - `read_only_safe` — http(s), no userinfo, AND in the journey's allowlist;
+ *   - `unverified` — http(s), no userinfo, NOT in the journey's allowlist
+ *     (no authoritative proof of safety; rejected under READ_ONLY, admitted
+ *     under SAFE_MUTATION/ISOLATED_MUTATION).
  *
  * This suite proves every discrimination the architect required, including
- * the attack shape `GET /delete/123` under READ_ONLY → REJECTION.
+ * the attack shape `GET /delete/123` under READ_ONLY → REJECTION. The
+ * forged-declaration runtime rejection (the round-4 required regression) is
+ * proven at the agent level in agent-execution.test.ts §15.
  */
 import {
   defineValidationJourney,
   describeEnvironment,
   bindTestIdentity,
+  validateSafeNavigationTargetEntry,
   type ValidationJourney,
+  type ValidationJourneyInput,
   type Environment,
   type TestIdentitySource,
 } from '../../src/continuous-validation/index.js';
 import type { AuthenticatedPrincipal } from '@modules/auth/index.js';
 import {
   classifyNavigationTarget,
-  validateAllowlistEntry,
   classifyActionEffect,
   enforceEffectPolicy,
   defineBrowserJourneyPlan,
-  defineJourneyNavigationSafety,
   type BrowserAction,
 } from '../../src/browser-validation/index.js';
 
@@ -95,37 +104,77 @@ const isolatedEnv: Environment = describeEnvironment({
 });
 
 // ---------------------------------------------------------------------------
-// §1  Allowlist entry validation (the trusted declaration must be syntactically safe)
+// §1  Journey declaration entry validation (WORK-064's boundary — the trusted
+//     declaration must be syntactically safe AT DECLARATION TIME)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §1 — allowlist entry validation', () => {
-  it('a valid http(s) URL with no userinfo is a valid allowlist entry', () => {
-    expect(validateAllowlistEntry('https://example.com/sign-in')).toBeNull();
-    expect(validateAllowlistEntry('http://127.0.0.1:5173/sign-in')).toBeNull();
+describe('WORK-065 navigation-target §1 — the journey declaration entry validation (the WORK-064 boundary guard)', () => {
+  it('a valid http(s) URL with no userinfo is a valid declaration entry', () => {
+    expect(validateSafeNavigationTargetEntry('https://example.com/sign-in')).toBeNull();
+    expect(validateSafeNavigationTargetEntry('http://127.0.0.1:5173/sign-in')).toBeNull();
   });
 
-  it('an http(s) URL WITH a query string is a valid allowlist entry (the journey authority may declare it safe)', () => {
-    // The allowlist is the authority — a query string is NOT proof of
-    // mutation (the architect's ruling: "a query string is one possible
-    // signal, not a proof of mutation"). The journey may authoritatively
+  it('an http(s) URL WITH a query string is a valid declaration entry (the journey authority may declare it safe)', () => {
+    // The journey's declaration is the authority — a query string is NOT
+    // proof of mutation (the architect's ruling: "a query string is one
+    // possible signal, not a proof of mutation"). The journey authority may
     // declare a query-string URL read-only-safe (e.g. a confirmation page
     // whose query is a display parameter, not a mutation).
-    expect(validateAllowlistEntry('https://example.com/confirm?token=abc')).toBeNull();
+    expect(validateSafeNavigationTargetEntry('https://example.com/confirm?token=abc')).toBeNull();
   });
 
-  it('a non-http(s) scheme is rejected as an allowlist entry', () => {
-    expect(validateAllowlistEntry('file:///etc/passwd')).toMatch(/not http\(s\)/);
-    expect(validateAllowlistEntry('data:text/html,<h1>hi</h1>')).toMatch(/not http\(s\)/);
-    expect(validateAllowlistEntry('javascript:void(0)')).toMatch(/not http\(s\)/);
+  it('a non-http(s) scheme is rejected as a declaration entry', () => {
+    expect(validateSafeNavigationTargetEntry('file:///etc/passwd')).toMatch(/not http\(s\)/);
+    expect(validateSafeNavigationTargetEntry('data:text/html,<h1>hi</h1>')).toMatch(/not http\(s\)/);
+    expect(validateSafeNavigationTargetEntry('javascript:void(0)')).toMatch(/not http\(s\)/);
   });
 
-  it('embedded userinfo is rejected as an allowlist entry', () => {
-    expect(validateAllowlistEntry('https://user:pass@example.com/sign-in')).toMatch(/userinfo/);
+  it('embedded userinfo is rejected as a declaration entry', () => {
+    expect(validateSafeNavigationTargetEntry('https://user:pass@example.com/sign-in')).toMatch(/userinfo/);
   });
 
-  it('an unparseable / empty URL is rejected as an allowlist entry', () => {
-    expect(validateAllowlistEntry('')).not.toBeNull();
-    expect(validateAllowlistEntry('not-a-url')).not.toBeNull();
+  it('an unparseable / empty URL is rejected as a declaration entry', () => {
+    expect(validateSafeNavigationTargetEntry('')).not.toBeNull();
+    expect(validateSafeNavigationTargetEntry('not-a-url')).not.toBeNull();
+  });
+
+  it('the declaration boundary itself (defineValidationJourney) rejects an unsafe entry — the trusted declaration cannot even be DECLARED', () => {
+    // The allowlist is not merely checked at enforcement time: a journey
+    // whose declaration carries a non-http(s) scheme or embedded userinfo
+    // is rejected AT THE DECLARATION BOUNDARY (WORK-064's
+    // defineValidationJourney — VALIDATION_JOURNEY_INVALID).
+    const validJourneyInput: ValidationJourneyInput = {
+      id: 'journey-entry-guard',
+      name: 'A journey',
+      identityRequirement: 'unauthenticated' as const,
+      allowedModes: ['PRE_MERGE'] as const,
+      effectPolicy: 'READ_ONLY' as const,
+      steps: [
+        {
+          id: 's',
+          name: 's',
+          expectedObservations: [
+            { id: 'o', stepId: 's', kind: 'network', description: 'o', matcher: { kind: 'status_code', status: 200 } },
+          ],
+        },
+      ],
+      successCriteria: [{ id: 'c', description: 'c', requiresObservationIds: ['o'] }],
+    };
+    expect(() =>
+      defineValidationJourney({ ...validJourneyInput, readonlySafeNavigationTargets: ['file:///etc/passwd'] }),
+    ).toThrow(/not http\(s\)/);
+    expect(() =>
+      defineValidationJourney({ ...validJourneyInput, readonlySafeNavigationTargets: ['https://user:pass@example.com/x'] }),
+    ).toThrow(/userinfo/);
+    expect(() =>
+      defineValidationJourney({ ...validJourneyInput, readonlySafeNavigationTargets: ['not-a-url'] }),
+    ).toThrow(/not a parseable URL/);
+    // And a VALID declaration is accepted + echoed on the journey:
+    const declared = defineValidationJourney({
+      ...validJourneyInput,
+      readonlySafeNavigationTargets: ['https://example.com/sign-in'],
+    });
+    expect(declared.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
   });
 });
 
@@ -338,16 +387,19 @@ describe('WORK-065 navigation-target §4 — SAFE/ISOLATED mutation semantics un
 });
 
 // ---------------------------------------------------------------------------
-// §5  Plan construction: the allowlist is validated + carried on the plan
+// §5  The journey declaration: the allowlist is declared + validated ON THE
+//     JOURNEY under WORK-064's authority (PR #97 fourth review)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 navigation-target §5 — plan construction carries + validates the allowlist', () => {
+describe('WORK-065 navigation-target §5 — the journey declaration carries + validates the allowlist (WORK-064 owns it)', () => {
   const journey: ValidationJourney = defineValidationJourney({
     id: 'journey-nav-allowlist',
     name: 'A journey',
     identityRequirement: 'unauthenticated',
     allowedModes: ['PRE_MERGE'],
     effectPolicy: 'READ_ONLY',
+    // THE AUTHORITATIVE DECLARATION — part of the journey itself:
+    readonlySafeNavigationTargets: ['https://example.com/sign-in'],
     steps: [
       {
         id: 'step-open',
@@ -360,7 +412,36 @@ describe('WORK-065 navigation-target §5 — plan construction carries + validat
     successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
   });
 
-  it('the plan carries NO readonlySafeNavigationTargets (the allowlist is journey-bound, not plan-bound — PR #97 third review)', () => {
+  it('the journey carries the declaration as a frozen canonical field (declared under WORK-064\'s authority)', () => {
+    expect(journey.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
+    // The declaration is FROZEN on the immutable journey record (mutation throws):
+    expect(() => {
+      (journey as unknown as { readonlySafeNavigationTargets: string[] }).readonlySafeNavigationTargets = ['https://example.com/delete/123'];
+    }).toThrow();
+  });
+
+  it('a journey declared WITHOUT the field defaults to the EMPTY declaration (the safe default — no navigation is proven read-only-safe)', () => {
+    const undeclared = defineValidationJourney({
+      id: 'journey-nav-undeclared',
+      name: 'A journey',
+      identityRequirement: 'unauthenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'READ_ONLY',
+      steps: [
+        {
+          id: 'step-open',
+          name: 'open',
+          expectedObservations: [
+            { id: 'obs-status', stepId: 'step-open', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+          ],
+        },
+      ],
+      successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+    });
+    expect(undeclared.readonlySafeNavigationTargets).toEqual([]);
+  });
+
+  it('the plan carries NO readonlySafeNavigationTargets (the allowlist is journey-owned, not plan-bound — PR #97 third + fourth reviews)', () => {
     const plan = defineBrowserJourneyPlan(
       {
         journeyId: journey.id,
@@ -402,25 +483,17 @@ describe('WORK-065 navigation-target §5 — plan construction carries + validat
     expect(Object.keys(plan).sort()).toEqual(['journeyId', 'steps']);
   });
 
-  it('defineJourneyNavigationSafety validates the journey binding (journeyId === journey.id)', () => {
-    // The authoritative declaration is BOUND to the journey. A declaration
-    // for a different journey is rejected.
-    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
-    expect(navSafety.journeyId).toBe(journey.id);
-    expect(navSafety.readonlySafeNavigationTargets).toEqual(['https://example.com/sign-in']);
-  });
-
-  it('defineJourneyNavigationSafety rejects an invalid allowlist entry (non-http(s))', () => {
-    expect(() => defineJourneyNavigationSafety(journey, ['file:///etc/passwd'])).toThrow(/not http\(s\)/);
-  });
-
-  it('defineJourneyNavigationSafety rejects an allowlist entry with embedded userinfo', () => {
-    expect(() => defineJourneyNavigationSafety(journey, ['https://user:pass@example.com/sign-in'])).toThrow(/userinfo/);
-  });
-
-  it('defineJourneyNavigationSafety defaults to an empty allowlist (the safe default — no navigation is proven read-only-safe)', () => {
-    const navSafety = defineJourneyNavigationSafety(journey, []);
-    expect(navSafety.readonlySafeNavigationTargets).toEqual([]);
+  it('there is NO constructor in the browser-validation domain that can mint a declaration (the third correction\'s forgeable channel is REMOVED)', async () => {
+    // PR #97 fourth architect review correction: defineJourneyNavigationSafety
+    // (which bound an ARBITRARY caller-supplied target list to a real journey
+    // id — identity correlation, not provenance) is REMOVED from the
+    // browser-validation surface. There is nothing to import, nothing to
+    // call, no type to satisfy, and no input field to carry it (see §6 and
+    // agent-execution.test.ts §15).
+    const barrel = (await import('../../src/browser-validation/index.js')) as Record<string, unknown>;
+    expect(barrel.defineJourneyNavigationSafety).toBeUndefined();
+    expect(barrel.JourneyNavigationSafetyDeclaration).toBeUndefined();
+    expect(barrel.validateAllowlistEntry).toBeUndefined();
   });
 });
 
@@ -435,6 +508,9 @@ describe('WORK-065 navigation-target §6 — the authority-confusion proof (the 
     identityRequirement: 'unauthenticated',
     allowedModes: ['PRE_MERGE'],
     effectPolicy: 'READ_ONLY',
+    // THE AUTHORITATIVE DECLARATION — journey-owned (the §6 tests exercise it
+    // directly as the enforcement gate's only allowlist source):
+    readonlySafeNavigationTargets: ['https://example.com/sign-in'],
     steps: [
       {
         id: 'step-open',
@@ -477,51 +553,60 @@ describe('WORK-065 navigation-target §6 — the authority-confusion proof (the 
   });
 
   it('the positive case: journey declares ["/sign-in"] safe; plan navigates to "/sign-in" → the journey authority declares it, the plan consumes it', () => {
-    // The journey authority (via defineJourneyNavigationSafety) declares
-    // /sign-in read-only-safe. The plan navigates to /sign-in. Under
+    // The journey authority declared /sign-in read-only-safe ON THE JOURNEY
+    // (journey.readonlySafeNavigationTargets — the canonical field, declared
+    // at defineValidationJourney). The plan navigates to /sign-in. Under
     // READ_ONLY, the enforcement gate admits it (URL in the journey's
-    // allowlist). The executor chose WHICH declared-safe target to navigate
-    // to, but did NOT expand the trusted set.
-    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
+    // declaration). The executor chose WHICH declared-safe target to
+    // navigate to, but did NOT create, replace, or expand the declaration.
     const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in' };
     const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, navSafety.readonlySafeNavigationTargets);
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, journey.readonlySafeNavigationTargets);
     expect(d.admitted).toBe(true);
   });
 
   it('the attack: journey declares ["/sign-in"] safe; the plan navigates to "/delete/123" (NOT declared safe) → REJECTED under READ_ONLY', () => {
-    // The journey authority declared ONLY /sign-in safe. The executor's plan
-    // navigates to /delete/123 (not declared safe). Under READ_ONLY, the
-    // enforcement gate rejects it (unverified — not in the journey's
-    // allowlist). The executor CANNOT manufacture /delete/123 as safe.
-    const navSafety = defineJourneyNavigationSafety(journey, ['https://example.com/sign-in']);
+    // The journey authority declared ONLY /sign-in safe (the canonical
+    // field). The executor's plan navigates to /delete/123 (not declared
+    // safe). Under READ_ONLY, the enforcement gate rejects it (unverified —
+    // not in the journey's declaration). The executor CANNOT manufacture
+    // /delete/123 as safe — there is no channel.
     const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/delete/123' };
     const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
-    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, navSafety.readonlySafeNavigationTargets);
+    const d = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, journey.readonlySafeNavigationTargets);
     expect(d.admitted).toBe(false);
     expect(d.executionError!.reason).toMatch(/not proven read-only-safe|unverified/);
   });
 
-  it('a journeyNavigationSafety declaration bound to a DIFFERENT journey is rejected by the agent (the declaration must originate from THIS journey)', () => {
-    // The agent validates journeyNavigationSafety.journeyId === journey.id.
-    // A declaration bound to a different journey is rejected — the
-    // declaration's provenance is the journey authority, not the executor.
-    // (This is proven at the agent level in agent-execution.test.ts §15.)
+  it('a DIFFERENT journey\'s declaration does not authorize THIS journey\'s navigation (journey-authority-confusion — the declarations are per-journey canonical state)', () => {
+    // Each journey carries its OWN canonical declaration. A declaration
+    // belonging to another journey is not consulted at all for this
+    // journey's enforcement (the gate reads THIS journey's field — there is
+    // no cross-journey declaration object to confuse). The forged-object
+    // runtime rejection is proven at the agent level (§15 of
+    // agent-execution.test.ts).
     const otherJourney: ValidationJourney = defineValidationJourney({
       id: 'journey-other',
       name: 'Another journey',
       identityRequirement: 'unauthenticated',
       allowedModes: ['PRE_MERGE'],
       effectPolicy: 'READ_ONLY',
+      // The OTHER journey declares a different safe target:
+      readonlySafeNavigationTargets: ['https://example.com/other'],
       steps: [
         { id: 's', name: 's', expectedObservations: [{ id: 'o', stepId: 's', kind: 'dom', description: 'o', matcher: { kind: 'exists' } }] },
       ],
       successCriteria: [{ id: 'c', description: 'c', requiresObservationIds: ['o'] }],
     });
-    // A declaration bound to `otherJourney` is valid for otherJourney:
-    const navSafetyForOther = defineJourneyNavigationSafety(otherJourney, ['https://example.com/other']);
-    expect(navSafetyForOther.journeyId).toBe('journey-other');
-    // But it does NOT match `journey` (journey-authority-confusion):
-    expect(navSafetyForOther.journeyId).not.toBe(journey.id);
+    // The other journey's declaration is its own canonical state:
+    expect(otherJourney.readonlySafeNavigationTargets).toEqual(['https://example.com/other']);
+    // It does NOT authorize THIS journey's /sign-in navigation (this
+    // journey\'s declaration is the only input the gate consumes):
+    const nav: BrowserAction = { kind: 'navigate', url: 'https://example.com/sign-in' };
+    const readIdentity = bindTestIdentity(unauthenticated, previewEnv, 'READ_ONLY');
+    const dWithOther = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, otherJourney.readonlySafeNavigationTargets);
+    expect(dWithOther.admitted).toBe(false); // /sign-in not in OTHER journey's declaration
+    const dWithOwn = enforceEffectPolicy(nav, 'READ_ONLY', readIdentity, previewEnv, journey.readonlySafeNavigationTargets);
+    expect(dWithOwn.admitted).toBe(true); // /sign-in IS in THIS journey's declaration
   });
 });

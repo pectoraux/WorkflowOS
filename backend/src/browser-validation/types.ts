@@ -55,7 +55,6 @@ import type {
   ValidationTrigger,
   ValidationEvidenceReference,
 } from '../continuous-validation/index.js';
-import { validateAllowlistEntry } from './internal/navigation-target.js';
 
 // ============================================================================
 // §1  The browser action vocabulary (the execution contract)
@@ -76,12 +75,13 @@ export type BrowserAction =
   | {
       readonly kind: 'navigate';
       /** An absolute http(s) URL. The agent verifies this URL against the
-       *  plan's authoritative {@link BrowserJourneyPlan.readonlySafeNavigationTargets}
+       *  JOURNEY's authoritative {@link ValidationJourney.readonlySafeNavigationTargets}
        *  allowlist BEFORE the browser is called — a navigate is admitted under
-       *  READ_ONLY ONLY when the URL is in the allowlist (the journey's trusted
-       *  declaration of read-only-safe targets). A navigate carries NO
-       *  per-action safety assertion — the executor cannot turn an assertion
-       *  into authoritative safety. */
+       *  READ_ONLY ONLY when the URL is in the journey's canonical declaration
+       *  (the read-only-safe targets the WORK-064 journey authority declared).
+       *  A navigate carries NO per-action safety assertion, and the execution
+       *  input carries NO declaration — the executor cannot turn an assertion
+       *  or a caller-supplied object into authoritative safety. */
       readonly url: string;
       /** The expected observation this navigation satisfies (a network status_code expectation). */
       readonly satisfiesObservationId?: string;
@@ -144,14 +144,16 @@ export interface BrowserPlanStep {
  * rejected). A plan that satisfies NO expected observation is rejected (the
  * agent observes nothing the journey declared — health would be vacuous).
  *
- * THE PLAN CARRIES NO NAVIGATION-SAFETY ALLOWLIST (PR #97 third architect
- * review correction): the authoritative {@link readonlySafeNavigationTargets}
- * declaration lives on the JOURNEY-BOUND {@link JourneyNavigationSafetyDeclaration},
- * NOT on the executor-constructed plan. The executor constructs the plan
- * (choosing which navigate actions to perform) but CANNOT expand the trusted
- * safe-target set — that set is the journey authority's declaration. The
- * enforcement gate checks each navigate URL against the journey's declaration
- * at execution time.
+ * THE PLAN CARRIES NO NAVIGATION-SAFETY ALLOWLIST (PR #97 third + fourth
+ * architect review corrections): the authoritative
+ * `readonlySafeNavigationTargets` declaration is PART OF THE JOURNEY ITSELF
+ * ({@link ValidationJourney.readonlySafeNavigationTargets} — declared and
+ * validated under WORK-064's authority at `defineValidationJourney`). The
+ * executor constructs the plan (choosing which navigate actions to perform)
+ * but CANNOT create, replace, or expand the trusted safe-target set — there
+ * is no plan field and no execution-input field for it. The enforcement gate
+ * checks each navigate URL against the JOURNEY's canonical declaration at
+ * execution time.
  */
 export interface BrowserJourneyPlan {
   readonly journeyId: string;
@@ -159,46 +161,61 @@ export interface BrowserJourneyPlan {
 }
 
 // ============================================================================
-// §2b  The journey-bound navigation-safety declaration (the AUTHORITATIVE provenance)
+// §2b  The navigation-safety declaration is JOURNEY-OWNED (no executor channel)
 // ============================================================================
 
 /**
- * The AUTHORITATIVE declaration of which navigation targets are read-only-safe,
- * BOUND to a {@link ValidationJourney}. This is the journey authority's trusted
- * declaration — NOT an executor-supplied assertion, NOT a plan field.
+ * THE AUTHORITATIVE NAVIGATION-SAFETY PROVENANCE (PR #97 fourth architect
+ * review correction): the declaration of which navigation targets are
+ * read-only-safe is OWNED BY THE WORK-064 JOURNEY AUTHORITY — it is a field
+ * ON the canonical {@link ValidationJourney} itself
+ * (`readonlySafeNavigationTargets`), declared and validated at
+ * `defineValidationJourney` (the journey declaration boundary), frozen on
+ * the immutable journey record, and carried into execution INSIDE the
+ * journey object the admission boundary already consumes.
  *
- * PR #97 third architect review correction: the second correction placed the
- * allowlist on {@link BrowserJourneyPlan} (executor-constructed) — the executor
- * could still manufacture safe targets. This type moves the allowlist to a
- * JOURNEY-BOUND declaration: {@link defineJourneyNavigationSafety} validates
- * the binding (`journeyId === journey.id`) + the entry syntax. The executor
- * constructs the PLAN (which navigate actions to perform) but CANNOT expand
- * the trusted safe-target set — that set is the journey authority's
- * declaration, carried on {@link ExecuteValidationRunInput.journeyNavigationSafety}
- * alongside the journey.
+ * The correction history (each round eliminated one forgeable channel):
+ *
+ *   - second correction: the allowlist lived on the executor-constructed
+ *     `BrowserJourneyPlan` — the executor could manufacture safe targets;
+ *   - third correction: the allowlist moved to a separate
+ *     `JourneyNavigationSafetyDeclaration` bound by `journeyId` — but that
+ *     object was still CONSTRUCTED BY THE CALLER (`defineJourneyNavigationSafety`
+ *     accepted an arbitrary target list and merely bound it to the journey's
+ *     id): the `journeyId` check proved identity correlation, NOT the
+ *     provenance of the declaration. A caller could hand the agent a real
+ *     journey plus a forged declaration and the agent would treat the forged
+ *     targets as authoritative;
+ *   - fourth correction (THIS): there is NO separate declaration object and
+ *     NO executor input channel at all. The declaration travels only inside
+ *     the journey — the same provenance channel as `effectPolicy` and the
+ *     steps. The executor may CHOOSE a navigate target (the plan) but cannot
+ *     CREATE or REPLACE the declaration that authorizes it.
  *
  * The critical invariant:
  *
  *   > A READ_ONLY navigation is safe only when the target is declared
- *   > read-only-safe by the authoritative journey, and the execution plan is
- *   > proven consistent with that declaration.
+ *   > read-only-safe by the authoritative journey — and the proof must
+ *   > originate from the journey's canonical state, never from a second
+ *   > caller-provided object.
+ *
+ * Runtime consequence: {@link ExecuteValidationRunInput} has NO
+ * `journeyNavigationSafety` field. If a runtime caller smuggles such a
+ * property onto the input anyway (shape-smuggling past the type system), the
+ * agent REJECTS the input BEFORE admission and browser execution — a
+ * caller-supplied navigation-safety object is a provenance violation
+ * regardless of its content, because the only legitimate provenance is the
+ * journey itself.
  */
-export interface JourneyNavigationSafetyDeclaration {
-  /** The journey this declaration is bound to (MUST equal journey.id). */
-  readonly journeyId: string;
-  /**
-   * The authoritative TRUSTED allowlist of read-only-safe navigation targets.
-   * A `navigate` action's URL must be in this allowlist (exact string match)
-   * to be admitted under READ_ONLY. Each entry is a parseable http(s) URL
-   * with no embedded userinfo (validated at construction). May be empty (the
-   * safe default — no navigation is proven read-only-safe).
-   */
-  readonly readonlySafeNavigationTargets: readonly string[];
-}
 
 /** The input to {@link BrowserValidationAgent.executeValidationRun}. */
 export interface ExecuteValidationRunInput {
-  /** The ValidationJourney declared under WORK-064's authority. */
+  /**
+   * The ValidationJourney declared under WORK-064's authority — INCLUDING its
+   * authoritative `readonlySafeNavigationTargets` declaration (the journey is
+   * the ONLY provenance for navigation safety; there is no separate
+   * declaration input).
+   */
   readonly journey: ValidationJourney;
   /**
    * The synthetic (or unauthenticated) identity source. PRESENTED to the
@@ -215,16 +232,6 @@ export interface ExecuteValidationRunInput {
   readonly continuousConfigured?: boolean;
   /** The execution plan (browser actions per step — carries NO allowlist). */
   readonly plan: BrowserJourneyPlan;
-  /**
-   * The AUTHORITATIVE journey-bound navigation-safety declaration (PR #97
-   * third architect review correction). This is the journey authority's
-   * trusted declaration of read-only-safe navigation targets — NOT a plan
-   * field, NOT an executor assertion. The agent validates
-   * `journeyNavigationSafety.journeyId === journey.id` and uses its
-   * `readonlySafeNavigationTargets` to enforce READ_ONLY navigation safety.
-   * The executor constructs the plan but CANNOT expand this set.
-   */
-  readonly journeyNavigationSafety: JourneyNavigationSafetyDeclaration;
   /** The EXISTING /verification run id (the agent never creates verification runs). */
   readonly verificationRunId: string;
   /** The project whose verification run this evidence attaches to. */
@@ -292,47 +299,26 @@ export class BrowserValidationError extends Error {
 }
 
 // ============================================================================
-// §4b  The journey-bound declaration constructor (the authoritative provenance)
+// §4b  The navigation-safety declaration has NO constructor here
 // ============================================================================
-
-/**
- * Construct the AUTHORITATIVE journey-bound navigation-safety declaration.
- * Validates:
- *   - `journeyId` MUST equal `journey.id` (the declaration is bound to THIS
- *     journey — a declaration for a different journey is rejected);
- *   - every entry in `readonlySafeNavigationTargets` MUST be a parseable
- *     http(s) URL with no embedded userinfo (the trusted declaration must be
- *     syntactically safe).
- *
- * This is the JOURNEY AUTHORITY's declaration, NOT an executor assertion.
- * The executor constructs the PLAN (which navigate actions to perform) but
- * CANNOT expand this set — the set is bound to the journey and carried on
- * {@link ExecuteValidationRunInput.journeyNavigationSafety}.
- */
-export function defineJourneyNavigationSafety(
-  journey: ValidationJourney,
-  readonlySafeNavigationTargets: readonly string[],
-): JourneyNavigationSafetyDeclaration {
-  if (!journey || typeof journey.id !== 'string' || journey.id.trim() === '') {
-    throw new BrowserValidationError('BROWSER_PLAN_INVALID', 'a journey navigation safety declaration requires a journey with a non-empty id');
-  }
-  if (!Array.isArray(readonlySafeNavigationTargets)) {
-    throw new BrowserValidationError('BROWSER_PLAN_INVALID', `journey ${journey.id}: readonlySafeNavigationTargets must be an array`);
-  }
-  // Validate each entry: parseable http(s) URL with no userinfo. The trusted
-  // declaration must be syntactically safe (defense in depth — the gate is
-  // primary, but the declaration itself must not carry a forbidden URL).
-  for (const entry of readonlySafeNavigationTargets) {
-    const violation = validateAllowlistEntry(entry);
-    if (violation !== null) {
-      throw new BrowserValidationError('BROWSER_PLAN_INVALID', `journey ${journey.id}: ${violation}`);
-    }
-  }
-  return Object.freeze({
-    journeyId: journey.id,
-    readonlySafeNavigationTargets: Object.freeze([...readonlySafeNavigationTargets]),
-  });
-}
+//
+// PR #97 fourth architect review correction: the third correction's
+// `defineJourneyNavigationSafety(journey, targets)` constructor is REMOVED.
+// It accepted an arbitrary caller-supplied target list and merely bound it to
+// `journey.id` — the `journeyId` check proved identity correlation, NOT the
+// provenance of the declaration (a caller could hand the agent a real journey
+// plus a forged declaration, and the agent would treat the forged targets as
+// authoritative READ_ONLY-safe).
+//
+// The declaration is now OWNED BY THE WORK-064 JOURNEY AUTHORITY: it is the
+// `ValidationJourney.readonlySafeNavigationTargets` field, declared and
+// validated at `defineValidationJourney` (continuous-validation — the journey
+// declaration boundary). There is NO constructor in this domain, NO separate
+// declaration object, and NO execution-input field: the executor cannot
+// create, replace, or expand the declaration. The enforcement gate reads the
+// journey's canonical field; a runtime caller who shape-smuggles a
+// `journeyNavigationSafety` property onto the execution input is REJECTED
+// before admission and browser execution (see DefaultBrowserValidationAgent).
 
 // ============================================================================
 // §5  The agent contract (the execution mechanism, not an authority)

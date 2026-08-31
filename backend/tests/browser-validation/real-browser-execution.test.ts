@@ -33,7 +33,6 @@ import {
 import {
   DefaultBrowserValidationAgent,
   defineBrowserJourneyPlan,
-  defineJourneyNavigationSafety,
   PlaywrightBrowserDriver,
 } from '../../src/browser-validation/index.js';
 import { createLogger } from '@platform/logger.js';
@@ -65,12 +64,23 @@ const SERVED_HTML = `<!doctype html>
 // The journey + plan (navigate to the served page + extract the heading)
 // ---------------------------------------------------------------------------
 
-const journey: ValidationJourney = defineValidationJourney({
+// The journey is declared in beforeAll: its AUTHORITATIVE navigation-safety
+// declaration (readonlySafeNavigationTargets — part of the journey itself,
+// PR #97 fourth architect review correction) includes the ephemeral server
+// URL, which is only known once the test server has bound its port. There is
+// NO executor input channel for the declaration.
+let journey: ValidationJourney | null = null;
+
+const makeJourney = (safeTarget: string): ValidationJourney =>
+  defineValidationJourney({
   id: 'journey-real-browser-sign-in',
   name: 'The sign-in page renders (real browser)',
   identityRequirement: 'unauthenticated',
   allowedModes: ['PRE_MERGE'],
   effectPolicy: 'READ_ONLY',
+  // THE AUTHORITATIVE DECLARATION — journey-owned, declared under WORK-064's
+  // authority at defineValidationJourney (validated: http(s), no userinfo):
+  readonlySafeNavigationTargets: [safeTarget],
   steps: [
     {
       id: 'step-open',
@@ -83,7 +93,7 @@ const journey: ValidationJourney = defineValidationJourney({
     },
   ],
   successCriteria: [{ id: 'crit-page', description: 'the sign-in page renders', requiresObservationIds: ['obs-heading', 'obs-status'] }],
-});
+  });
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -135,6 +145,11 @@ beforeAll(async () => {
     baseUrl = `http://127.0.0.1:${addr.port}`;
   }
 
+  // 1b. Declare the journey NOW (its navigation-safety declaration needs the
+  //     ephemeral baseUrl). The declaration is journey-owned — the execution
+  //     inputs below carry NO navigation-safety object.
+  journey = makeJourney(`${baseUrl}/sign-in`);
+
   // 2. Launch a real Chromium browser. If the binary is unavailable at runtime
   //    (a race with the synchronous check above), skip the suite. The agent's
   //    fail-closed semantics are proven by the unit tests regardless.
@@ -176,7 +191,7 @@ describe('WORK-065 real-browser integration — the execution path against a rea
     // Rewrite the navigate URL to the ephemeral server port.
     const realPlan = defineBrowserJourneyPlan(
       {
-        journeyId: journey.id,
+        journeyId: journey!.id,
         steps: [
           {
             stepId: 'step-open',
@@ -188,17 +203,16 @@ describe('WORK-065 real-browser integration — the execution path against a rea
           },
         ],
       },
-      journey,
+      journey!,
     );
 
     const outcome = await agent!.executeValidationRun({
-      journey,
+      journey: journey!, // carries the authoritative declaration (journey-owned)
       identitySource: unauthenticated,
       environment: env,
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: realPlan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(journey, [`${baseUrl}/sign-in`]),
       verificationRunId: 'ver-real-1',
       projectId: 'proj-real-1',
       runId: 'run-real-browser-1',
@@ -237,7 +251,7 @@ describe('WORK-065 real-browser integration — the execution path against a rea
   it.skipIf(skipped)('a selector miss against a REAL browser → validation_failure (actual: null, never healthy)', async () => {
     const missingPlan = defineBrowserJourneyPlan(
       {
-        journeyId: journey.id,
+        journeyId: journey!.id,
         steps: [
           {
             stepId: 'step-open',
@@ -248,17 +262,16 @@ describe('WORK-065 real-browser integration — the execution path against a rea
           },
         ],
       },
-      journey,
+      journey!,
     );
 
     const outcome = await agent!.executeValidationRun({
-      journey,
+      journey: journey!, // carries the authoritative declaration (journey-owned)
       identitySource: unauthenticated,
       environment: env,
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: missingPlan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(journey, [`${baseUrl}/sign-in`]),
       verificationRunId: 'ver-real-2',
       projectId: 'proj-real-2',
       runId: 'run-real-browser-miss',

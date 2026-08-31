@@ -292,6 +292,118 @@ to navigate to, but it must NOT get to expand the trusted set. The trusted set
 originates from the journey authority (the journey-bound declaration), not
 from the executor-constructed plan.
 
+## 4d. Navigation-safety provenance (PR #97 fourth architect review — the declaration is JOURNEY-OWNED; the input channel is CLOSED)
+
+The architect's **fourth REQUEST CHANGES** correctly identified that the third
+correction still had a forgeable channel: `defineJourneyNavigationSafety(
+journey, readonlySafeNavigationTargets)` accepted an ARBITRARY target list and
+merely bound it to `journey.id`. The agent's `journeyNavigationSafety.
+journeyId === journey.id` check proved **identity correlation**, NOT the
+**provenance of the declaration** — a caller could hand the agent a REAL
+journey plus a FORGED declaration and the agent would treat the forged targets
+as authoritative READ_ONLY-safe:
+
+```
+real journey J
+        ↓
+caller constructs JourneyNavigationSafetyDeclaration(J, ["/delete/123"])
+        ↓
+agent sees journeyId === J
+        ↓
+"/delete/123" is treated as authoritative READ_ONLY-safe        ← THE HOLE
+```
+
+THE INVARIANT (the architect's ruling, fourth round):
+
+> A READ_ONLY navigation is safe only when the target is declared
+> read-only-safe by the authoritative journey — and the proof must originate
+> from the journey's canonical state, not from a second caller-provided object.
+>
+> The executor should be allowed to CHOOSE a target from the
+> already-authorized declaration, but it should not be able to CREATE or
+> REPLACE that declaration.
+
+THE JOURNEY-OWNED MODEL (the final architecture):
+
+- **WORK-064 owns the declaration.** `ValidationJourney` itself carries
+  `readonlySafeNavigationTargets: readonly string[]` — declared, validated,
+  and frozen at `defineValidationJourney` (the journey declaration boundary,
+  the SAME provenance channel as `effectPolicy` and the steps). Each entry is
+  validated at declaration time by `validateSafeNavigationTargetEntry`
+  (non-empty string, parseable http(s) URL, no embedded userinfo — exported
+  from the continuous-validation barrel). Absent → `[]` (the safe default).
+- **The browser-validation domain has NO declaration surface at all.**
+  `JourneyNavigationSafetyDeclaration` (type), `defineJourneyNavigationSafety`
+  (constructor), and `validateAllowlistEntry` (entry validator) are REMOVED —
+  there is nothing a caller can import to mint a declaration.
+- **`ExecuteValidationRunInput` has NO `journeyNavigationSafety` field.** The
+  declaration travels ONLY inside the journey object. The plan carries no
+  allowlist (unchanged from the third correction).
+- **The agent reads the allowlist from the journey's canonical state** —
+  `journey.readonlySafeNavigationTargets` (fail-closed to `[]` if a
+  runtime-crafted journey object carries a non-array).
+- **The closed input channel is enforced at runtime.** A caller who
+  shape-smuggles a `journeyNavigationSafety` property onto the input (past
+  the type system) is REJECTED in the agent's §0 gate BEFORE the admission
+  boundary and any browser execution: `admitted: false`, NO run created
+  (proven via the run repository — the admission service is never reached),
+  the driver never called, no evidence attached. The rejection applies
+  REGARDLESS of content — a forged mismatched declaration AND a "matching"
+  one are both rejected, because the only legitimate provenance is the
+  journey itself.
+
+THE ARCHITECT'S REQUIRED REGRESSIONS (both proven in agent-execution.test.ts §15):
+
+```
+journey J authoritative safe targets = ["/sign-in"]
+caller supplies: JourneyNavigationSafetyDeclaration(J, ["/delete/123"])
+        ↓
+REJECTED BEFORE browser execution (and before admission — no run is persisted)
+```
+
+And the positive case:
+
+```
+journey J authoritative safe targets = ["/sign-in"]
+caller requests /sign-in (via the plan — no declaration object anywhere)
+        ↓
+ADMITTED under READ_ONLY (the journey's canonical declaration authorized it)
+```
+
+The discriminating matrix in §15 (5 runtime tests + the barrel-absence proof):
+
+1. the architect's literal attack (forged mismatched declaration) → rejected
+   before admission, run never persisted, driver never called;
+2. a forged declaration that EXACTLY MATCHES the canonical one → ALSO
+   rejected (the channel itself is illegitimate — accepting a matching object
+   would leave the forgeable channel open);
+3. a non-object smuggled value (null) → also rejected (the gate checks the
+   CHANNEL, not the content);
+4. the positive control (canonical `/sign-in`, no declaration object) →
+   admitted, driver called, healthy;
+5. the canonical-state enforcement (no smuggle; `/delete/123` against a
+   `/sign-in`-only journey) → the run is admitted but the navigation is
+   rejected at the gate, driver never called — the proof originates from the
+   journey's canonical state;
+6. the barrel exports NO `defineJourneyNavigationSafety` /
+   `JourneyNavigationSafetyDeclaration` / `validateAllowlistEntry` — nothing
+   to import, nothing to mint.
+
+Plus the type-level proofs: `@ts-expect-error` on the smuggled
+`journeyNavigationSafety` input property (fails the typecheck if the field
+ever returns) and the plan-input proof from the third correction (unchanged).
+The static-architecture invariant (o) re-pins the whole model: the
+ValidationJourney interface field, the declaration-boundary validation in
+WORK-064's types, the absence of the declaration surface in browser-validation,
+the closed input interface, the agent's §0 runtime gate, and the canonical
+allowlist read.
+
+The critical distinction (the architect's words): the executor may choose a
+target FROM the already-authorized declaration, but it cannot create or
+replace the declaration. The declaration now has exactly the same provenance
+as the journey's effect policy and steps — the journey authority's own
+canonical state.
+
 ## 5. Verification summary
 ## 5. Verification summary (on the implementation branch)
 

@@ -68,6 +68,34 @@ export class DefaultBrowserValidationAgent {
   constructor(private readonly deps: DefaultBrowserValidationAgentDeps) {}
 
   async executeValidationRun(input: ExecuteValidationRunInput): Promise<BrowserValidationOutcome> {
+    // 0. THE NAVIGATION-SAFETY PROVENANCE GATE (PR #97 fourth architect
+    //    review correction): the input contract is CLOSED. The authoritative
+    //    navigation-safety declaration is OWNED BY THE WORK-064 JOURNEY
+    //    AUTHORITY — it travels ONLY inside `input.journey`
+    //    (`ValidationJourney.readonlySafeNavigationTargets`, declared and
+    //    validated at `defineValidationJourney`). There is NO
+    //    `journeyNavigationSafety` field on this input, and a runtime caller
+    //    who shape-smuggles one past the type system is REJECTED HERE —
+    //    BEFORE the admission boundary and BEFORE any browser execution.
+    //    A caller-supplied navigation-safety object is a provenance violation
+    //    REGARDLESS of its content (even one that "matches" the journey): the
+    //    journeyId correlation the third correction checked proved identity,
+    //    not provenance — a caller could bind ANY target list to a real
+    //    journey id. The only legitimate provenance is the journey itself.
+    if ('journeyNavigationSafety' in input) {
+      const smuggled = (input as { journeyNavigationSafety?: unknown }).journeyNavigationSafety;
+      const smuggledId =
+        smuggled !== null && typeof smuggled === 'object' && 'journeyId' in (smuggled as Record<string, unknown>)
+          ? String((smuggled as { journeyId?: unknown }).journeyId)
+          : String(smuggled);
+      return {
+        admitted: false,
+        admissionReason: `journey ${input.journey.id}: the execution input carries a caller-supplied journeyNavigationSafety object (${smuggledId}) — navigation-safety provenance violation: the declaration is OWNED by the WORK-064 journey authority (ValidationJourney.readonlySafeNavigationTargets) and the executor input has no such field; the run is rejected before admission and the browser is never called (the proof must originate from the journey's canonical state, never from a second caller-provided object)`,
+        run: null,
+        evidenceReference: null,
+      };
+    }
+
     // 1. ADMIT the run through the WORK-064 service boundary. The agent never
     //    admits itself — a rejected admission returns NO run and NO evidence.
     const admission = await this.deps.continuousValidationService.admitRun({
@@ -106,20 +134,19 @@ export class DefaultBrowserValidationAgent {
 
     // 2. EXECUTE the journey's plan: enforce the EffectPolicy before every
     //    action, capture observations with full provenance.
-    //    THE AUTHORITATIVE NAVIGATION-SAFETY ALLOWLIST: the journey-bound
-    //    JourneyNavigationSafetyDeclaration (NOT a plan field — PR #97 third
-    //    architect review correction). The agent validates the declaration is
-    //    bound to THIS journey before using its allowlist. The executor
-    //    constructs the plan but CANNOT expand the trusted safe-target set.
-    if (!input.journeyNavigationSafety || input.journeyNavigationSafety.journeyId !== input.journey.id) {
-      return {
-        admitted: false,
-        admissionReason: `the journey navigation safety declaration is not bound to journey ${input.journey.id} (journeyNavigationSafety.journeyId mismatch — the authoritative declaration must originate from the journey authority)`,
-        run: null,
-        evidenceReference: null,
-      };
-    }
-    const readonlySafeNavigationTargets = input.journeyNavigationSafety.readonlySafeNavigationTargets;
+    //    THE AUTHORITATIVE NAVIGATION-SAFETY ALLOWLIST (PR #97 fourth
+    //    architect review correction): read from the JOURNEY's CANONICAL
+    //    STATE — `journey.readonlySafeNavigationTargets` (declared under
+    //    WORK-064's authority, validated at the declaration boundary, frozen
+    //    on the immutable journey record). NOT a plan field, NOT an executor
+    //    input: the executor constructs the plan (choosing navigate actions)
+    //    but CANNOT create, replace, or expand the trusted safe-target set.
+    //    Defense in depth: a runtime-crafted journey object that smuggles a
+    //    non-array value here fails CLOSED to the empty allowlist (no
+    //    navigation is proven read-only-safe).
+    const readonlySafeNavigationTargets = Array.isArray(input.journey?.readonlySafeNavigationTargets)
+      ? input.journey.readonlySafeNavigationTargets
+      : [];
     const now = input.now ?? (() => new Date());
     const ctx: ObservationContext = {
       runId: run.id,

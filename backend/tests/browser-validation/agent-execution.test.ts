@@ -25,7 +25,6 @@ import type { AuthenticatedPrincipal } from '@modules/auth/index.js';
 import {
   DefaultBrowserValidationAgent,
   defineBrowserJourneyPlan,
-  defineJourneyNavigationSafety,
 } from '../../src/browser-validation/index.js';
 import { createLogger } from '@platform/logger.js';
 import { FakeBrowserDriver, FakeVerificationService } from './helpers.js';
@@ -79,6 +78,11 @@ const readJourney: ValidationJourney = defineValidationJourney({
   identityRequirement: 'unauthenticated',
   allowedModes: ['PRE_MERGE'],
   effectPolicy: 'READ_ONLY',
+  // THE AUTHORITATIVE NAVIGATION-SAFETY DECLARATION (PR #97 fourth architect
+  // review correction): PART OF THE JOURNEY ITSELF — declared under WORK-064's
+  // authority at defineValidationJourney, frozen on the journey record. The
+  // execution inputs below carry NO separate declaration object.
+  readonlySafeNavigationTargets: ['https://example.com/sign-in'],
   steps: [
     {
       id: 'step-open',
@@ -99,6 +103,7 @@ const mutationJourney: ValidationJourney = defineValidationJourney({
   identityRequirement: 'authenticated',
   allowedModes: ['PRE_MERGE'],
   effectPolicy: 'SAFE_MUTATION',
+  readonlySafeNavigationTargets: [],
   steps: [
     {
       id: 'step-fill',
@@ -118,6 +123,7 @@ const forbiddenJourney: ValidationJourney = defineValidationJourney({
   identityRequirement: 'authenticated',
   allowedModes: ['PRE_MERGE'],
   effectPolicy: 'FORBIDDEN',
+  readonlySafeNavigationTargets: ['https://example.com/checkout'],
   steps: [
     {
       id: 'step-checkout',
@@ -130,13 +136,13 @@ const forbiddenJourney: ValidationJourney = defineValidationJourney({
   successCriteria: [{ id: 'crit-checkout', description: 'checkout completes', requiresObservationIds: ['obs-confirmation'] }],
 });
 
-// The AUTHORITATIVE journey-bound navigation-safety declarations (PR #97 third
-// architect review correction). These are the JOURNEY AUTHORITY's trusted
-// declarations — NOT plan fields, NOT executor assertions. The executor
-// constructs the plan but CANNOT expand these sets.
-const readJourneyNavSafety = defineJourneyNavigationSafety(readJourney, ['https://example.com/sign-in']);
-const mutationJourneyNavSafety = defineJourneyNavigationSafety(mutationJourney, []);
-const forbiddenJourneyNavSafety = defineJourneyNavigationSafety(forbiddenJourney, ['https://example.com/checkout']);
+// (PR #97 fourth architect review correction) The navigation-safety
+// declarations are PART OF THE JOURNEYS ABOVE — each defineValidationJourney
+// carries its OWN readonlySafeNavigationTargets (the WORK-064 journey
+// authority's trusted declaration, validated at the declaration boundary).
+// There is NO separate declaration object and NO executor input field: the
+// execution inputs below carry journeys + plans ONLY, and the agent REJECTS
+// any input that shape-smuggles a journeyNavigationSafety object (see §15).
 
 /** The read journey's plan: navigate (satisfies obs-status) + extract (satisfies obs-heading). */
 const readPlan = defineBrowserJourneyPlan(
@@ -196,8 +202,12 @@ const fixedClock = () => new Date('2026-08-30T12:00:00.000Z');
 // ---------------------------------------------------------------------------
 
 function buildAgent(driver: FakeBrowserDriver | undefined, verification: FakeVerificationService) {
+  // The run repository is constructed OUTSIDE the service so tests can prove
+  // a rejected input never even REACHES the admission boundary (no run is
+  // persisted — the §15 provenance gate rejects BEFORE admission).
+  const runRepository = new InMemoryValidationRunRepository();
   const cv = new DefaultContinuousValidationService({
-    runRepository: new InMemoryValidationRunRepository(),
+    runRepository,
     verificationService: verification,
   });
   const agent = new DefaultBrowserValidationAgent({
@@ -205,7 +215,7 @@ function buildAgent(driver: FakeBrowserDriver | undefined, verification: FakeVer
     driver,
     logger,
   });
-  return { agent, cv, verification };
+  return { agent, cv, verification, runRepository };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +237,6 @@ describe('WORK-065 agent §1 — happy path (healthy read-only run)', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-1',
       projectId: 'proj-1',
       runId: 'run-happy-1',
@@ -288,7 +297,6 @@ describe('WORK-065 agent §2 — browser unavailable → environment_error', () 
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-2',
       projectId: 'proj-2',
       runId: 'run-no-driver',
@@ -326,7 +334,6 @@ describe('WORK-065 agent §3 — FORBIDDEN policy → effect_policy_violation', 
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: forbiddenPlan,
-      journeyNavigationSafety: forbiddenJourneyNavSafety,
       verificationRunId: 'ver-run-3',
       projectId: 'proj-3',
       runId: 'run-forbidden',
@@ -357,6 +364,7 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
       identityRequirement: 'unauthenticated',
       allowedModes: ['PRE_MERGE'],
       effectPolicy: 'READ_ONLY',
+      readonlySafeNavigationTargets: ['https://example.com'],
       steps: [
         {
           id: 'step-attempt-click',
@@ -396,7 +404,6 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: roClickPlan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(readOnlyClickJourney, ['https://example.com']),
       verificationRunId: 'ver-run-4',
       projectId: 'proj-4',
       runId: 'run-ro-click',
@@ -432,7 +439,6 @@ describe('WORK-065 agent §5 — selector miss → validation_failure', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-5',
       projectId: 'proj-5',
       runId: 'run-selector-miss',
@@ -467,7 +473,6 @@ describe('WORK-065 agent §6 — driver timeout → environment_error', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-6',
       projectId: 'proj-6',
       runId: 'run-timeout',
@@ -496,6 +501,7 @@ describe('WORK-065 agent §7 — missing expected observation → validation_fai
       identityRequirement: 'unauthenticated',
       allowedModes: ['PRE_MERGE'],
       effectPolicy: 'READ_ONLY',
+      readonlySafeNavigationTargets: [],
       steps: [
         {
           id: 'step-open',
@@ -530,7 +536,6 @@ describe('WORK-065 agent §7 — missing expected observation → validation_fai
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: partialPlan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(twoObsJourney, []),
       verificationRunId: 'ver-run-7',
       projectId: 'proj-7',
       runId: 'run-missing-obs',
@@ -565,7 +570,6 @@ describe('WORK-065 agent §8 — mutation journey (SAFE_MUTATION)', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: mutationPlan,
-      journeyNavigationSafety: mutationJourneyNavSafety,
       verificationRunId: 'ver-run-8',
       projectId: 'proj-8',
       runId: 'run-mutation-happy',
@@ -593,7 +597,6 @@ describe('WORK-065 agent §9 — rejected admission → no run, no evidence', ()
       mode: 'POST_RELEASE',
       trigger: 'RELEASE',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-9',
       projectId: 'proj-9',
       runId: 'run-rejected',
@@ -629,7 +632,6 @@ describe('WORK-065 agent §10 — identity binding (presented, never minted)', (
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-10',
       projectId: 'proj-10',
       runId: 'run-unauth',
@@ -666,7 +668,6 @@ describe('WORK-065 agent §10 — identity binding (presented, never minted)', (
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: mutationPlan,
-      journeyNavigationSafety: mutationJourneyNavSafety,
       verificationRunId: 'ver-run-10b',
       projectId: 'proj-10b',
       runId: 'run-human',
@@ -702,7 +703,6 @@ describe('WORK-065 agent §11 — evidence mapping failure → run preserved, ev
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-missing',
       projectId: 'proj-11',
       runId: 'run-map-fail',
@@ -736,7 +736,6 @@ describe('WORK-065 agent §12 — no second verification authority', () => {
       mode: 'PRE_MERGE',
       trigger: 'PR',
       plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
       verificationRunId: 'ver-run-12',
       projectId: 'proj-12',
       runId: 'run-no-second-auth',
@@ -769,7 +768,6 @@ describe('WORK-065 agent §13 — deterministic outcomes', () => {
         mode: 'PRE_MERGE',
         trigger: 'PR',
         plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety,
         verificationRunId: 'ver-run-13',
         projectId: 'proj-13',
         runId: 'run-deterministic',
@@ -784,57 +782,69 @@ describe('WORK-065 agent §13 — deterministic outcomes', () => {
 
 // ---------------------------------------------------------------------------
 // §14  Navigation-target safety boundary — the driver is NEVER called for a
-//      rejected navigation (the critical proof, PR #97 architect review)
+//      rejected navigation (the critical proof, PR #97 architect review;
+//      fourth correction: the allowlist is the JOURNEY's canonical field)
 // ---------------------------------------------------------------------------
 
 describe('WORK-065 agent §14 — the driver is never called for a rejected navigation', () => {
-  // A read-only journey with a network observation (a navigation satisfies it).
-  const navJourney: ValidationJourney = defineValidationJourney({
-    id: 'journey-nav-safety',
-    name: 'A navigation journey',
-    identityRequirement: 'unauthenticated',
-    allowedModes: ['PRE_MERGE'],
-    effectPolicy: 'READ_ONLY',
-    steps: [
-      {
-        id: 'step-navigate',
-        name: 'navigate to the page',
-        expectedObservations: [
-          { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
-        ],
-      },
-    ],
-    successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
-  });
-
-  it('READ_ONLY + a positively authorized safe navigation (URL in the allowlist) → the driver IS called → healthy', async () => {
-    const driver = new FakeBrowserDriver({
-      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
+  // A read-only journey factory with a network observation (a navigation
+  // satisfies it). The AUTHORITATIVE allowlist is declared ON THE JOURNEY
+  // (readonlySafeNavigationTargets — the WORK-064 journey authority's trusted
+  // declaration, validated at defineValidationJourney; there is NO executor
+  // input for it and NO separate declaration object).
+  const makeNavJourney = (id: string, safeTargets: readonly string[]): ValidationJourney =>
+    defineValidationJourney({
+      id,
+      name: 'A navigation journey',
+      identityRequirement: 'unauthenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'READ_ONLY',
+      readonlySafeNavigationTargets: safeTargets,
+      steps: [
+        {
+          id: 'step-navigate',
+          name: 'navigate to the page',
+          expectedObservations: [
+            { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+          ],
+        },
+      ],
+      successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
     });
-    const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
+
+  const navJourney = makeNavJourney('journey-nav-safety', ['https://example.com/sign-in']);
+  const navJourneyNoSafe = makeNavJourney('journey-nav-no-safe', []);
+  const navJourneyConfirm = makeNavJourney('journey-nav-confirm', ['https://example.com/confirm?token=abc']);
+
+  const planFor = (journey: ValidationJourney, url: string) =>
+    defineBrowserJourneyPlan(
       {
-        journeyId: navJourney.id,
+        journeyId: journey.id,
         steps: [
           {
             stepId: 'step-navigate',
             actions: [
-              { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', url, satisfiesObservationId: 'obs-status' },
             ],
           },
         ],
       },
-      navJourney,
+      journey,
     );
 
+  it('READ_ONLY + a positively authorized safe navigation (URL in the journey\'s allowlist) → the driver IS called → healthy', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+
     const outcome = await agent.executeValidationRun({
-      journey: navJourney,
+      journey: navJourney, // canonical declaration: ['/sign-in']
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/sign-in']),
+      plan: planFor(navJourney, 'https://example.com/sign-in'),
       verificationRunId: 'ver-nav-1',
       projectId: 'proj-nav-1',
       runId: 'run-nav-safe',
@@ -847,39 +857,24 @@ plan,
   });
 
   // THE ATTACK SHAPE the architect required: a plain-path GET that may mutate
-  // (e.g. /delete/123) under READ_ONLY. The OLD model (per-action targetPolicy)
-  // would admit it if the caller asserted 'read_only_safe'; the NEW model
-  // (authoritative allowlist) rejects it because /delete/123 is NOT in the
-  // allowlist (unverified — no authoritative proof of safety).
-  it('READ_ONLY + /delete/123 (a plain-path GET that may mutate, NOT in the allowlist) → the driver is NEVER called → effect_policy_violation', async () => {
+  // (e.g. /delete/123) under READ_ONLY. The OLD models would admit it if the
+  // caller asserted safety (first correction), supplied a plan-level allowlist
+  // (second), or handed over a caller-constructed declaration (third). The
+  // journey-owned model rejects it from the JOURNEY\'S CANONICAL STATE:
+  // /delete/123 is NOT in journey-nav-safety's declaration (unverified).
+  it('READ_ONLY + /delete/123 (a plain-path GET that may mutate, NOT in the journey\'s canonical allowlist) → the driver is NEVER called → effect_policy_violation', async () => {
     const driver = new FakeBrowserDriver({
       navigate: [{ finalUrl: 'https://example.com/delete/123', status: 200, title: 'Deleted' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: navJourney.id,
-        // The allowlist declares /sign-in safe — /delete/123 is NOT in it.
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'https://example.com/delete/123', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      navJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
-      journey: navJourney,
+      journey: navJourney, // canonical declaration: ['/sign-in'] — /delete/123 NOT in it
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/sign-in']),
+      plan: planFor(navJourney, 'https://example.com/delete/123'),
       verificationRunId: 'ver-nav-2',
       projectId: 'proj-nav-2',
       runId: 'run-nav-delete-rejected',
@@ -889,39 +884,25 @@ plan,
     expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
     if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
       expect(outcome.run!.outcome!.reason).toMatch(/not proven read-only-safe|unverified/);
+      // The rejection cites the JOURNEY's declaration (the canonical state):
+      expect(outcome.run!.outcome!.reason).toMatch(/journey's readonlySafeNavigationTargets|allowlist/);
     }
     // CRITICAL PROOF: the driver was NEVER called (the navigation was rejected
     // before page.goto()):
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('READ_ONLY + a query-string URL NOT in the allowlist → the driver is NEVER called → effect_policy_violation (unverified)', async () => {
+  it('READ_ONLY + a query-string URL NOT in the journey\'s allowlist (empty declaration) → the driver is NEVER called → effect_policy_violation (unverified)', async () => {
     const driver = new FakeBrowserDriver({});
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: navJourney.id,
-        // Empty allowlist — no navigation is proven read-only-safe.
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'https://example.com/?action=delete', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      navJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
-      journey: navJourney,
+      journey: navJourneyNoSafe, // canonical declaration: [] — no navigation is proven read-only-safe
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, []),
+      plan: planFor(navJourneyNoSafe, 'https://example.com/?action=delete'),
       verificationRunId: 'ver-nav-3',
       projectId: 'proj-nav-3',
       runId: 'run-nav-query-rejected',
@@ -934,37 +915,23 @@ plan,
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('READ_ONLY + a query-string URL IN the allowlist → the driver IS called → healthy (the journey authority declared it safe)', async () => {
+  it('READ_ONLY + a query-string URL IN the journey\'s allowlist → the driver IS called → healthy (the journey authority declared it safe)', async () => {
     // The architect's ruling: "a query string is one possible signal, not a
-    // proof of mutation." The allowlist is the authority. A query-string URL
-    // the journey declared read-only-safe is admitted under READ_ONLY.
+    // proof of mutation." The journey's declaration is the authority. A
+    // query-string URL the journey declared read-only-safe is admitted under
+    // READ_ONLY.
     const driver = new FakeBrowserDriver({
       navigate: [{ finalUrl: 'https://example.com/confirm?token=abc', status: 200, title: 'Confirmed' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: navJourney.id,
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'https://example.com/confirm?token=abc', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      navJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
-      journey: navJourney,
+      journey: navJourneyConfirm, // canonical declaration: ['/confirm?token=abc']
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, ['https://example.com/confirm?token=abc']),
+      plan: planFor(navJourneyConfirm, 'https://example.com/confirm?token=abc'),
       verificationRunId: 'ver-nav-4',
       projectId: 'proj-nav-4',
       runId: 'run-nav-query-allowlisted',
@@ -981,29 +948,14 @@ plan,
       navigate: [{ finalUrl: 'file:///etc/passwd', status: 200, title: 'passwd' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: navJourney.id,
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'file:///etc/passwd', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      navJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
-      journey: navJourney,
+      journey: navJourneyNoSafe,
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(navJourney, []),
+      plan: planFor(navJourneyNoSafe, 'file:///etc/passwd'),
       verificationRunId: 'ver-nav-5',
       projectId: 'proj-nav-5',
       runId: 'run-nav-file-rejected',
@@ -1027,6 +979,7 @@ plan,
       identityRequirement: 'authenticated',
       allowedModes: ['PRE_MERGE'],
       effectPolicy: 'FORBIDDEN',
+      readonlySafeNavigationTargets: ['https://example.com/checkout'],
       steps: [
         {
           id: 'step-navigate',
@@ -1046,20 +999,6 @@ plan,
     });
     const driver = new FakeBrowserDriver({});
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: forbiddenNavJourney.id,
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      forbiddenNavJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
       journey: forbiddenNavJourney,
@@ -1067,8 +1006,7 @@ plan,
       environment: forbiddenEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(forbiddenNavJourney, ['https://example.com/checkout']),
+      plan: planFor(forbiddenNavJourney, 'https://example.com/checkout'),
       verificationRunId: 'ver-nav-6',
       projectId: 'proj-nav-6',
       runId: 'run-nav-forbidden',
@@ -1081,16 +1019,17 @@ plan,
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('SAFE_MUTATION + an unverified navigation (not in the allowlist) → the driver IS called (admitted under a mutation policy)', async () => {
+  it('SAFE_MUTATION + an unverified navigation (not in the journey\'s allowlist) → the driver IS called (admitted under a mutation policy)', async () => {
     // A SAFE_MUTATION journey that navigates to /delete/123 (not in the
-    // allowlist — unverified). The run has a mutation policy, so the
-    // potentially-mutating navigation is within policy and admitted.
+    // journey's declaration — unverified). The run has a mutation policy, so
+    // the potentially-mutating navigation is within policy and admitted.
     const mutationNavJourney: ValidationJourney = defineValidationJourney({
       id: 'journey-nav-mutation',
       name: 'A mutation navigation journey',
       identityRequirement: 'authenticated',
       allowedModes: ['PRE_MERGE'],
       effectPolicy: 'SAFE_MUTATION',
+      readonlySafeNavigationTargets: [],
       steps: [
         {
           id: 'step-navigate',
@@ -1106,30 +1045,14 @@ plan,
       navigate: [{ finalUrl: 'https://example.com/delete/123', status: 200, title: 'Deleted' }],
     });
     const { agent } = buildAgent(driver, new FakeVerificationService());
-    const plan = defineBrowserJourneyPlan(
-      {
-        journeyId: mutationNavJourney.id,
-        // No allowlist — /delete/123 is unverified, but SAFE_MUTATION admits it.
-        steps: [
-          {
-            stepId: 'step-navigate',
-            actions: [
-              { kind: 'navigate', url: 'https://example.com/delete/123', satisfiesObservationId: 'obs-status' },
-            ],
-          },
-        ],
-      },
-      mutationNavJourney,
-    );
 
     const outcome = await agent.executeValidationRun({
-      journey: mutationNavJourney,
+      journey: mutationNavJourney, // canonical declaration: [] — /delete/123 unverified, but SAFE_MUTATION admits it
       identitySource: synthetic,
       environment: previewMutationEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-plan,
-      journeyNavigationSafety: defineJourneyNavigationSafety(mutationNavJourney, []),
+      plan: planFor(mutationNavJourney, 'https://example.com/delete/123'),
       verificationRunId: 'ver-nav-7',
       projectId: 'proj-nav-7',
       runId: 'run-nav-mutation-admitted',
@@ -1143,77 +1066,237 @@ plan,
 });
 
 // ---------------------------------------------------------------------------
-// §15  Journey-binding validation — the agent rejects a journeyNavigationSafety
-//      declaration bound to a DIFFERENT journey (the provenance proof)
+// §15  Navigation-safety provenance — the declaration is JOURNEY-OWNED and the
+//      input channel is CLOSED: a caller-supplied declaration is REJECTED
+//      BEFORE admission and browser execution (PR #97 fourth architect review
+//      — the required runtime discrimination)
 // ---------------------------------------------------------------------------
 
-describe('WORK-065 agent §15 — the agent validates the journeyNavigationSafety binding (the provenance proof)', () => {
-  it('a journeyNavigationSafety declaration bound to a DIFFERENT journey → the agent rejects the run (admitted: false, no execution)', async () => {
-    // The journey authority declares the allowlist bound to a journey id.
-    // The agent validates journeyNavigationSafety.journeyId === journey.id.
-    // A declaration bound to a different journey is rejected — the executor
-    // cannot supply a declaration from another journey to authorize this run.
-    const otherJourney: ValidationJourney = defineValidationJourney({
-      id: 'journey-other-for-binding-test',
-      name: 'Another journey',
-      identityRequirement: 'unauthenticated',
-      allowedModes: ['PRE_MERGE'],
-      effectPolicy: 'READ_ONLY',
-      steps: [
-        { id: 's', name: 's', expectedObservations: [{ id: 'o', stepId: 's', kind: 'network', description: 'o', matcher: { kind: 'status_code', status: 200 } }] },
-      ],
-      successCriteria: [{ id: 'c', description: 'c', requiresObservationIds: ['o'] }],
+describe('WORK-065 agent §15 — the navigation-safety provenance proof (journey-owned declaration; the caller cannot manufacture authority)', () => {
+  // The architect's attack, verbatim: a real journey J whose AUTHORITATIVE
+  // safe targets are ['/sign-in'], and a caller who constructs
+  // JourneyNavigationSafetyDeclaration(J, ['/delete/123']) and hands it to
+  // the agent. The third correction's agent would have accepted it (the
+  // journeyId check proved identity correlation, not provenance); the fourth
+  // correction REJECTS the input before the admission boundary.
+  const navJourney = defineValidationJourney({
+    id: 'journey-prov-proof',
+    name: 'The provenance proof journey',
+    identityRequirement: 'unauthenticated',
+    allowedModes: ['PRE_MERGE'],
+    effectPolicy: 'READ_ONLY',
+    // THE JOURNEY AUTHORITY's canonical declaration: /sign-in is the ONLY
+    // read-only-safe target. /delete/123 is NOT declared safe.
+    readonlySafeNavigationTargets: ['https://example.com/sign-in'],
+    steps: [
+      {
+        id: 'step-navigate',
+        name: 'navigate to the page',
+        expectedObservations: [
+          { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+        ],
+      },
+    ],
+    successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+  });
+
+  const planFor = (url: string) =>
+    defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url, satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+  it('the architect\'s attack: journey J (canonical ["/sign-in"]) + a caller-supplied declaration (J, ["/delete/123"]) → REJECTED before admission (no run persisted, the driver is NEVER called)', async () => {
+    const driver = new FakeBrowserDriver({});
+    const verification = new FakeVerificationService();
+    const { agent, runRepository } = buildAgent(driver, verification);
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney, // the REAL journey, canonical declaration ['/sign-in']
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan: planFor('https://example.com/delete/123'), // the attack navigation
+      verificationRunId: 'ver-prov-1',
+      projectId: 'proj-prov-1',
+      runId: 'run-forged-declaration',
+      now: fixedClock,
+      // @ts-expect-error — journeyNavigationSafety does NOT exist on
+      // ExecuteValidationRunInput (the fourth correction removed the field:
+      // the declaration is journey-owned). This @ts-expect-error FAILS THE
+      // TYPECHECK if the field ever comes back. At RUNTIME the smuggled
+      // object is exactly the architect's forged declaration — and the agent
+      // must REJECT it below.
+      journeyNavigationSafety: {
+        journeyId: navJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com/delete/123'],
+      },
     });
-    // A navigation safety declaration bound to `otherJourney` (NOT readJourney):
-    const wrongNavSafety = defineJourneyNavigationSafety(otherJourney, ['https://example.com/sign-in']);
+
+    // The input was REJECTED — the caller cannot manufacture authority:
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.run).toBeNull();
+    expect(outcome.evidenceReference).toBeNull();
+    expect(outcome.admissionReason).toMatch(/journeyNavigationSafety/);
+    expect(outcome.admissionReason).toMatch(/provenance violation/);
+    expect(outcome.admissionReason).toMatch(/journey authority|journey's canonical state/);
+    // CRITICAL PROOF — the rejection PRECEDED the admission boundary: no run
+    // was ever created (the admission service was never called):
+    expect(await runRepository.getById('run-forged-declaration')).toBeNull();
+    // CRITICAL PROOF — the browser driver was NEVER called:
+    expect(driver.recordedCalls).toHaveLength(0);
+    // And no evidence was attached anywhere:
+    expect(verification.recordedAttachCalls).toHaveLength(0);
+  });
+
+  it('a caller-supplied declaration that MATCHES the journey\'s canonical declaration is STILL rejected (the channel itself is illegitimate — the proof must never originate from a second caller-provided object)', async () => {
+    const driver = new FakeBrowserDriver({});
+    const verification = new FakeVerificationService();
+    const { agent, runRepository } = buildAgent(driver, verification);
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan: planFor('https://example.com/sign-in'),
+      verificationRunId: 'ver-prov-2',
+      projectId: 'proj-prov-2',
+      runId: 'run-matching-declaration',
+      now: fixedClock,
+      // @ts-expect-error — journeyNavigationSafety does NOT exist on
+      // ExecuteValidationRunInput. Even a "correct" declaration is a
+      // provenance violation: the agent must not consult ANY second
+      // caller-provided object — accepting a matching one would leave the
+      // forgeable channel open (a caller who can supply a matching object
+      // today can supply a mismatched one tomorrow).
+      journeyNavigationSafety: {
+        journeyId: navJourney.id,
+        readonlySafeNavigationTargets: ['https://example.com/sign-in'], // EXACTLY the canonical declaration
+      },
+    });
+
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.run).toBeNull();
+    expect(outcome.evidenceReference).toBeNull();
+    expect(outcome.admissionReason).toMatch(/provenance violation/);
+    expect(await runRepository.getById('run-matching-declaration')).toBeNull();
+    expect(driver.recordedCalls).toHaveLength(0);
+    expect(verification.recordedAttachCalls).toHaveLength(0);
+  });
+
+  it('a non-object smuggled value (null) is also rejected — the gate checks the CHANNEL, not the content', async () => {
+    const driver = new FakeBrowserDriver({});
+    const { agent, runRepository } = buildAgent(driver, new FakeVerificationService());
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan: planFor('https://example.com/sign-in'),
+      verificationRunId: 'ver-prov-3',
+      projectId: 'proj-prov-3',
+      runId: 'run-null-smuggle',
+      now: fixedClock,
+      // @ts-expect-error — journeyNavigationSafety does NOT exist on
+      // ExecuteValidationRunInput (any present value — even null — means the
+      // caller attempted the channel).
+      journeyNavigationSafety: null,
+    });
+
+    expect(outcome.admitted).toBe(false);
+    expect(outcome.run).toBeNull();
+    expect(outcome.admissionReason).toMatch(/provenance violation/);
+    expect(await runRepository.getById('run-null-smuggle')).toBeNull();
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('the positive case (the architect\'s required control): journey J (canonical ["/sign-in"]) + a navigate to /sign-in + NO caller-supplied declaration → ADMITTED, the driver IS called, healthy', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+
+    const input = {
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE' as const,
+      trigger: 'PR' as const,
+      plan: planFor('https://example.com/sign-in'),
+      verificationRunId: 'ver-prov-4',
+      projectId: 'proj-prov-4',
+      runId: 'run-canonical-sign-in',
+      now: fixedClock,
+    };
+    // The legitimate input carries NO navigation-safety object at all:
+    expect('journeyNavigationSafety' in input).toBe(false);
+
+    const outcome = await agent.executeValidationRun(input);
+
+    expect(outcome.admitted).toBe(true);
+    expect(outcome.run).not.toBeNull();
+    expect(outcome.run!.outcome!.kind).toBe('healthy');
+    // The driver WAS called for the declared-safe target (the journey's
+    // canonical declaration authorized it — not any caller-supplied object):
+    expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
+  });
+
+  it('the enforcement proof originates from the journey\'s canonical state: /delete/123 with NO smuggled declaration → the run is admitted but the navigation is REJECTED (unverified) and the driver is NEVER called', async () => {
+    // Same journey (canonical ['/sign-in']), same attack URL — but with a
+    // CLEAN input (no smuggled object). The input itself is legitimate, so
+    // the run IS admitted; the NAVIGATION is rejected at the enforcement gate
+    // because the JOURNEY's canonical declaration does not contain
+    // /delete/123. This pins that the enforcement reads the journey's state,
+    // never a second caller-provided object.
     const driver = new FakeBrowserDriver({});
     const { agent } = buildAgent(driver, new FakeVerificationService());
 
     const outcome = await agent.executeValidationRun({
-      journey: readJourney, // the run is for readJourney...
+      journey: navJourney,
       identitySource: unauthenticated,
       environment: previewReadOnlyEnv,
       mode: 'PRE_MERGE',
       trigger: 'PR',
-      plan: readPlan,
-      journeyNavigationSafety: wrongNavSafety, // ...but the declaration is bound to otherJourney
-      verificationRunId: 'ver-binding-1',
-      projectId: 'proj-binding-1',
-      runId: 'run-binding-mismatch',
+      plan: planFor('https://example.com/delete/123'),
+      verificationRunId: 'ver-prov-5',
+      projectId: 'proj-prov-5',
+      runId: 'run-canonical-delete-rejected',
       now: fixedClock,
     });
 
-    // The agent rejected the run — the declaration is not bound to this journey:
-    expect(outcome.admitted).toBe(false);
-    expect(outcome.run).toBeNull();
-    expect(outcome.evidenceReference).toBeNull();
-    expect(outcome.admissionReason).toMatch(/not bound to journey/);
-    // CRITICAL PROOF: the driver was NEVER called:
+    expect(outcome.admitted).toBe(true); // the input is legitimate — the run runs
+    expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation'); // the navigation is NOT
+    if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
+      expect(outcome.run!.outcome!.reason).toMatch(/not proven read-only-safe|unverified/);
+    }
+    // CRITICAL PROOF: the driver was NEVER called for the undeclared target:
     expect(driver.recordedCalls).toHaveLength(0);
   });
 
-  it('a journeyNavigationSafety declaration bound to THIS journey → the run proceeds (the provenance is valid)', async () => {
-    const driver = new FakeBrowserDriver({
-      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
-      extract: [{ matched: true, text: 'Sign in to your account', finalUrl: 'https://example.com/sign-in' }],
-    });
-    const { agent } = buildAgent(driver, new FakeVerificationService());
-
-    const outcome = await agent.executeValidationRun({
-      journey: readJourney,
-      identitySource: unauthenticated,
-      environment: previewReadOnlyEnv,
-      mode: 'PRE_MERGE',
-      trigger: 'PR',
-      plan: readPlan,
-      journeyNavigationSafety: readJourneyNavSafety, // bound to readJourney
-      verificationRunId: 'ver-binding-2',
-      projectId: 'proj-binding-2',
-      runId: 'run-binding-valid',
-      now: fixedClock,
-    });
-
-    expect(outcome.admitted).toBe(true);
-    expect(outcome.run!.outcome!.kind).toBe('healthy');
+  it('the browser-validation barrel exports NO navigation-safety declaration constructor or type — there is nothing a caller can import to mint a declaration', async () => {
+    // The third correction exported defineJourneyNavigationSafety +
+    // JourneyNavigationSafetyDeclaration — a caller could import them, bind an
+    // arbitrary target list to a real journey id, and hand the result to the
+    // agent. The fourth correction removes the entire surface: there is no
+    // constructor to call, no type to satisfy, no channel to carry it.
+    const barrel = (await import('../../src/browser-validation/index.js')) as Record<string, unknown>;
+    expect(barrel.defineJourneyNavigationSafety).toBeUndefined();
+    expect(barrel.JourneyNavigationSafetyDeclaration).toBeUndefined();
+    expect(barrel.validateAllowlistEntry).toBeUndefined();
   });
 });

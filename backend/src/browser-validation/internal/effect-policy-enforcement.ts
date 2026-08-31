@@ -46,32 +46,33 @@ export interface EffectEnforcementDecision {
 
 /**
  * Decide whether `action` may execute under `policy`, given the run's
- * identity tenant binding, the target environment, and the plan's authoritative
- * navigation-safety allowlist. Pure, deterministic, side-effect free. Fail
- * closed: every violation produces a typed effect_policy_violation
- * ExecutionError (the WORK-064 finalization boundary records it as the run's
- * outcome — never healthy).
+ * identity tenant binding, the target environment, and the JOURNEY's
+ * authoritative navigation-safety allowlist. Pure, deterministic,
+ * side-effect free. Fail closed: every violation produces a typed
+ * effect_policy_violation ExecutionError (the WORK-064 finalization boundary
+ * records it as the run's outcome — never healthy).
  *
  * Evaluation order:
  *   1. FORBIDDEN policy — rejects EVERY action (the browser agent performs no
  *      forbidden actions; the architect-approved safe mechanism is the WORK-064
  *      admission contract, NOT a browser-execution path);
  *   2. navigate — the AUTHORITATIVE navigation-target safety boundary (PR #97
- *      second architect review correction): the agent classifies the
- *      navigation target against the plan's `readonlySafeNavigationTargets`
- *      allowlist (the journey's trusted declaration) and enforces the
- *      verified class:
+ *      fourth architect review correction): the agent classifies the
+ *      navigation target against the JOURNEY's `readonlySafeNavigationTargets`
+ *      allowlist (the WORK-064 journey authority's trusted declaration,
+ *      carried on the canonical ValidationJourney record — NOT a plan field,
+ *      NOT an executor input) and enforces the verified class:
  *        - `forbidden` (non-http(s) scheme, embedded userinfo) → rejected
  *          under EVERY policy before the browser is called;
- *        - `read_only_safe` (URL is in the allowlist) → admitted under every
- *          non-FORBIDDEN policy (the journey authoritatively declared it
- *          read-only-safe);
- *        - `unverified` (URL is NOT in the allowlist) → rejected under
- *          READ_ONLY (no authoritative proof of safety — the executor cannot
- *          assert safety; the journey must declare the target read-only-safe);
- *          admitted under SAFE_MUTATION / ISOLATED_MUTATION (the run has a
- *          mutation policy, so a potentially-mutating navigation is within
- *          policy).
+ *        - `read_only_safe` (URL is in the journey's allowlist) → admitted
+ *          under every non-FORBIDDEN policy (the journey authority declared
+ *          it read-only-safe);
+ *        - `unverified` (URL is NOT in the journey's allowlist) → rejected
+ *          under READ_ONLY (no authoritative proof of safety — the executor
+ *          cannot assert safety and cannot supply a declaration; the journey
+ *          must declare the target read-only-safe); admitted under
+ *          SAFE_MUTATION / ISOLATED_MUTATION (the run has a mutation policy,
+ *          so a potentially-mutating navigation is within policy).
  *      The browser driver is NEVER called for a rejected navigation;
  *   3. read actions (extract, screenshot) — admitted under every non-FORBIDDEN
  *      policy;
@@ -80,17 +81,20 @@ export interface EffectEnforcementDecision {
  *   5. ISOLATED_MUTATION — cross-tenant mutation rejected before execution;
  *   6. SAFE_MUTATION / ISOLATED_MUTATION (with a matching tenant) — admitted.
  *
- * The `allowlist` is the plan's authoritative `readonlySafeNavigationTargets`
- * — the journey's trusted declaration of read-only-safe navigation targets.
- * The executor CANNOT turn a per-action assertion into authoritative safety
- * (there is no per-action `targetPolicy` field on the navigate action).
+ * The `allowlist` is the JOURNEY's authoritative `readonlySafeNavigationTargets`
+ * — the WORK-064 journey authority's trusted declaration of read-only-safe
+ * navigation targets (the agent passes `journey.readonlySafeNavigationTargets`,
+ * the canonical journey field; there is no other channel). The executor
+ * CANNOT turn a per-action assertion into authoritative safety (there is no
+ * per-action `targetPolicy` field on the navigate action) and CANNOT supply
+ * or replace the declaration (there is no executor input field).
  *
  * The `identity` and `environment` are REQUIRED for ISOLATED_MUTATION
  * cross-tenant enforcement (defense in depth — the WORK-064 admission
  * boundary already verified the tenant match; this re-verifies before the
  * mutation executes).
  *
- * @param allowlist the plan's authoritative readonlySafeNavigationTargets
+ * @param allowlist the journey's authoritative readonlySafeNavigationTargets
  */
 export function enforceEffectPolicy(
   action: BrowserAction,
@@ -116,9 +120,10 @@ export function enforceEffectPolicy(
   //    navigation is NOT unconditionally a read action (PR #97 architect
   //    review correction): a browser navigation can have externally observable
   //    side effects even without a DOM mutation. The agent classifies the
-  //    target against the plan's authoritative allowlist (the journey's
-  //    trusted declaration) and the run's EffectPolicy BEFORE the browser is
-  //    called. The driver is NEVER called for a rejected navigation.
+  //    target against the JOURNEY's authoritative allowlist (the WORK-064
+  //    journey authority's trusted declaration, read from the canonical
+  //    ValidationJourney record) and the run's EffectPolicy BEFORE the browser
+  //    is called. The driver is NEVER called for a rejected navigation.
   if (action.kind === 'navigate') {
     const decision = classifyNavigationTarget(action.url, allowlist);
     if (decision.targetClass === 'forbidden') {

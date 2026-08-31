@@ -36,10 +36,10 @@ export {
 } from './internal/effect-policy-enforcement.js';
 export type { EffectEnforcementDecision } from './internal/effect-policy-enforcement.js';
 export {
-  // §3b the navigation-target safety boundary (PR #97 second architect review
-  // correction — the AUTHORITATIVE allowlist model)
+  // §3b the navigation-target safety boundary (the AUTHORITATIVE allowlist
+  // model — the allowlist is the JOURNEY's canonical
+  // ValidationJourney.readonlySafeNavigationTargets, NOT an executor input)
   classifyNavigationTarget,
-  validateAllowlistEntry,
 } from './internal/navigation-target.js';
 export type {
   NavigationTargetClass,
@@ -78,9 +78,6 @@ export {
   // §4 the typed domain error
   BrowserValidationError,
   BROWSER_VALIDATION_ERROR_CODES,
-  // §4b the journey-bound navigation-safety declaration constructor
-  // (the AUTHORITATIVE provenance — PR #97 third architect review correction)
-  defineJourneyNavigationSafety,
 } from './types.js';
 export type {
   // §1 the action vocabulary
@@ -89,9 +86,8 @@ export type {
   // §2 the plan (carries NO allowlist)
   BrowserPlanStep,
   BrowserJourneyPlan,
-  // §2b the journey-bound navigation-safety declaration (the authoritative allowlist)
-  JourneyNavigationSafetyDeclaration,
-  // §3 the agent contract
+  // §3 the agent contract (carries NO navigation-safety declaration — the
+  // declaration is journey-owned: ValidationJourney.readonlySafeNavigationTargets)
   BrowserValidationAgent,
   ExecuteValidationRunInput,
   BrowserValidationOutcome,
