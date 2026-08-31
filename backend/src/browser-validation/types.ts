@@ -74,8 +74,31 @@ import type {
 export type BrowserAction =
   | {
       readonly kind: 'navigate';
-      /** An absolute http(s) URL (the driver enforces the scheme). */
+      /** An absolute http(s) URL (the driver enforces the scheme; the gate
+       *  classifies the target). */
       readonly url: string;
+      /**
+       * The caller's EXPLICIT declaration of this navigation's effect class.
+       * The agent VERIFIES this declaration against the URL structure before
+       * the browser is called:
+       *
+       *   - 'read_only_safe' — the caller asserts the navigation observes
+       *     state and performs no mutation. The agent REJECTS this declaration
+       *     when the URL carries a query string (GET ≠ read-only; a query
+       *     string MAY mutate), a non-http(s) scheme, or embedded userinfo
+       *     (the declaration is provably false). A verified 'read_only_safe'
+       *     navigation is admitted under READ_ONLY + every non-FORBIDDEN
+       *     policy.
+       *   - 'requires_mutation_policy' — the caller honestly admits the
+       *     navigation may mutate (e.g. a plain-path RESTful GET-mutation
+       *     like /delete/123, or any URL with a query string). Admitted under
+       *     SAFE_MUTATION / ISOLATED_MUTATION only; rejected under READ_ONLY.
+       *
+       * This is the explicit, testable boundary that answers "what makes a
+       * navigation READ_ONLY-safe?" — a caller declaration verified against
+       * the URL structure (no query string, http(s) only, no userinfo).
+       */
+      readonly targetPolicy: NavigationTargetPolicy;
       /** The expected observation this navigation satisfies (a network status_code expectation). */
       readonly satisfiesObservationId?: string;
       readonly timeoutMs?: number;
@@ -113,6 +136,14 @@ export type BrowserAction =
 
 /** The effect classification of a browser action (the enforcement input). */
 export type BrowserActionEffect = 'read' | 'mutation';
+
+/**
+ * The caller's declaration of a navigation's effect class (carried on the
+ * `navigate` action). The agent VERIFIES this declaration against the URL
+ * structure before the browser is called — see
+ * {@link classifyNavigationTarget} (internal/navigation-target.ts).
+ */
+export type NavigationTargetPolicy = 'read_only_safe' | 'requires_mutation_policy';
 
 // ============================================================================
 // §2  The browser journey plan (the execution plan derived from a journey)

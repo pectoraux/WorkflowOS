@@ -198,12 +198,65 @@ invariants (i) + (j) pin this.
 WORK-071, WORK-072, WORK-073, WORK-074 are NOT touched (their activation
 state is unchanged).
 
+## 4b. Production wiring — NOT operational (the architect's secondary observation)
+
+Production wiring currently constructs the `DefaultBrowserValidationAgent`
+with **no driver** (`driver: undefined`). Production execution is
+deliberately fail-closed until another authorized component supplies a
+driver: every call records `environment_error` (never a silent no-op). The
+`PlaywrightBrowserDriver` adapter is the explicit binding point for the
+future architect-authorized production browser driver — it is NOT wired
+today (no production browser is authorized). The static-architecture
+invariant (n) pins that `app.ts` does NOT construct `PlaywrightBrowserDriver`
+(no unguarded browser launch).
+
+This means WORK-065 is currently an **execution mechanism available to
+future consumers** (WORK-066 scheduler — NOT implemented here), NOT an
+operational production browser-validation capability. The browser-validation
+contract, the enforcement gate, the evidence mapping, and the discriminating
+tests are all real and proven; the production driver binding is the future
+architect-authorized step. This sequencing is intentional: the safety
+boundary (effect-policy enforcement, navigation-target classification,
+no-second-authority matrix) must exist and be proven BEFORE a production
+driver is wired.
+
+## 4c. Navigation-target safety boundary (PR #97 architect review correction)
+
+The original implementation classified EVERY `navigate` action as a `read`
+action (admitted under READ_ONLY). The architect's REQUEST CHANGES correctly
+identified this as a real safety defect: a browser navigation can have
+externally observable side effects even without a DOM mutation (a GET
+endpoint that mutates, a query string, a non-http(s) scheme, embedded
+userinfo). "HTTP GET" ≠ "no side effect."
+
+The correction introduces the **navigation-target safety boundary**:
+
+- the `navigate` action carries an EXPLICIT `targetPolicy` declaration
+  (`'read_only_safe' | 'requires_mutation_policy'`) — the caller's honest
+  assertion of the navigation's effect class;
+- the agent VERIFIES the declaration against the URL structure
+  (`classifyNavigationTarget`): a `read_only_safe` declaration for a URL
+  with a query string is PROVABLY FALSE → `forbidden` (rejected under every
+  policy); a non-http(s) scheme or embedded userinfo → `forbidden`;
+- the agent ENFORCES the verified class: `read_only_safe` admitted under
+  READ_ONLY+; `requires_mutation_policy` admitted under SAFE_MUTATION/
+  ISOLATED_MUTATION only; `forbidden` rejected under every policy;
+- the `PlaywrightBrowserDriver.open()` ALSO validates the URL scheme +
+  userinfo before `page.goto()` (the documented "http(s) URLs only"
+  guarantee made real — defense in depth).
+
+The critical proof: the browser driver is NEVER called for a navigation
+that the policy boundary rejected (6 discriminating tests in
+agent-execution.test.ts §14 + 8 driver-level URL-validation tests).
+
 ## 5. Verification summary (on the implementation branch)
 
-- WORK-065 browser-validation suite: 31 tests (15 enforcement/plan + 14
-  agent execution + 2 real-browser) — all green.
+- WORK-065 browser-validation suite: 75 tests (30 navigation-target + 20
+  agent execution [14 original + 6 navigation-safety] + 15 enforcement/plan
+  + 8 PlaywrightDriver URL-validation + 2 real-browser) — all green.
 - WORK-064 continuous-validation suite: 135 tests — unchanged, all green.
-- static-architecture: 818/818 (14 new WORK-065 invariants + 804 existing).
+- static-architecture: 820/820 (16 new WORK-065 invariants + 804 existing;
+  2 new: navigation-target boundary (o) + driver URL validation (p)).
 - typecheck: 0 errors. lint: 0 errors (2 pre-existing warnings in
   work-032-benchmark.spec.ts, untouched).
 - governance:status: exit 0 (WORK-065 recognized as in_flight on branch

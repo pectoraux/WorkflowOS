@@ -19362,6 +19362,7 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
   const BV_OBSERVATION_CAPTURE = join(BV_INTERNAL, 'observation-capture.ts');
   const BV_AGENT = join(BV_INTERNAL, 'agent.ts');
   const BV_PLAYWRIGHT_DRIVER = join(BV_INTERNAL, 'playwright-browser-driver.ts');
+  const BV_NAVIGATION_TARGET = join(BV_INTERNAL, 'navigation-target.ts');
   const APP_TS = join(BACKEND_ROOT, 'src', 'app.ts');
   const MIGRATIONS_DIR = join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations');
 
@@ -19670,6 +19671,61 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
     // today (production fails closed; the driver adapter is the future binding
     // point). The wiring must NOT launch a browser unguarded:
     expect(appSrc).not.toMatch(/new PlaywrightBrowserDriver\(/);
+  });
+
+  // --- (o) the navigation-target safety boundary is pinned (PR #97 review) --
+
+  it('the navigation-target safety boundary is pinned: a navigate is NOT unconditionally read — the targetPolicy is declared, verified against the URL structure, and enforced', () => {
+    expect(existsSync(BV_NAVIGATION_TARGET), 'navigation-target.ts must exist').toBe(true);
+    const navSrc = stripCodeComments(readFileSync(BV_NAVIGATION_TARGET, 'utf8'));
+    // The closed classification vocabulary:
+    expect(navSrc).toMatch(/'read_only_safe'/);
+    expect(navSrc).toMatch(/'requires_mutation_policy'/);
+    expect(navSrc).toMatch(/'forbidden'/);
+    // Non-http(s) scheme → forbidden:
+    expect(navSrc).toMatch(/protocol !== 'http:' && parsed.protocol !== 'https:'/);
+    // Embedded userinfo → forbidden:
+    expect(navSrc).toMatch(/parsed\.username/);
+    expect(navSrc).toMatch(/parsed\.password/);
+    // A query string declared read_only_safe → forbidden (GET ≠ read-only):
+    expect(navSrc).toMatch(/parsed\.search/);
+    expect(navSrc).toMatch(/declaredPolicy === 'read_only_safe'/);
+    // The enforcement gate calls classifyNavigationTarget for navigate actions:
+    const enforcementSrc = stripCodeComments(readFileSync(BV_EFFECT_POLICY_ENFORCEMENT, 'utf8'));
+    expect(enforcementSrc).toMatch(/action\.kind === 'navigate'/);
+    expect(enforcementSrc).toMatch(/classifyNavigationTarget/);
+    expect(enforcementSrc).toMatch(/targetClass === 'forbidden'/);
+    expect(enforcementSrc).toMatch(/targetClass === 'requires_mutation_policy' && policy === 'READ_ONLY'/);
+    // The navigate action type carries the required targetPolicy field:
+    const typesSrc = stripCodeComments(readFileSync(BV_TYPES, 'utf8'));
+    expect(typesSrc).toMatch(/readonly targetPolicy: NavigationTargetPolicy/);
+    expect(typesSrc).toMatch(/type NavigationTargetPolicy = 'read_only_safe' \| 'requires_mutation_policy'/);
+    // The plan constructor requires targetPolicy on navigate actions:
+    const planSrc = stripCodeComments(readFileSync(BV_PLAN, 'utf8'));
+    expect(planSrc).toMatch(/action\.kind === 'navigate'/);
+    expect(planSrc).toMatch(/targetPolicy/);
+  });
+
+  // --- (p) the PlaywrightBrowserDriver URL validation is pinned (defense in depth) ---
+
+  it('the PlaywrightBrowserDriver validates the URL scheme + userinfo BEFORE page.goto() (the http(s)-only guarantee made real)', () => {
+    const driverSrc = stripCodeComments(readFileSync(BV_PLAYWRIGHT_DRIVER, 'utf8'));
+    // The open() method parses the URL:
+    expect(driverSrc).toMatch(/new URL\(url\)/);
+    // It rejects non-http(s) schemes before page.goto():
+    expect(driverSrc).toMatch(/protocol !== 'http:' && parsed.protocol !== 'https:'/);
+    // It rejects embedded userinfo before page.goto():
+    expect(driverSrc).toMatch(/parsed\.username/);
+    expect(driverSrc).toMatch(/parsed\.password/);
+    // The validation happens BEFORE resolvePage (which creates the context +
+    // page) — the driver does NOT create a page for a bad URL. Pin that the
+    // validation precedes the page.goto call (defense in depth — the gate is
+    // primary, but the driver itself never reaches page.goto() with a bad URL):
+    const validationIdx = driverSrc.indexOf("protocol !== 'http:'");
+    const gotoIdx = driverSrc.indexOf('page.goto(');
+    expect(validationIdx, 'the scheme validation must be present').toBeGreaterThan(-1);
+    expect(gotoIdx, 'the page.goto call must be present').toBeGreaterThan(-1);
+    expect(validationIdx, 'the scheme validation must precede page.goto()').toBeLessThan(gotoIdx);
   });
 });
 

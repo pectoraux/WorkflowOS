@@ -137,7 +137,7 @@ const readPlan = defineBrowserJourneyPlan(
       {
         stepId: 'step-open',
         actions: [
-          { kind: 'navigate', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
+          { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com/sign-in', satisfiesObservationId: 'obs-status' },
           { kind: 'extract', selector: 'h1', satisfiesObservationId: 'obs-heading' },
         ],
       },
@@ -171,7 +171,7 @@ const forbiddenPlan = defineBrowserJourneyPlan(
       {
         stepId: 'step-checkout',
         actions: [
-          { kind: 'navigate', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-confirmation' },
+          { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com/checkout', satisfiesObservationId: 'obs-confirmation' },
           { kind: 'click', selector: 'button#pay' },
         ],
       },
@@ -364,7 +364,7 @@ describe('WORK-065 agent §4 — mutation under READ_ONLY → effect_policy_viol
           {
             stepId: 'step-attempt-click',
             actions: [
-              { kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-ro-status' },
+              { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com', satisfiesObservationId: 'obs-ro-status' },
               { kind: 'click', selector: 'button', satisfiesObservationId: 'obs-ro-clicked' },
             ],
           },
@@ -756,5 +756,310 @@ describe('WORK-065 agent §13 — deterministic outcomes', () => {
     const a = await run();
     const b = await run();
     expect(JSON.stringify(a.run)).toBe(JSON.stringify(b.run));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §14  Navigation-target safety boundary — the driver is NEVER called for a
+//      rejected navigation (the critical proof, PR #97 architect review)
+// ---------------------------------------------------------------------------
+
+describe('WORK-065 agent §14 — the driver is never called for a rejected navigation', () => {
+  // A read-only journey with a network observation (a navigation satisfies it).
+  const navJourney: ValidationJourney = defineValidationJourney({
+    id: 'journey-nav-safety',
+    name: 'A navigation journey',
+    identityRequirement: 'unauthenticated',
+    allowedModes: ['PRE_MERGE'],
+    effectPolicy: 'READ_ONLY',
+    steps: [
+      {
+        id: 'step-navigate',
+        name: 'navigate to the page',
+        expectedObservations: [
+          { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+        ],
+      },
+    ],
+    successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+  });
+
+  it('READ_ONLY + a safe navigation (http, no query, read_only_safe) → the driver IS called → healthy', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/sign-in', status: 200, title: 'Sign in' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/sign-in', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-1',
+      projectId: 'proj-nav-1',
+      runId: 'run-nav-safe',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('healthy');
+    // The driver WAS called (the navigation executed):
+    expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
+  });
+
+  it('READ_ONLY + a query-string navigation (requires_mutation_policy) → the driver is NEVER called → effect_policy_violation', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/unsubscribe?token=abc', status: 200, title: 'Unsubscribed' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/unsubscribe?token=abc', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-2',
+      projectId: 'proj-nav-2',
+      runId: 'run-nav-query-rejected',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
+    if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
+      expect(outcome.run!.outcome!.reason).toMatch(/requires a mutation policy/);
+    }
+    // CRITICAL PROOF: the driver was NEVER called (the navigation was rejected
+    // before page.goto()):
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('READ_ONLY + a file: URL navigation → the driver is NEVER called → effect_policy_violation (forbidden target)', async () => {
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'file:///etc/passwd', status: 200, title: 'passwd' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'file:///etc/passwd', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-3',
+      projectId: 'proj-nav-3',
+      runId: 'run-nav-file-rejected',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
+    if (outcome.run!.outcome!.kind === 'effect_policy_violation') {
+      expect(outcome.run!.outcome!.reason).toMatch(/forbidden/);
+      expect(outcome.run!.outcome!.reason).toMatch(/file:/);
+    }
+    // CRITICAL PROOF: the driver was NEVER called:
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('READ_ONLY + a query-string URL declared read_only_safe (provably false) → the driver is NEVER called → effect_policy_violation (forbidden)', async () => {
+    // The caller LIED: a query string declared read_only_safe. The agent
+    // rejects the declaration before the browser is called.
+    const driver = new FakeBrowserDriver({});
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: navJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/?action=delete', targetPolicy: 'read_only_safe', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      navJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: navJourney,
+      identitySource: unauthenticated,
+      environment: previewReadOnlyEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-4',
+      projectId: 'proj-nav-4',
+      runId: 'run-nav-false-declaration',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
+    expect(outcome.run!.outcome!.kind === 'effect_policy_violation' && outcome.run!.outcome!.reason).toMatch(/forbidden/);
+    // CRITICAL PROOF: the driver was NEVER called:
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('FORBIDDEN + a safe navigation → the driver is NEVER called → effect_policy_violation (FORBIDDEN rejects every action)', async () => {
+    // A FORBIDDEN journey admitted behind the architect-approved safe mechanism.
+    const forbiddenNavJourney: ValidationJourney = defineValidationJourney({
+      id: 'journey-nav-forbidden',
+      name: 'A forbidden navigation journey',
+      identityRequirement: 'authenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'FORBIDDEN',
+      steps: [
+        {
+          id: 'step-navigate',
+          name: 'navigate',
+          expectedObservations: [
+            { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+          ],
+        },
+      ],
+      successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+    });
+    const forbiddenEnv: Environment = describeEnvironment({
+      id: 'env-forbidden',
+      kind: 'preview',
+      acceptedPolicies: ['READ_ONLY', 'SAFE_MUTATION', 'FORBIDDEN'],
+      approvedSafeMechanism: true,
+    });
+    const driver = new FakeBrowserDriver({});
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: forbiddenNavJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/checkout', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      forbiddenNavJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: forbiddenNavJourney,
+      identitySource: synthetic,
+      environment: forbiddenEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-5',
+      projectId: 'proj-nav-5',
+      runId: 'run-nav-forbidden',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('effect_policy_violation');
+    expect(outcome.run!.outcome!.kind === 'effect_policy_violation' && outcome.run!.outcome!.reason).toMatch(/FORBIDDEN/);
+    // CRITICAL PROOF: the driver was NEVER called:
+    expect(driver.recordedCalls).toHaveLength(0);
+  });
+
+  it('SAFE_MUTATION + a query-string navigation (requires_mutation_policy) → the driver IS called (admitted under a mutation policy)', async () => {
+    // A SAFE_MUTATION journey that navigates with a query string (honestly
+    // declared requires_mutation_policy). The navigation is admitted.
+    const mutationNavJourney: ValidationJourney = defineValidationJourney({
+      id: 'journey-nav-mutation',
+      name: 'A mutation navigation journey',
+      identityRequirement: 'authenticated',
+      allowedModes: ['PRE_MERGE'],
+      effectPolicy: 'SAFE_MUTATION',
+      steps: [
+        {
+          id: 'step-navigate',
+          name: 'navigate',
+          expectedObservations: [
+            { id: 'obs-status', stepId: 'step-navigate', kind: 'network', description: 'page loaded', matcher: { kind: 'status_code', status: 200 } },
+          ],
+        },
+      ],
+      successCriteria: [{ id: 'crit', description: 'page loads', requiresObservationIds: ['obs-status'] }],
+    });
+    const driver = new FakeBrowserDriver({
+      navigate: [{ finalUrl: 'https://example.com/save?name=value', status: 200, title: 'Saved' }],
+    });
+    const { agent } = buildAgent(driver, new FakeVerificationService());
+    const plan = defineBrowserJourneyPlan(
+      {
+        journeyId: mutationNavJourney.id,
+        steps: [
+          {
+            stepId: 'step-navigate',
+            actions: [
+              { kind: 'navigate', url: 'https://example.com/save?name=value', targetPolicy: 'requires_mutation_policy', satisfiesObservationId: 'obs-status' },
+            ],
+          },
+        ],
+      },
+      mutationNavJourney,
+    );
+
+    const outcome = await agent.executeValidationRun({
+      journey: mutationNavJourney,
+      identitySource: synthetic,
+      environment: previewMutationEnv,
+      mode: 'PRE_MERGE',
+      trigger: 'PR',
+      plan,
+      verificationRunId: 'ver-nav-6',
+      projectId: 'proj-nav-6',
+      runId: 'run-nav-mutation-admitted',
+      now: fixedClock,
+    });
+
+    expect(outcome.run!.outcome!.kind).toBe('healthy');
+    // The driver WAS called (the navigation executed):
+    expect(driver.recordedCalls.map((c) => c.operation)).toEqual(['open']);
   });
 });

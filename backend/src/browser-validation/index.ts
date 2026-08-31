@@ -36,6 +36,14 @@ export {
 } from './internal/effect-policy-enforcement.js';
 export type { EffectEnforcementDecision } from './internal/effect-policy-enforcement.js';
 export {
+  // §3b the navigation-target safety boundary (PR #97 architect review correction)
+  classifyNavigationTarget,
+} from './internal/navigation-target.js';
+export type {
+  NavigationTargetClass,
+  NavigationTargetDecision,
+} from './internal/navigation-target.js';
+export {
   // §2 the plan constructor
   defineBrowserJourneyPlan,
 } from './internal/plan.js';
@@ -73,6 +81,7 @@ export type {
   // §1 the action vocabulary
   BrowserAction,
   BrowserActionEffect,
+  NavigationTargetPolicy,
   // §2 the plan
   BrowserPlanStep,
   BrowserJourneyPlan,

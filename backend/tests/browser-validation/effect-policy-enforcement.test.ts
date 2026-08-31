@@ -136,7 +136,7 @@ void mutationJourney; // the agent-execution suite exercises the mutation journe
 
 describe('WORK-065 §1 — action effect classification (deterministic, closed)', () => {
   it('navigate/extract/screenshot are read; click/type are mutation', () => {
-    expect(classifyActionEffect({ kind: 'navigate', url: 'https://example.com' })).toBe('read');
+    expect(classifyActionEffect({ kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com' })).toBe('read');
     expect(classifyActionEffect({ kind: 'extract', selector: 'h1', satisfiesObservationId: 'x' })).toBe('read');
     expect(classifyActionEffect({ kind: 'screenshot' })).toBe('read');
     expect(classifyActionEffect({ kind: 'click', selector: 'button' })).toBe('mutation');
@@ -159,7 +159,7 @@ describe('WORK-065 §2 — effect-policy enforcement (fail closed)', () => {
   const crossTenantIsolatedIdentity = bindTestIdentity(isolatedSyntheticAlt, isolatedEnvAlt, 'ISOLATED_MUTATION');
 
   it('a READ action is admitted under every non-FORBIDDEN policy', () => {
-    const navigate: BrowserAction = { kind: 'navigate', url: 'https://example.com' };
+    const navigate: BrowserAction = { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com' };
     expect(enforceEffectPolicy(navigate, 'READ_ONLY', readIdentity, previewEnv).admitted).toBe(true);
     expect(enforceEffectPolicy(navigate, 'SAFE_MUTATION', mutationIdentity, previewEnv).admitted).toBe(true);
     expect(enforceEffectPolicy(navigate, 'ISOLATED_MUTATION', isolatedIdentity, isolatedEnv).admitted).toBe(true);
@@ -183,7 +183,7 @@ describe('WORK-065 §2 — effect-policy enforcement (fail closed)', () => {
     // A FORBIDDEN journey would be admitted by WORK-064 only behind the
     // architect-approved safe mechanism (PRE_MERGE). The browser agent
     // STILL refuses to execute — FORBIDDEN is non-executable in the browser.
-    const navigate: BrowserAction = { kind: 'navigate', url: 'https://example.com' };
+    const navigate: BrowserAction = { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com' };
     const click: BrowserAction = { kind: 'click', selector: 'button' };
     const extract: BrowserAction = { kind: 'extract', selector: 'h1', satisfiesObservationId: 'x' };
     for (const action of [navigate, click, extract]) {
@@ -255,7 +255,7 @@ describe('WORK-065 §3 — plan construction (fail closed)', () => {
           {
             stepId: 'step-open',
             actions: [
-              { kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-status' },
+              { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com', satisfiesObservationId: 'obs-status' },
               { kind: 'extract', selector: 'h1', satisfiesObservationId: 'obs-heading' },
             ],
           },
@@ -298,7 +298,7 @@ describe('WORK-065 §3 — plan construction (fail closed)', () => {
             {
               stepId: 'step-open',
               actions: [
-                { kind: 'navigate', url: 'https://example.com' },
+                { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com' },
                 { kind: 'click', selector: 'button' },
               ],
             },
@@ -355,7 +355,7 @@ describe('WORK-065 §3 — plan construction (fail closed)', () => {
             {
               stepId: 'step-open',
               actions: [
-                { kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-status' },
+                { kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com', satisfiesObservationId: 'obs-status' },
                 { kind: 'extract', selector: 'h1' } as BrowserAction],
             },
           ],
@@ -368,7 +368,7 @@ describe('WORK-065 §3 — plan construction (fail closed)', () => {
   it('a plan that does not match the journey id is rejected', () => {
     expect(() =>
       defineBrowserJourneyPlan(
-        { journeyId: 'wrong-journey', steps: [{ stepId: 'step-open', actions: [{ kind: 'navigate', url: 'https://example.com', satisfiesObservationId: 'obs-status' }] }] },
+        { journeyId: 'wrong-journey', steps: [{ stepId: 'step-open', actions: [{ kind: 'navigate', targetPolicy: 'read_only_safe', url: 'https://example.com', satisfiesObservationId: 'obs-status' }] }] },
         readJourney,
       ),
     ).toThrow(/does not match journey/);

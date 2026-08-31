@@ -34,6 +34,7 @@
 import type { EffectPolicy, Environment, TestIdentityBinding, ExecutionError } from '../../continuous-validation/index.js';
 import type { BrowserAction } from '../types.js';
 import { classifyActionEffect, describeAction } from './browser-action.js';
+import { classifyNavigationTarget } from './navigation-target.js';
 
 /** The enforcement decision (explicit, never inferred). */
 export interface EffectEnforcementDecision {
@@ -50,6 +51,25 @@ export interface EffectEnforcementDecision {
  * effect_policy_violation ExecutionError (the WORK-064 finalization boundary
  * records it as the run's outcome — never healthy).
  *
+ * Evaluation order:
+ *   1. FORBIDDEN policy — rejects EVERY action (the browser agent performs no
+ *      forbidden actions; the architect-approved safe mechanism is the WORK-064
+ *      admission contract, NOT a browser-execution path);
+ *   2. navigate — the navigation-target safety boundary (PR #97 architect
+ *      review correction): the agent classifies the navigation target
+ *      (scheme/userinfo/query-string + the caller's declared targetPolicy)
+ *      and enforces the verified class against the run's EffectPolicy. A
+ *      forbidden target (non-http(s), userinfo, or a provably-false
+ *      read_only_safe declaration with a query string) is rejected under EVERY
+ *      policy. A requires_mutation_policy target is rejected under READ_ONLY.
+ *      The browser driver is NEVER called for a rejected navigation;
+ *   3. read actions (extract, screenshot) — admitted under every non-FORBIDDEN
+ *      policy;
+ *   4. mutation actions (click, type) under READ_ONLY — rejected before
+ *      execution;
+ *   5. ISOLATED_MUTATION — cross-tenant mutation rejected before execution;
+ *   6. SAFE_MUTATION / ISOLATED_MUTATION (with a matching tenant) — admitted.
+ *
  * The `identity` and `environment` are REQUIRED for ISOLATED_MUTATION
  * cross-tenant enforcement (defense in depth — the WORK-064 admission
  * boundary already verified the tenant match; this re-verifies before the
@@ -61,9 +81,9 @@ export function enforceEffectPolicy(
   identity: TestIdentityBinding,
   environment: Environment,
 ): EffectEnforcementDecision {
-  // FORBIDDEN — the browser agent performs NO forbidden actions. The safe
-  // mechanism is the WORK-064 admission contract; the agent treats FORBIDDEN
-  // as a non-executable class.
+  // 1. FORBIDDEN — the browser agent performs NO forbidden actions. The safe
+  //    mechanism is the WORK-064 admission contract; the agent treats FORBIDDEN
+  //    as a non-executable class.
   if (policy === 'FORBIDDEN') {
     return {
       admitted: false,
@@ -74,14 +94,50 @@ export function enforceEffectPolicy(
     };
   }
 
+  // 2. navigate — the navigation-target safety boundary. A navigation is NOT
+  //    unconditionally a read action (PR #97 architect review correction): a
+  //    browser navigation can have externally observable side effects even
+  //    without a DOM mutation (a GET endpoint that mutates, a query string
+  //    that carries mutation semantics, a non-http(s) scheme, embedded
+  //    userinfo). The agent classifies the target against the caller's
+  //    declared targetPolicy and the run's EffectPolicy BEFORE the browser is
+  //    called. The driver is NEVER called for a rejected navigation.
+  if (action.kind === 'navigate') {
+    const decision = classifyNavigationTarget(action.url, action.targetPolicy);
+    if (decision.targetClass === 'forbidden') {
+      return {
+        admitted: false,
+        executionError: {
+          kind: 'effect_policy_violation',
+          reason: `navigation target is forbidden — ${decision.reason} (the browser driver is never called for a forbidden navigation target)`,
+        },
+      };
+    }
+    if (decision.targetClass === 'requires_mutation_policy' && policy === 'READ_ONLY') {
+      return {
+        admitted: false,
+        executionError: {
+          kind: 'effect_policy_violation',
+          reason: `navigation target requires a mutation policy — ${decision.reason} (a READ_ONLY run cannot perform a navigation that may have side effects; the browser driver is never called for a rejected navigation)`,
+        },
+      };
+    }
+    // read_only_safe under READ_ONLY/SAFE_MUTATION/ISOLATED_MUTATION, OR
+    // requires_mutation_policy under SAFE_MUTATION/ISOLATED_MUTATION — admitted.
+    return { admitted: true, executionError: null };
+  }
+
   const effect = classifyActionEffect(action);
 
-  // READ actions are admitted under every non-FORBIDDEN policy.
+  // 3. READ actions (extract, screenshot) are admitted under every
+  //    non-FORBIDDEN policy. (navigate is handled above — it is NOT
+  //    unconditionally read.)
   if (effect === 'read') {
     return { admitted: true, executionError: null };
   }
 
-  // MUTATION actions under READ_ONLY — rejected before execution.
+  // 4. MUTATION actions (click, type) under READ_ONLY — rejected before
+  //    execution.
   if (policy === 'READ_ONLY') {
     return {
       admitted: false,
@@ -92,9 +148,9 @@ export function enforceEffectPolicy(
     };
   }
 
-  // ISOLATED_MUTATION — cross-tenant mutation is rejected before execution
-  // (defense in depth: the WORK-064 admission boundary already verified the
-  // tenant match; this re-verifies at execution time).
+  // 5. ISOLATED_MUTATION — cross-tenant mutation is rejected before execution
+  //    (defense in depth: the WORK-064 admission boundary already verified the
+  //    tenant match; this re-verifies at execution time).
   if (policy === 'ISOLATED_MUTATION') {
     if (identity.tenantId === null || identity.tenantId === '') {
       return {
@@ -119,7 +175,7 @@ export function enforceEffectPolicy(
     }
   }
 
-  // SAFE_MUTATION and ISOLATED_MUTATION (with a matching tenant) admit the
-  // mutation.
+  // 6. SAFE_MUTATION and ISOLATED_MUTATION (with a matching tenant) admit the
+  //    mutation.
   return { admitted: true, executionError: null };
 }

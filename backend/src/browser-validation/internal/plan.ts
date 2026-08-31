@@ -112,6 +112,20 @@ export function defineBrowserJourneyPlan(
         );
       }
       const satisfiesId = (action as { satisfiesObservationId?: unknown }).satisfiesObservationId;
+      // navigate MUST declare its targetPolicy (the caller's explicit
+      // declaration of the navigation's effect class — the navigation-target
+      // safety boundary, PR #97 architect review correction). A navigate
+      // without a targetPolicy is rejected — the caller must answer "is this
+      // navigation read_only_safe or requires_mutation_policy?"
+      if (action.kind === 'navigate') {
+        const tp = (action as { targetPolicy?: unknown }).targetPolicy;
+        if (tp !== 'read_only_safe' && tp !== 'requires_mutation_policy') {
+          throw new BrowserValidationError(
+            'BROWSER_PLAN_INVALID',
+            `plan for journey ${journey.id}: step ${planStep.stepId} — a navigate action must declare targetPolicy 'read_only_safe' | 'requires_mutation_policy' (the navigation safety boundary)`,
+          );
+        }
+      }
       // extract MUST satisfy an observation (an extraction that observes
       // nothing the journey declared is meaningless).
       if (action.kind === 'extract' && (typeof satisfiesId !== 'string' || satisfiesId.trim() === '')) {

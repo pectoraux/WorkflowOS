@@ -120,6 +120,29 @@ export class PlaywrightBrowserDriver implements BrowserDriver {
   }
 
   async open(url: string, opts: BrowserDriverCallOptions): Promise<BrowserNavigationResult> {
+    // Defense in depth: validate the URL scheme + userinfo BEFORE creating a
+    // page or calling page.goto(). The effect-policy enforcement gate is the
+    // PRIMARY enforcement (it classifies non-http(s)/userinfo/query-string
+    // targets and rejects them before the driver is called); this validation
+    // is the driver's OWN backstop — the documented "http(s) URLs only"
+    // guarantee made real. A bad URL that somehow reaches the driver throws
+    // here without ever calling page.goto() (proven by the URL-validation test).
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`browser url is not parseable: ${JSON.stringify(url)}`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(
+        `browser url scheme '${parsed.protocol}' is not http(s) — the PlaywrightBrowserDriver rejects unsupported schemes before page.goto()`,
+      );
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new Error(
+        'browser url must not embed userinfo (username:password@) — the PlaywrightBrowserDriver rejects userinfo before page.goto()',
+      );
+    }
     const page = await this.resolvePage(opts);
     const response = await page.goto(url, { timeout: opts.timeoutMs, waitUntil: 'domcontentloaded' });
     const finalUrl = page.url();
