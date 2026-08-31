@@ -1110,9 +1110,12 @@ describe('WORK-051 — ArchitectureCheckpointService (application-layer orchestr
           // WORK-063's spec): 0059 is the identity-runtime migration
           // (wfos_user_identities, wfos_sessions, wfos_service_accounts,
           // wfos_capabilities + the capability→permission mapping + the
-          // scopes extension on wfos_api_key_credentials). The self-host head
-          // pin advances to 0059.
-          expectedLastMigrationNumber: 59,
+          // scopes extension on wfos_api_key_credentials); 0060 is the OAuth
+          // browser-binding pending-flows table (wfos_oauth_pending_flows —
+          // binds the OAuth callback to the distinct login transaction +
+          // one-time-use replay protection). The self-host head pin advances
+          // to 0060.
+          expectedLastMigrationNumber: 60,
         },
       },
     ]);

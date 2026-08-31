@@ -7,25 +7,51 @@ import type {
   EmailAuthProvider,
   IdentityResolver,
   ApiKeyCredentialProvisioner,
+  OAuthPendingFlowRepository,
 } from '@modules/auth/index.js';
 import type { AuditEventWriter } from '@modules/audit/index.js';
 import type { UserRepository } from '@modules/users/index.js';
 import type { OrganizationRepository, MembershipRepository } from '@modules/organizations/index.js';
 import { requireUser } from '../plugins/auth.plugin.js';
-import {
-  SESSION_COOKIE_NAME,
-  OAUTH_STATE_COOKIE_NAME,
-} from '../plugins/auth.plugin.js';
-import { randomBytes } from 'node:crypto';
+import { SESSION_COOKIE_NAME } from '../plugins/auth.plugin.js';
+import { createHash, randomBytes } from 'node:crypto';
 
 /**
- * Generate a high-entropy OAuth `state` parameter for CSRF protection. The
- * pending state is stored in a short-lived httpOnly cookie and verified on
- * callback. (Inline — not imported from /auth internal, to respect the API-
- * layer boundary discipline PLAT-AC-02.)
+ * The OAuth browser-binding cookie name. A high-entropy secret set on
+ * /auth/login/:provider and verified (by digest, server-side) on
+ * /auth/callback/:provider. Distinct from the OAuth `state` parameter: the
+ * state is sent to the provider (visible in the URL); the browser-binding
+ * secret stays in the httpOnly cookie (never sent to the provider). The
+ * callback binds the two: the pending flow is recorded server-side with the
+ * digest of the browser-binding secret, so only the browser that started the
+ * flow can consume it (cross-browser rejection), and the flow is one-time-use
+ * (replay rejection).
+ */
+const OAUTH_FLOW_COOKIE_NAME = 'wfos_oauth_flow';
+/** The OAuth pending-flow lifetime (matches the cookie max-age). */
+const OAUTH_FLOW_TTL_SECONDS = 10 * 60;
+
+/**
+ * Generate a high-entropy OAuth `state` parameter (CSRF). The state is sent
+ * to the provider (visible in the redirect URL) and recorded server-side.
  */
 function generateOAuthState(): string {
   return randomBytes(24).toString('base64url');
+}
+
+/**
+ * Generate a high-entropy browser-binding secret. This value lives ONLY in
+ * the httpOnly `wfos_oauth_flow` cookie — it is NEVER sent to the provider,
+ * NEVER persisted (only its SHA-256 digest is stored server-side, SEC-AC-02).
+ * It binds the pending OAuth flow to the browser that started it.
+ */
+function generateBrowserBindingSecret(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/** SHA-256 hex digest of the browser-binding secret (the server stores only this). */
+function browserBindingDigest(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex');
 }
 
 /**
@@ -80,6 +106,13 @@ export interface AuthRouteDeps {
   /** Whether to set the Secure flag on cookies (true in HTTPS production). */
   cookieSecure?: boolean;
   authorizationService: AuthorizationService;
+  /**
+   * WORK-074 (OAuth browser-binding hardening): the server-side pending OAuth
+   * flow repository. Required when `oauthProviders` is present (the OAuth
+   * login/callback routes use it to bind the callback to the distinct login
+   * transaction + provide one-time-use replay protection).
+   */
+  oauthPendingFlows?: OAuthPendingFlowRepository;
   /**
    * WORK-074 audit coverage (invariant #12). When present, login/logout,
    * credential issuance, and service-account creation events are recorded on
@@ -165,19 +198,42 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
       await reply.code(503).send({ error: 'provider-not-configured', provider });
       return;
     }
+    if (!deps.oauthPendingFlows) {
+      // The runtime was wired with OAuth providers but without the pending-flow
+      // repository — a configuration error. Fail closed (do NOT start a flow
+      // that cannot be safely completed).
+      await reply.code(503).send({ error: 'oauth-pending-flow-store-not-configured' });
+      return;
+    }
+    // Generate the OAuth `state` (CSRF — visible in the redirect URL) AND a
+    // browser-binding secret (NEVER sent to the provider; lives only in the
+    // httpOnly wfos_oauth_flow cookie). The two together bind the pending
+    // flow to the browser that started it.
     const state = generateOAuthState();
-    const redirectUri = callbackUrl(deps.publicBaseUrl, provider);
-    // Store the pending state in a short-lived httpOnly cookie (CSRF).
+    const browserBindingSecret = generateBrowserBindingSecret();
+    const browserBinding = browserBindingDigest(browserBindingSecret);
+    // Record the pending flow server-side (PostgreSQL authoritative). Only the
+    // digest is stored — the raw secret is in the cookie (SEC-AC-02).
+    await deps.oauthPendingFlows.create({
+      state,
+      provider,
+      browserBinding,
+      ttlSeconds: OAUTH_FLOW_TTL_SECONDS,
+    });
+    // Set the browser-binding cookie (httpOnly, short-lived). SameSite=Lax so
+    // the OAuth callback redirect (a top-level navigation from the provider)
+    // carries it back to the callback.
     reply.header(
       'Set-Cookie',
-      cookieHeader(OAUTH_STATE_COOKIE_NAME, state, {
+      cookieHeader(OAUTH_FLOW_COOKIE_NAME, browserBindingSecret, {
         httpOnly: true,
         sameSite: 'lax',
         secure: deps.cookieSecure ?? false,
         path: SESSION_COOKIE_PATH,
-        maxAge: 10 * 60, // 10 minutes
+        maxAge: OAUTH_FLOW_TTL_SECONDS,
       }),
     );
+    const redirectUri = callbackUrl(deps.publicBaseUrl, provider);
     const url = oauth.getAuthorizationUrl(state, redirectUri);
     await reply.redirect(302, url);
   });
@@ -190,10 +246,46 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
       await reply.code(503).send({ error: 'provider-not-configured', provider });
       return;
     }
-    const pendingState = readCookie(req, OAUTH_STATE_COOKIE_NAME);
+    if (!deps.oauthPendingFlows) {
+      await reply.code(503).send({ error: 'oauth-pending-flow-store-not-configured' });
+      return;
+    }
+    if (!query.code || !query.state) {
+      await reply.code(400).send({ error: 'invalid-callback', reason: 'missing-code-or-state' });
+      return;
+    }
+    // Read the browser-binding secret from the cookie. Browser B (which did
+    // NOT start this flow) has a different or no wfos_oauth_flow cookie → its
+    // digest will not match the pending flow's browser_binding → rejected.
+    const browserBindingSecret = readCookie(req, OAUTH_FLOW_COOKIE_NAME);
+    if (!browserBindingSecret) {
+      await reply.code(400).send({ error: 'invalid-callback', reason: 'missing-browser-binding' });
+      return;
+    }
+    const browserBinding = browserBindingDigest(browserBindingSecret);
+
+    // Atomically consume the pending flow. The atomic UPDATE (WHERE
+    // consumed_at IS NULL) ensures exactly one consumer wins under a
+    // concurrent replay; the browser-binding digest in the WHERE clause
+    // rejects a cross-browser presentation BEFORE the consume.
+    const consumeResult = await deps.oauthPendingFlows.consume({
+      state: query.state,
+      provider,
+      browserBinding,
+    });
+    if (consumeResult.kind !== 'consumed') {
+      // Typed denials: unknown / expired / browser-mismatch / replay.
+      await reply.code(400).send({
+        error: 'invalid-callback',
+        reason: consumeResult.kind,
+        detail: consumeResult.reason,
+      });
+      return;
+    }
+    // Clear the browser-binding cookie (one-time use — the flow is consumed).
     reply.header(
       'Set-Cookie',
-      cookieHeader(OAUTH_STATE_COOKIE_NAME, '', {
+      cookieHeader(OAUTH_FLOW_COOKIE_NAME, '', {
         httpOnly: true,
         sameSite: 'lax',
         secure: deps.cookieSecure ?? false,
@@ -201,11 +293,6 @@ export async function authRoutes(app: FastifyInstance, deps: AuthRouteDeps): Pro
         maxAge: 0,
       }),
     );
-    if (!query.code || !query.state || query.state !== pendingState) {
-      // CSRF state mismatch — reject the callback (login CSRF protection).
-      await reply.code(400).send({ error: 'invalid-state' });
-      return;
-    }
     const redirectUri = callbackUrl(deps.publicBaseUrl, provider);
     const identity = await oauth.exchangeCode(query.code, query.state, redirectUri);
     if (!identity) {

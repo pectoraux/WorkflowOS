@@ -32,8 +32,6 @@ import { runWithExecutionContext } from '@platform/execution-context.js';
 
 /** The httpOnly cookie name carrying the opaque session token. */
 export const SESSION_COOKIE_NAME = 'wfos_session';
-/** The httpOnly cookie name carrying the pending OAuth state (CSRF). */
-export const OAUTH_STATE_COOKIE_NAME = 'wfos_oauth_state';
 
 export interface AuthPluginDeps {
   /** Legacy WORK-002 auth provider (used when requestAuthenticator is absent). */

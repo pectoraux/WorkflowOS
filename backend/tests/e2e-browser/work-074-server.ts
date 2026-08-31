@@ -31,10 +31,10 @@ async function main(): Promise<void> {
   });
 
   await server.app.listen({ port: 3001, host: '0.0.0.0' });
-  console.log('WORK-074 E2E backend listening on http://0.0.0.0:3001');
-  console.log('  seeded user: demo@example.com / demo-password-2026');
-  console.log('  seeded org:', org.id);
-  console.log('  seeded project:', project.id);
+  process.stdout.write('WORK-074 E2E backend listening on http://0.0.0.0:3001\n');
+  process.stdout.write('  seeded user: demo@example.com / demo-password-2026\n');
+  process.stdout.write(`  seeded org: ${org.id}\n`);
+  process.stdout.write(`  seeded project: ${project.id}\n`);
 
   // Keep running until interrupted.
   process.on('SIGTERM', async () => { await server.close(); await stack.teardown(); process.exit(0); });

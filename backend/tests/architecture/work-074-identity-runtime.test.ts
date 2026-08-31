@@ -44,6 +44,34 @@ describe('WORK-074 — static architecture invariants (no second authority)', ()
     expect(src).toMatch(/ADD COLUMN scopes/);
   });
 
+  it('migration 0060 creates the OAuth browser-binding pending-flow table', () => {
+    const path = join(BACKEND_ROOT, 'src/platform/postgres/migrations/0060_oauth_pending_flows.sql');
+    expect(existsSync(path)).toBe(true);
+    const src = readFileSync(path, 'utf8');
+    expect(src).toMatch(/CREATE TABLE wfos_oauth_pending_flows/);
+    // The state is UNIQUE so a callback resolves at most one pending flow.
+    expect(src).toMatch(/state\s+TEXT\s+NOT\s+NULL\s+UNIQUE/);
+    // The browser_binding is the SHA-256 digest of the httpOnly cookie secret.
+    expect(src).toMatch(/browser_binding\s+TEXT\s+NOT\s+NULL/);
+    // The flow is one-time-use: consumed_at is NULL until the callback wins.
+    expect(src).toMatch(/consumed_at\s+TIMESTAMPTZ/);
+    expect(src).toMatch(/expires_at\s+TIMESTAMPTZ\s+NOT\s+NULL/);
+  });
+
+  it('the auth route uses the server-side pending-flow store for OAuth (not a state cookie alone)', () => {
+    const route = join(BACKEND_ROOT, 'src/api/routes/auth.route.ts');
+    const src = readFileSync(route, 'utf8');
+    // /auth/login/:provider creates a pending flow + sets the browser-binding cookie.
+    expect(src).toMatch(/oauthPendingFlows\.create\(/);
+    expect(src).toMatch(/OAUTH_FLOW_COOKIE_NAME/);
+    expect(src).toMatch(/browserBindingDigest/);
+    // /auth/callback/:provider consumes the flow atomically (replay rejection).
+    expect(src).toMatch(/oauthPendingFlows\.consume\(/);
+    // The OLD state-cookie approach is gone (no wfos_oauth_state cookie).
+    expect(src).not.toMatch(/wfos_oauth_state/);
+    expect(src).not.toMatch(/OAUTH_STATE_COOKIE_NAME/);
+  });
+
   it('the runtime identity source files live under src/modules/auth/internal/ (the /auth boundary)', () => {
     const authInternal = join(BACKEND_ROOT, 'src/modules/auth/internal');
     const files = readdirSync(authInternal);
@@ -57,6 +85,7 @@ describe('WORK-074 — static architecture invariants (no second authority)', ()
     expect(files).toContain('identity-resolver.ts');
     expect(files).toContain('request-authenticator.ts');
     expect(files).toContain('password-hash.ts');
+    expect(files).toContain('pg-oauth-pending-flow-repository.ts');
   });
 
   it('only src/modules/auth/ declares an AuthorizationService implementation', () => {

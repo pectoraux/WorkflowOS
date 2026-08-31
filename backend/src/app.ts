@@ -38,10 +38,12 @@ import {
   GitHubOAuthProvider,
   fetchOAuthHttpClient,
 } from './modules/auth/internal/oauth-provider.js';
+import { PgOAuthPendingFlowRepository } from './modules/auth/internal/pg-oauth-pending-flow-repository.js';
 import type {
   SessionService,
   ServiceAccountRepository,
   OAuthProvider,
+  OAuthPendingFlowRepository,
 } from '@modules/auth/index.js';
 import type { UserRepository } from '@modules/users/index.js';
 import { PgUserRepository } from './modules/users/internal/pg-user-repository.js';
@@ -425,6 +427,8 @@ export interface AppDeps {
   requestAuthenticator?: RequestAuthenticator;
   /** WORK-074: OAuth providers keyed by name (google/github). Present when env configures them. */
   oauthProviders?: Record<string, OAuthProvider>;
+  /** WORK-074 (OAuth browser-binding): the server-side pending OAuth flow repository. Present when a database is configured. */
+  oauthPendingFlows?: OAuthPendingFlowRepository;
   /** WORK-002: user repository. Present when a database is configured. */
   userRepository?: UserRepository;
   /** WORK-002: organization repository. Present when a database is configured. */
@@ -821,6 +825,7 @@ export async function buildApp(
   let emailAuthProvider: EmailAuthProvider | undefined;
   let requestAuthenticator: RequestAuthenticator | undefined;
   let oauthProviders: Record<string, OAuthProvider> | undefined;
+  let oauthPendingFlows: OAuthPendingFlowRepository | undefined;
   let userRepository: UserRepository | undefined;
   let organizationRepository: OrganizationRepository | undefined;
   let membershipRepo: MembershipRepository | undefined;
@@ -1213,6 +1218,11 @@ export async function buildApp(
     // -----------------------------------------------------------------------
     sessionService = new PgSessionService(database);
     serviceAccountRepository = new PgServiceAccountRepository(database);
+    // WORK-074 (OAuth browser-binding): the server-side pending OAuth flow
+    // repository. Constructed whenever a database is present (the OAuth
+    // login/callback routes use it to bind the callback to the distinct login
+    // transaction + provide one-time-use replay protection).
+    oauthPendingFlows = new PgOAuthPendingFlowRepository(database);
     const userIdentityRepository = new PgUserIdentityRepository(database);
     const userPasswordRepository = new PgUserPasswordRepository(database);
     identityResolver = new IdentityResolver(userRepository, userIdentityRepository);
@@ -2215,6 +2225,7 @@ export async function buildApp(
       emailAuthProvider,
       requestAuthenticator,
       oauthProviders,
+      oauthPendingFlows,
       userRepository,
       organizationRepository,
       membershipRepository: membershipRepo,

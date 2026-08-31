@@ -17,6 +17,7 @@ import {
   GoogleOidcProvider,
   GitHubOAuthProvider,
 } from '../../src/modules/auth/internal/oauth-provider.js';
+import { PgOAuthPendingFlowRepository } from '../../src/modules/auth/internal/pg-oauth-pending-flow-repository.js';
 import type { OAuthHttpClient, OAuthProvider } from '@modules/auth/index.js';
 import { EnvSecretStore, InMemoryQueue } from '@platform/index.js';
 import { authRoutes } from '../../src/api/routes/auth.route.js';
@@ -35,6 +36,7 @@ export interface TestRuntimeStack extends TestAuthStack {
   sessionService: PgSessionService;
   serviceAccountRepository: PgServiceAccountRepository;
   capabilityPermissionRepository: PgCapabilityPermissionRepository;
+  oauthPendingFlows: PgOAuthPendingFlowRepository;
   userIdentityRepository: PgUserIdentityRepository;
   userPasswordRepository: PgUserPasswordRepository;
   emailProvider: EmailAuthProvider;
@@ -67,6 +69,7 @@ export async function buildRuntimeStack(
   const sessionService = new PgSessionService(db);
   const serviceAccountRepository = new PgServiceAccountRepository(db);
   const capabilityPermissionRepository = new PgCapabilityPermissionRepository(db);
+  const oauthPendingFlows = new PgOAuthPendingFlowRepository(db);
   const userIdentityRepository = new PgUserIdentityRepository(db);
   const userPasswordRepository = new PgUserPasswordRepository(db);
 
@@ -98,6 +101,7 @@ export async function buildRuntimeStack(
     sessionService,
     serviceAccountRepository,
     capabilityPermissionRepository,
+    oauthPendingFlows,
     userIdentityRepository,
     userPasswordRepository,
     emailProvider,
@@ -158,6 +162,7 @@ export async function buildRuntimeServer(stack: TestRuntimeStack, options: {
         getSecret: (key: string) => Promise.resolve(process.env[key] ?? null),
       },
       ...(options.oauthProviders ? { oauthProviders: options.oauthProviders } : {}),
+      oauthPendingFlows: stack.oauthPendingFlows,
       publicBaseUrl: 'http://localhost:3001',
       cookieSecure: false,
       authorizationService: stack.runtimeAuthorizationService,

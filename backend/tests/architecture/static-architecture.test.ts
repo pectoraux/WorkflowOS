@@ -11218,7 +11218,7 @@ describe('WORK-040 invariants — Continuous Development Planner (planner capabi
     // The planner evidence lives in the existing Work Item metadata.planner
     // JSONB; no planner-owned table exists.
     const last = migrations[migrations.length - 1];
-    expect(last, 'WORK-040 adds no migration (the last migration is the WORK-074 identity-runtime migration 0059 — added by WORK-074, the runtime of WORK-063 spec, AFTER the WORK-062 orchestration substrate ledger 0058, the WORK-046 delegation coordination ledger 0057, and the merged WORK-051 migrations 0052–0056; WORK-040 itself added no planner-owned table)').toMatch(/^0059_/);
+    expect(last, 'WORK-040 adds no migration (the last migration is the WORK-074 OAuth browser-binding migration 0060 — added by WORK-074 AFTER the identity-runtime migration 0059, the WORK-062 orchestration substrate ledger 0058, the WORK-046 delegation coordination ledger 0057, and the merged WORK-051 migrations 0052–0056; WORK-040 itself added no planner-owned table)').toMatch(/^0060_/);
     // The planner domain must NOT define any CREATE TABLE.
     const files = listTsFiles(DP_DIR);
     expect(files.length, 'src/development-planner/ must contain implementation files').toBeGreaterThan(0);
@@ -17861,8 +17861,8 @@ describe('WORK-047 invariants — Agent Intelligence (advisory/ranking only, nev
     const migrations = readdirSync(join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations'))
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    expect(migrations[migrations.length - 1]).toMatch(/^0059_/);
-    expect(migrations.some((m) => m.startsWith('0060'))).toBe(false);
+    expect(migrations[migrations.length - 1]).toMatch(/^0060_/);
+    expect(migrations.some((m) => m.startsWith('0061'))).toBe(false);
   });
 
   // --- (f) DETERMINISM — the documented constants + the total-order tie-break --
@@ -18813,11 +18813,10 @@ describe('WORK-064 invariants — Continuous Product Validation (the domain/mode
 
   it('no migration or table creates a validation evidence/journey/run store (NO schema migration is authorized by WORK-064)', () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
-    // The migration set is the pre-WORK-064 baseline (58) + WORK-074's
-    // identity-runtime migration 0059 (the runtime of WORK-063's spec — a
-    // distinct, architect-gated Work Order). WORK-064 itself authorized NO
-    // schema migration.
-    expect(migrationFiles).toHaveLength(59);
+    // The migration set is the pre-WORK-064 baseline (58) + WORK-074's two
+    // migrations (0059 identity-runtime + 0060 OAuth browser-binding pending
+    // flows). WORK-064 itself authorized NO schema migration.
+    expect(migrationFiles).toHaveLength(60);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(

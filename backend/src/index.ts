@@ -79,6 +79,7 @@ async function main(): Promise<void> {
                 getSecret: (key: string) => Promise.resolve(process.env[key] ?? null),
               },
               ...(app.deps.oauthProviders ? { oauthProviders: app.deps.oauthProviders } : {}),
+              ...(app.deps.oauthPendingFlows ? { oauthPendingFlows: app.deps.oauthPendingFlows } : {}),
               publicBaseUrl: process.env.WORKFLOWOS_PUBLIC_BASE_URL,
               cookieSecure: process.env.CORS_ORIGIN?.startsWith('https://') ?? false,
               authorizationService: app.deps.authorizationService,
