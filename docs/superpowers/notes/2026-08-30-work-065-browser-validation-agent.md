@@ -405,19 +405,41 @@ as the journey's effect policy and steps — the journey authority's own
 canonical state.
 
 ## 5. Verification summary
-## 5. Verification summary (on the implementation branch)
+## 5. Verification summary (on the implementation branch, post-fourth-correction)
 
-- WORK-065 browser-validation suite: 83 tests (39 navigation-target + 23
-  agent execution [14 original + 7 navigation-safety + 2 binding-validation]
-  + 15 enforcement/plan + 8 PlaywrightDriver URL-validation + 2 real-browser)
-  — all green.
-- WORK-064 continuous-validation suite: 135 tests — unchanged, all green.
-- static-architecture: 820/820 (16 new WORK-065 invariants + 804 existing;
-  invariant (o) updated to pin the journey-bound provenance).
-- typecheck: 0 errors. lint: 0 errors (2 pre-existing warnings in
+- WORK-065 browser-validation suite: 91 tests (39 navigation-target [the §1
+  entry-validation tests now target the WORK-064 boundary guard + the §5/§6
+  journey-declaration rewrites] + 27 agent execution [14 original + 7 §14
+  navigation-safety + 6 §15 provenance proofs, including the architect's
+  required forged-declaration negative, the matching-declaration rejection,
+  the null-smuggle rejection, the positive control, the canonical-state
+  enforcement, and the barrel-absence proof] + 15 effect-policy-enforcement
+  + 8 PlaywrightDriver URL-validation + 2 real-browser) — all green,
+  including the real-Chromium path driving the journey-owned declaration.
+- WORK-064 continuous-validation suite: 144 tests (validation-domain 38, +9
+  journey-owned declaration guards: default [], frozen,
+  non-array/non-string/unparseable/non-http(s)/userinfo/empty rejected at
+  defineValidationJourney, the exported boundary guard) — all green.
+- static-architecture: 839/839 (invariant (o) re-pinned to the
+  journey-owned model: the ValidationJourney interface field + the
+  declaration-boundary validation in WORK-064's types + NO declaration
+  surface in browser-validation + the closed ExecuteValidationRunInput
+  interface + the agent's runtime provenance gate + the canonical
+  allowlist read).
+- FULL suite, real PostgreSQL (the CI-equivalent): 134 files / 2890 tests /
+  0 failed. FULL suite, PGlite: 2846 passed / 0 failed / 44 real-PG-only
+  skipped. typecheck: 0 errors. lint: 0 errors (2 pre-existing warnings in
   work-032-benchmark.spec.ts, untouched).
-- governance:status: exit 0 (WORK-065 recognized as in_flight on branch
-  feat/work-065-browser-validation-agent).
+- governance:status: exit 1 with the PRE-EXISTING WORK-074 gap (MERGED
+  cdedd0ca but canonical in_flight — the §34.8 post-merge finalization
+  window that PR #100 owns, NOT this change; the branch's governance
+  snapshot tests expect exactly this gap and pass). Zero governance-state
+  files touched by the correction commits.
+- CI (the 0b6b518 backend failure): discriminated as the known
+  cross-mode-handoff relay-drain CI-starvation flake (zero coupling with
+  this PR's diff; the same signature on main's own cdedd0ca run and a week
+  of unrelated PRs; ~1.4s local convergence) — the R1-#2a/#2b budgets
+  recalibrated 45s→120s as a separate reviewable commit.
 
 NOT merged; NOT verified — the architect's review and the merge gate remain
 the only completion event (§34.8/ADR-0007).
