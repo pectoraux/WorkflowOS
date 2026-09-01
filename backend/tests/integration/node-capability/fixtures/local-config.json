@@ -1,0 +1,6 @@
+{
+  "fixtureKind": "two-host-dogfood",
+  "source": "local-config",
+  "operatorSetting": "notify-on-completion",
+  "deterministic": true
+}
