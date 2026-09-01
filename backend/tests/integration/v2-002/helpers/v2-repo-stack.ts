@@ -122,19 +122,27 @@ export async function buildV2RepoStack(): Promise<V2RepoStack> {
 export async function callRepo(
   server: FastifyInstance,
   apiKey: string,
-  method: string,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   url: string,
-  payload?: unknown,
+  payload?: Record<string, unknown>,
 ): Promise<{
   statusCode: number;
   body: Record<string, unknown>;
 }> {
-  const res = await server.inject({
+  const options: {
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+    url: string;
+    headers: Record<string, string>;
+    payload?: Record<string, unknown>;
+  } = {
     method,
     url,
     headers: { 'x-api-key': apiKey },
-    ...(payload !== undefined ? { payload } : {}),
-  });
+  };
+  if (payload !== undefined) {
+    options.payload = payload;
+  }
+  const res = await server.inject(options);
   let body: Record<string, unknown> = {};
   if (typeof res.body === 'string' && res.body.length > 0) {
     try {

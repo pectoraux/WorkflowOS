@@ -11218,7 +11218,7 @@ describe('WORK-040 invariants — Continuous Development Planner (planner capabi
     // The planner evidence lives in the existing Work Item metadata.planner
     // JSONB; no planner-owned table exists.
     const last = migrations[migrations.length - 1];
-    expect(last, 'WORK-040 adds no migration (the last migration is WORK-074\u2019s identity runtime 0059 \u2014 the WORK-063 RUNTIME activation \u2014 after the WORK-062 orchestration substrate ledger 0058, the WORK-046 delegation coordination ledger 0057, and the merged WORK-051 migrations 0052\u20130056: /architecture-owned assertion storage 0052, /verification orchestration identity 0053, the governed impact declaration 0054, /workflows governed PR intents 0055 + the adoption origin 0056; no planner-owned table)').toMatch(/^0059_/);
+    expect(last, 'WORK-040 adds no migration (the last migration is V2-002\u2019s workflow repository 0060 \u2014 after WORK-074\u2019s identity runtime 0059 \u2014 the WORK-063 RUNTIME activation \u2014 the WORK-062 orchestration substrate ledger 0058, the WORK-046 delegation coordination ledger 0057, and the merged WORK-051 migrations 0052\u20130056: /architecture-owned assertion storage 0052, /verification orchestration identity 0053, the governed impact declaration 0054, /workflows governed PR intents 0055 + the adoption origin 0056; no planner-owned table)').toMatch(/^0060_/);
     // The planner domain must NOT define any CREATE TABLE.
     const files = listTsFiles(DP_DIR);
     expect(files.length, 'src/development-planner/ must contain implementation files').toBeGreaterThan(0);
@@ -17864,10 +17864,12 @@ describe('WORK-047 invariants — Agent Intelligence (advisory/ranking only, nev
     const migrations = readdirSync(join(BACKEND_ROOT, 'src', 'platform', 'postgres', 'migrations'))
       .filter((f) => f.endsWith('.sql'))
       .sort();
-    // Baseline updated by WORK-074 (the identity runtime 0059 — the WORK-063
+    // Baseline advanced by V2-002 (the workflow repository migration 0060 —
+    // Work Order V2-002 "Migration is additive and authority remains
+    // PostgreSQL"), after WORK-074's identity runtime 0059 (the WORK-063
     // RUNTIME activation); WORK-047 still declares no migration of its own.
-    expect(migrations[migrations.length - 1]).toMatch(/^0059_/);
-    expect(migrations.some((m) => m.startsWith('0060'))).toBe(false);
+    expect(migrations[migrations.length - 1]).toMatch(/^0060_/);
+    expect(migrations.some((m) => m.startsWith('0061'))).toBe(false);
   });
 
   // --- (f) DETERMINISM — the documented constants + the total-order tie-break --
@@ -18822,9 +18824,10 @@ describe('WORK-064 invariants — Continuous Product Validation (the domain/mode
   it('no migration or table creates a validation evidence/journey/run store (NO schema migration is authorized by WORK-064)', () => {
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
     // The migration set grows only by WORK-074's identity runtime 0059 (the
-    // WORK-063 RUNTIME activation — authorized by its own Work Order);
+    // WORK-063 RUNTIME activation — authorized by its own Work Order) and
+    // V2-002's workflow repository 0060 (authorized by Work Order V2-002);
     // WORK-064 still declares NO migration of its own:
-    expect(migrationFiles).toHaveLength(59);
+    expect(migrationFiles).toHaveLength(60);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(
@@ -19619,9 +19622,11 @@ describe('WORK-065 invariants — Synthetic Browser Validation Agent (the execut
     }
     // The migration set is unchanged by WORK-065 (it authorizes NO migration).
     // The set grew 58 → 59 through WORK-074's 0059_identity_runtime migration
-    // (the PR #99 merge — credit comment; the pin advances with the tree).
+    // (the PR #99 merge — credit comment; the pin advances with the tree),
+    // then 59 → 60 through V2-002's 0060_v2_workflow_repository migration
+    // (Work Order V2-002 — the pin advances with the tree).
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
-    expect(migrationFiles).toHaveLength(59);
+    expect(migrationFiles).toHaveLength(60);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(
@@ -20094,9 +20099,11 @@ describe('WORK-066 invariants — Validation Scheduling & Change Triggers (the d
       expect(stripped, `${relative(BACKEND_ROOT, path)} must not touch Redis`).not.toMatch(/redis|ioredis|RedisQueue/i);
       expect(stripped, `${relative(BACKEND_ROOT, path)} must not open a database connection (durable state is the port + future ACR)`).not.toMatch(/DatabaseClient|pg\b|new Client\(/);
     }
-    // The migration set is unchanged by WORK-066 (no durable scheduling table):
+    // The migration set is unchanged by WORK-066 (no durable scheduling table;
+    // the 60th migration is V2-002's 0060_v2_workflow_repository, authorized by
+    // Work Order V2-002):
     const migrationFiles = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql'));
-    expect(migrationFiles).toHaveLength(59);
+    expect(migrationFiles).toHaveLength(60);
     for (const name of migrationFiles) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name), 'utf8');
       expect(
@@ -20525,7 +20532,9 @@ describe('WORK-067 invariants — Engineering Signal & Regression Correlation (t
 
   it('INVARIANT 19 — NO unauthorized migration: the migration set is unchanged (the WORK-067 parallel-execution metadata declares migrations: [] — the in-memory port precedent)', () => {
     const migrations = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'));
-    expect(migrations).toHaveLength(59);
+    // 60 = 59 (WORK-074 identity runtime) + V2-002's 0060_v2_workflow_repository
+    // (authorized by Work Order V2-002; WORK-067 itself still adds none).
+    expect(migrations).toHaveLength(60);
     // …and the domain declares no migration of its own:
     for (const { path, src } of readEsFiles()) {
       const stripped = stripCodeComments(src);

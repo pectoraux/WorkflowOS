@@ -39,7 +39,6 @@ describe('V2-002 — fork identity and provenance', () => {
   let v2: Record<string, unknown>;
   let v2Id: string;
   let privateSourceId: string;
-  let privateV1Id: string;
 
   beforeAll(async () => {
     s = await buildV2RepoStack();
@@ -71,10 +70,9 @@ describe('V2-002 — fork identity and provenance', () => {
       visibility: 'private',
     });
     privateSourceId = priv.body.workflowId as string;
-    const privV = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${privateSourceId}/versions`, {
+    await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${privateSourceId}/versions`, {
       content: CONTENT_V1,
     });
-    privateV1Id = privV.body.workflowVersionId as string;
   });
 
   afterAll(async () => {

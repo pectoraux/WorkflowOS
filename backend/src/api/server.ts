@@ -47,6 +47,10 @@ import {
 } from './routes/maintenance.route.js';
 import { authRoutes, type AuthRouteDeps } from './routes/auth.route.js';
 import { organizationsRoutes, type OrganizationsRouteDeps } from './routes/organizations.route.js';
+import {
+  v2WorkflowRepositoryRoutes,
+  type V2WorkflowRepositoryRouteDeps,
+} from '@root/v2/workflow-repository/routes.js';
 
 /**
  * Build the Fastify application. Takes injected dependencies so tests can
@@ -165,6 +169,10 @@ export interface ServerDeps extends JobsRouteDeps {
   /** WORK-074: organization creation + membership management routes.
    *  Registered when auth is enabled. */
   organizations?: OrganizationsRouteDeps;
+  /** V2-002 (WorkflowOS 2.0): the /v2 workflow repository + immutable
+   *  versioning routes (workflow/version/fork/install persistence).
+   *  Registered when auth is enabled. */
+  v2WorkflowRepository?: V2WorkflowRepositoryRouteDeps;
 }
 
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
@@ -293,6 +301,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   }
   if (deps.auth && deps.maintenance) {
     await maintenanceRoutes(app, deps.maintenance);
+  }
+  if (deps.auth && deps.v2WorkflowRepository) {
+    await v2WorkflowRepositoryRoutes(app, deps.v2WorkflowRepository);
   }
   return app;
 }
