@@ -24,4 +24,4 @@ WorkflowOS 2.0 is a computer-workflow operating system. Its primary durable arti
 
 The protocol and semantic contracts are the foundation. Platform applications are clients/hosts of the same protocol, not separate workflow engines. Existing WorkflowOS software-engineering capabilities become installable V2 workflows rather than being rebuilt as a second product architecture.
 
-See `docs/superpowers/specs/2026-09-01-workflowos-2-0-universal-workflow-protocol-design.md` and `spec/work-orders/V2-001.md`.
+See `docs/superpowers/specs/2026-09-01-workflowos-2-0-universal-workflow-protocol-design.md` and `spec/architecture/v2/work-orders/V2-001.md`.
