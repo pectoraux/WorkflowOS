@@ -223,6 +223,27 @@ describe('V2-002 — install + version pinning', () => {
     expect(computeContentDigest(version.body.content)).toBe(v2.contentDigest);
   });
 
+  it('rejects installing a version that belongs to a different workflow (no cross-workflow pin)', async () => {
+    const foreign = await callRepo(s.server, s.keyA, 'POST', '/v2/workflows', {
+      tenantId: s.orgA.id,
+      name: 'Foreign version source',
+      visibility: 'public',
+    });
+    expect(foreign.statusCode).toBe(201);
+    const foreignId = foreign.body.workflowId as string;
+    const foreignVersion = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${foreignId}/versions`, {
+      content: CONTENT_V3,
+    });
+    expect(foreignVersion.statusCode).toBe(201);
+
+    const res = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${workflowId}/installations`, {
+      tenantId: s.orgA.id,
+      workflowVersionId: foreignVersion.body.workflowVersionId as string,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('validation');
+  });
+
   it('installation access is tenant-scoped (no cross-tenant leak)', async () => {
     const installations = await callRepo(
       s.server,

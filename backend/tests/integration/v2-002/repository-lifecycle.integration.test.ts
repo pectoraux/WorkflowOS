@@ -51,7 +51,7 @@ describe('V2-002 — repository lifecycle, permissions and visibility', () => {
     await s.teardown();
   });
 
-  it('creates a workflow with explicit owner, tenant, visibility and registry protocol fields', () => {
+  it('creates a workflow with explicit owner, tenant, visibility and registry protocol fields', async () => {
     expect(typeof privateWorkflowId).toBe('string');
     const read = await callRepo(s.server, s.keyA, 'GET', `/v2/workflows/${privateWorkflowId}`);
     expect(read.statusCode).toBe(200);

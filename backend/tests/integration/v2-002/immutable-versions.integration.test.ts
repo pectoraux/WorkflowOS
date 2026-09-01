@@ -95,7 +95,7 @@ describe('V2-002 — immutable versions, addressability, ancestry', () => {
     await s.teardown();
   });
 
-  it('commits addressable immutable versions with content digests and parent ancestry', () => {
+  it('commits addressable immutable versions with content digests and parent ancestry', async () => {
     expect(v1Id).toMatch(/^wfv_[0-9a-f]{64}$/);
     expect(v1.contentDigest).toBe(computeContentDigest(CONTENT_V1));
     expect(v1.parentVersionId).toBeNull();
@@ -227,6 +227,87 @@ describe('V2-002 — immutable versions, addressability, ancestry', () => {
     expect((rootLineage.body.lineage as unknown[]).map((v) => (v as Record<string, unknown>).workflowVersionId)).toEqual([
       v1Id,
     ]);
+  });
+
+  it('workflow identity is stable across version commits (repository identity regression)', async () => {
+    const created = await callRepo(s.server, s.keyA, 'POST', '/v2/workflows', {
+      tenantId: s.orgA.id,
+      name: 'Identity stability probe',
+      visibility: 'public',
+    });
+    const id = created.body.workflowId as string;
+    const c1 = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${id}/versions`, {
+      content: CONTENT_V1,
+    });
+    const c2 = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${id}/versions`, {
+      content: CONTENT_V2,
+    });
+    const wf = await callRepo(s.server, s.keyA, 'GET', `/v2/workflows/${id}`);
+    expect(wf.statusCode).toBe(200);
+    // The workflow identity never changes while its versions do.
+    expect(wf.body.workflowId).toBe(id);
+    expect(wf.body.currentVersionId).toBe(c2.body.workflowVersionId);
+    expect(c2.body.workflowVersionId).not.toBe(c1.body.workflowVersionId);
+    // Workflow ids and version ids are distinct identity namespaces.
+    expect(c1.body.workflowVersionId).not.toBe(id);
+  });
+
+  it('same content in a different workflow keeps the digest but not the version identity', async () => {
+    // CONTENT_V1 is already committed to `workflowId`. Committing the exact
+    // same content to the other workflow keeps the content digest (the digest
+    // is content-only) but derives a different version identity (workflow
+    // identity is a load-bearing identity input).
+    const commit = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${otherWorkflowId}/versions`, {
+      content: CONTENT_V1,
+      parentVersionId: null,
+    });
+    expect(commit.statusCode).toBe(201);
+    expect(commit.body.contentDigest).toBe(v1.contentDigest);
+    expect(commit.body.workflowVersionId).not.toBe(v1Id);
+    expect(commit.body.parentVersionId).toBeNull();
+
+    // Both versions remain independently addressable under their own
+    // workflow scoping.
+    const a = await callRepo(s.server, s.keyA, 'GET', `/v2/workflows/${workflowId}/versions/${v1Id}`);
+    const b = await callRepo(
+      s.server,
+      s.keyA,
+      'GET',
+      `/v2/workflows/${otherWorkflowId}/versions/${commit.body.workflowVersionId as string}`,
+    );
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+    expect(canonicalizeJson(b.body.content)).toBe(canonicalizeJson(a.body.content));
+  });
+
+  it('repository metadata is not part of the version identity or digest (rename keeps history addressable)', async () => {
+    const rename = await callRepo(s.server, s.keyA, 'PATCH', `/v2/workflows/${workflowId}`, {
+      name: 'Immutable version probe (renamed)',
+      description: 'Renamed description',
+    });
+    expect(rename.statusCode).toBe(200);
+
+    // Every historical version is unchanged and still addressable.
+    const cases: Array<[string, unknown]> = [
+      [v1Id, CONTENT_V1],
+      [v2Id, CONTENT_V2],
+      [v3Id, CONTENT_V3],
+    ];
+    for (const [versionId, content] of cases) {
+      const read = await callRepo(s.server, s.keyA, 'GET', `/v2/workflows/${workflowId}/versions/${versionId}`);
+      expect(read.statusCode).toBe(200);
+      expect(canonicalizeJson(read.body.content)).toBe(canonicalizeJson(content));
+    }
+
+    // Metadata did not enter version identity: re-delivering v1's identity
+    // inputs after the rename converges on the SAME version id.
+    const recommit = await callRepo(s.server, s.keyA, 'POST', `/v2/workflows/${workflowId}/versions`, {
+      content: CONTENT_V1,
+      parentVersionId: null,
+    });
+    expect(recommit.statusCode).toBe(201);
+    expect(recommit.body.workflowVersionId).toBe(v1Id);
+    expect(recommit.body.contentDigest).toBe(v1.contentDigest);
   });
 
   it('rejects unsupported protocol versions (fail closed)', async () => {
