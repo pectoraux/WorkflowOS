@@ -1,0 +1,63 @@
+name: One-shot architect state reconciliation
+
+on:
+  push:
+    branches: [chore/reconcile-work-019-work-022-state]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install backend dependencies
+        working-directory: backend
+        run: bun install --frozen-lockfile
+      - name: Reconcile the smallest valid WORK-019 + WORK-022 state union
+        env:
+          WORK019_PR: "18"
+          WORK019_MERGE: ced0867ae4f0965d6eb60c4cdb680d7accefd00a
+          WORK022_PR: "21"
+          WORK022_MERGE: ffce8fba1e8b0eec5fc8153fb8ed6678f646b3b0
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path('spec/development-state/program-state.json')
+          data = json.loads(p.read_text(encoding='utf-8'))
+          replacements = {
+              'WORK-019': {'pr': int(os.environ['WORK019_PR']), 'mergeCommit': os.environ['WORK019_MERGE']},
+              'WORK-022': {'pr': int(os.environ['WORK022_PR']), 'mergeCommit': os.environ['WORK022_MERGE']},
+          }
+          found = set()
+          for work in data['workOrders']:
+              if work.get('id') in replacements:
+                  wid = work['id']
+                  assert work.get('status') == 'complete', f'{wid} is not complete'
+                  work['mergedAs'] = replacements[wid]
+                  found.add(wid)
+          assert found == set(replacements), f'missing state records: {set(replacements) - found}'
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+          PY
+      - name: Run governance check on the reconciled worktree
+        working-directory: backend
+        run: bun run governance:status
+      - name: Record reconciliation commit and remove this one-shot workflow
+        run: |
+          set -euo pipefail
+          git config user.name "workflowos-architect"
+          git config user.email "architect@workflowos.invalid"
+          git add spec/development-state/program-state.json
+          git rm .github/workflows/one-shot-state-reconcile.yml
+          git commit -m "chore(governance): reconcile WORK-019 and WORK-022 merge identities"
+          git push origin HEAD:chore/reconcile-work-019-work-022-state
