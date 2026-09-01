@@ -1111,7 +1111,13 @@ describe('WORK-051 — ArchitectureCheckpointService (application-layer orchestr
           // schema (wfos_linked_identities, wfos_sessions,
           // wfos_password_credentials, wfos_service_accounts, the
           // wfos_api_key_credentials scopes extension, wfos_oauth_states).
-          expectedLastMigrationNumber: 59,
+          // V2-002 (WorkflowOS 2.0 work order — workflow repository +
+          // immutable versioning): 0060 is the V2 workflow repository
+          // schema (wfos_v2_workflows, the append-only
+          // wfos_v2_workflow_versions, wfos_v2_workflow_collaborators,
+          // wfos_v2_workflow_installations), so the self-host head pin
+          // advances to 60 (the pin advances with the tree).
+          expectedLastMigrationNumber: 60,
         },
       },
     ]);
