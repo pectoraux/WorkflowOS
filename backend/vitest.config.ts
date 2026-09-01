@@ -70,6 +70,12 @@ export default defineConfig({
       // tests/integration/progressive-release/ and gate on
       // WORKFLOWOS_DATABASE_URL).
       'tests/progressive-release/**/*.test.ts',
+      // V2-003 (WorkflowOS 2.0, Wave 1): the WorkflowIR domain suite —
+      // schema/graph/binding validation, canonicalization, round-trip,
+      // digest, compatibility, secrets, platform neutrality and the real
+      // workflow round-trip dogfooding experiment. Pure domain tests; no
+      // database and no server required.
+      'tests/workflow-ir/**/*.test.ts',
     ],
     testTimeout: 15000,
     hookTimeout: 15000,
