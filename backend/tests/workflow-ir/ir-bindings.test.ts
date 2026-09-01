@@ -94,7 +94,10 @@ describe('WorkflowIR typed binding validation', () => {
   describe('type discrimination (no silent coercion)', () => {
     it('rejects binding a string source into a number input', () => {
       const doc = rawMut(typedDataIr(), (m) => {
-        (m.inputs as Record<string, unknown>[])[0]!.type = 'number';
+        // the NODE input port is number-typed; the literal source is a string
+        // (the original mutation retyped the workflow input, which the binding
+        // no longer referenced — the mismatch must be on the bound port)
+        (m.nodes as Record<string, unknown>[])[1]!.inputs = [{ id: 'in', type: 'number' }];
         findBinding(m, 'transform', 'in').source = { kind: 'literal', literal: { type: 'string', value: '42' } };
       });
       expectWorkflowIRError(() => validateWorkflowIR(doc), 'TYPE_MISMATCH');

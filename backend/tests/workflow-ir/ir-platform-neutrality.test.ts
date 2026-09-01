@@ -238,9 +238,23 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
         const source = readFileSync(file, 'utf8');
         for (const [pattern, label] of FORBIDDEN_SOURCE_PATTERNS) {
           // strip comments so doc mentions don't false-positive
-          const codeOnly = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/g, '');
+          const codeOnly = source
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/\/\/.*$/g, '');
+          // then strip string/template-literal CONTENTS: these patterns guard
+          // against EXECUTABLE references (identifiers, expressions, globals).
+          // String-literal DATA — e.g. the capability-alias rejection table
+          // required by V2-CTRL-003 registry conformance rule 4, which names
+          // non-canonical aliases like 'selenium.click' precisely so the
+          // validator can reject them — is not an executable SDK reference;
+          // the import guard above remains fully strict and still forbids
+          // importing any SDK.
+          const codeWithoutLiterals = codeOnly
+            .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+            .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+            .replace(/`(?:[^`\\]|\\.)*`/g, '``');
           expect(
-            pattern.test(codeOnly),
+            pattern.test(codeWithoutLiterals),
             `${relative(BACKEND_ROOT, file)} contains ${label} (${pattern})`,
           ).toBe(false);
         }

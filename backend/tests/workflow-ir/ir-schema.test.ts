@@ -58,11 +58,46 @@ describe('WorkflowIR schema validation', () => {
   it('pins the frozen error-reason vocabulary', () => {
     // Adding/renaming a reason is a breaking schema change and must be a
     // deliberate act — this test pins the exact sorted vocabulary.
-    expect([...WORKFLOW_IR_ERROR_REASONS]).toEqual([...WORKFLOW_IR_ERROR_REASONS].sort());
+    expect(WORKFLOW_IR_ERROR_REASONS).toEqual([...
+      'AMBIGUOUS_CONTROL',
+      'CAPABILITY_ALIAS',
+      'CONTROL_CYCLE',
+      'DUPLICATE_EDGE',
+      'DUPLICATE_INPUT_BINDING',
+      'DUPLICATE_NODE_ID',
+      'DUPLICATE_PORT_ID',
+      'END_NODE_INVALID',
+      'INVALID_BINDING',
+      'INVALID_CAPABILITY',
+      'INVALID_CONDITION',
+      'INVALID_CONTROL_EDGE',
+      'INVALID_DECISION',
+      'INVALID_DEPENDENCY',
+      'INVALID_EDGE',
+      'INVALID_EXECUTION_CLASS',
+      'INVALID_FIELD',
+      'INVALID_INSTRUCTION',
+      'INVALID_LITERAL',
+      'INVALID_NODE_ID',
+      'INVALID_NODE_SHAPE',
+      'INVALID_PLACEMENT',
+      'INVALID_PROVENANCE',
+      'INVALID_SCHEMA_VERSION',
+      'MISSING_FIELD',
+      'NOT_A_WORKFLOW_IR',
+      'PARSE_ERROR',
+      'PLACEMENT_CONTRADICTION',
+      'SECRET_LITERAL_FORBIDDEN',
+      'START_NODE_INVALID',
+      'TYPE_MISMATCH',
+      'UNBOUND_INPUT',
+      'UNBOUND_WORKFLOW_INPUT',
+      'UNKNOWN_FIELD',
+      'UNKNOWN_NODE',
+      'UNKNOWN_PORT',
+      'UNSUPPORTED_SCHEMA_VERSION',
+    ]);
     expect(new Set(WORKFLOW_IR_ERROR_REASONS).size).toBe(WORKFLOW_IR_ERROR_REASONS.length);
-    expect(WORKFLOW_IR_ERROR_REASONS).toContain('TYPE_MISMATCH');
-    expect(WORKFLOW_IR_ERROR_REASONS).toContain('UNSUPPORTED_SCHEMA_VERSION');
-    expect(WORKFLOW_IR_ERROR_REASONS).toContain('SECRET_LITERAL_FORBIDDEN');
   });
 
   it('pins the registry-derived vocabularies', () => {
@@ -338,7 +373,12 @@ describe('WorkflowIR schema validation', () => {
       const step = doc.nodes.find((n) => n.kind === 'step');
       expect(step && step.kind === 'step').toBe(true);
       if (step && step.kind === 'step') step.failure = { retry: 10 };
-      expect(validateWorkflowIR(doc).nodes[1]).toMatchObject({ failure: { retry: 10 } });
+      // canonical nodes are sorted by id (do_work < done < start) — address the
+      // step by id, not by authored index
+      const canonical = validateWorkflowIR(doc);
+      expect(canonical.nodes.find((n) => n.id === 'do_work')).toMatchObject({
+        failure: { retry: 10 },
+      });
     });
 
     it('rejects duplicate port ids within one node', () => {
@@ -394,8 +434,12 @@ describe('WorkflowIR schema validation', () => {
         ['unknown origin', { origin: 'teaching' }, 'INVALID_PROVENANCE'],
         ['empty generator', { origin: 'authored', generator: '' }, 'INVALID_PROVENANCE'],
         [
-          'duplicate source references',
-          { origin: 'authored', sourceReferences: ['a', 'a'] },
+          // sourceReferences is a schema-declared SET (sorted + de-duplicated
+          // during canonicalization — see ir-canonicalization/ir-digest), so a
+          // duplicate entry collapses to the same semantics and is NOT
+          // invalid; the genuinely invalid shape here is a non-array.
+          'non-array source references',
+          { origin: 'authored', sourceReferences: 'brief-w35' },
           'INVALID_PROVENANCE',
         ],
         [
