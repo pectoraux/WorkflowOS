@@ -29,7 +29,6 @@ import {
   makeKeyDirectory,
   makeNodeKeyMaterial,
   makeService,
-  registerFixtureNode,
 } from './helpers.js';
 
 const IDENTITY_INPUTS: NodeIdentityInputs = {
@@ -149,10 +148,11 @@ describe('V2-004 — node identity', () => {
   it('host key material never appears in protocol payloads or discovery descriptors', () => {
     const service = makeService(['secret-hygiene']);
     const request = buildRegistration('secret-hygiene');
+    service.registerNode(request);
     const payloadJson = JSON.stringify(request);
     const { secret } = makeNodeKeyMaterial('secret-hygiene');
     expect(payloadJson).not.toContain(secret);
-    const [descriptor] = service.discoverNodes();
+    const descriptor = service.discoverNodes()[0]!;
     expect(descriptor).toBeDefined();
     expect(JSON.stringify(descriptor)).not.toContain(secret);
   });

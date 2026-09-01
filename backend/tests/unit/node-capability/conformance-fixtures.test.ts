@@ -174,7 +174,7 @@ describe('V2-004 — honest cross-host eligibility matrix', () => {
   it('the same semantic step yields equivalent decisions on hosts with equal advertisements', () => {
     // notifications.observe + human approval is supported by web, desktop,
     // ios and android fixtures — the decision for that step must be identical.
-    const decisions = HOST_CLASS_CONFORMANCE_FIXTURE.filter(
+    const decisions = HOST_CLASS_CONFORMANCE_FIXTURES.filter(
       (f) => f.hostClass !== 'cloud',
     ).map((fixture) => {
       const service = makeService([fixture.nodeKeySeed]);

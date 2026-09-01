@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest';
 import {
   advertisement,
   authorization,
+  CLOUD_POSTURE,
   makeService,
   registerFixtureNode,
   step,
@@ -41,7 +42,7 @@ describe('V2-004 — capability requirement matching', () => {
       authorization('authorized', WORKFLOW_REF),
     );
     expect(evaluation.workflowEligible).toBe(true);
-    const [decision] = evaluation.steps;
+    const decision = evaluation.steps[0]!;
     expect(decision.eligible).toBe(true);
     expect(decision.reasons).toEqual([]);
     expect(decision.advertised?.capability).toBe('filesystem.read');
@@ -62,7 +63,7 @@ describe('V2-004 — capability requirement matching', () => {
       workflowRequest([step('answer-call', 'phone.call.answer')], WORKFLOW_REF),
       authorization('authorized', WORKFLOW_REF),
     );
-    const [decision] = evaluation.steps;
+    const decision = evaluation.steps[0]!;
     expect(decision.eligible).toBe(false);
     expect(decision.reasons).toEqual(['capability_missing']);
     expect(decision.advertised).toBeNull();
@@ -94,7 +95,7 @@ describe('V2-004 — capability requirement matching', () => {
       workflowRequest([step('agentic-read', 'filesystem.read', { executionClass: 'agentic_computer_use' })], WORKFLOW_REF),
       authorization('authorized', WORKFLOW_REF),
     );
-    const [decision] = evaluation.steps;
+    const decision = evaluation.steps[0]!;
     expect(decision.eligible).toBe(false);
     expect(decision.reasons).toEqual(['execution_class_unsupported']);
     // The capability IS advertised — the class is the explicit failure.
@@ -117,7 +118,7 @@ describe('V2-004 — capability requirement matching', () => {
       ], WORKFLOW_REF),
       authorization('authorized', WORKFLOW_REF),
     );
-    const [decision] = evaluation.steps;
+    const decision = evaluation.steps[0]!;
     expect(decision.eligible).toBe(true);
     expect(decision.resolvedExecutionClass).toBe('agentic_computer_use');
     expect(decision.viaDeclaredFallback).toBe(true);
@@ -198,6 +199,8 @@ describe('V2-004 — capability requirement matching', () => {
     const service = makeService(['match-multi']);
     const { nodeId } = registerFixtureNode(service, 'match-multi', {
       platformClass: 'cloud',
+      // A cloud host must honestly declare its egress posture.
+      privacyPosture: CLOUD_POSTURE,
       advertisements: [advertisement('workflow.execute', ['deterministic_api'])],
     });
     const evaluation = service.evaluateNode(

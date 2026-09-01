@@ -19,6 +19,7 @@ import type { AssuranceLevel } from '../../../src/node-capability/index.js';
 import {
   advertisement,
   authorization,
+  CLOUD_POSTURE,
   makeService,
   registerFixtureNode,
   step,
@@ -178,6 +179,7 @@ describe('V2-004 — the five eligibility dimensions stay separate', () => {
       const service = makeService(['dim-placement']);
       const { nodeId } = registerFixtureNode(service, 'dim-placement', {
         platformClass: 'cloud',
+        privacyPosture: CLOUD_POSTURE,
         advertisements: [advertisement('filesystem.read', ['deterministic_api'])],
       });
       const [decision] = service

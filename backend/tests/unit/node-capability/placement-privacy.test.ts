@@ -100,6 +100,7 @@ describe('V2-004 — placement constraints (canonical identifiers)', () => {
     const service = makeService(['placement-mask']);
     const { nodeId } = registerFixtureNode(service, 'placement-mask', {
       platformClass: 'cloud',
+      privacyPosture: CLOUD_POSTURE,
       advertisements: [advertisement('workflow.execute', ['deterministic_api'])],
     });
     const evaluation = service.evaluateNode(
@@ -119,6 +120,7 @@ describe('V2-004 — privacy constraints', () => {
     const service = makeService(['privacy-cloud']);
     const { nodeId } = registerFixtureNode(service, 'privacy-cloud', {
       platformClass: 'cloud',
+      privacyPosture: CLOUD_POSTURE,
       advertisements: [advertisement('contacts.read', ['deterministic_api'])],
     });
     const evaluation = service.evaluateNode(
@@ -187,6 +189,7 @@ describe('V2-004 — privacy constraints', () => {
     const service = makeService(['privacy-open']);
     const { nodeId } = registerFixtureNode(service, 'privacy-open', {
       platformClass: 'cloud',
+      privacyPosture: CLOUD_POSTURE,
       advertisements: [advertisement('social.post.publish', ['deterministic_api'])],
     });
     const evaluation = service.evaluateNode(
@@ -209,6 +212,7 @@ describe('V2-004 — privacy constraints', () => {
     const service = makeService(['privacy-human']);
     const { nodeId } = registerFixtureNode(service, 'privacy-human', {
       platformClass: 'cloud',
+      privacyPosture: CLOUD_POSTURE,
       advertisements: [advertisement('workflow.deploy', ['deterministic_api'])],
     });
     const evaluation = service.evaluateNode(

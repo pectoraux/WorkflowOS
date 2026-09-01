@@ -119,7 +119,7 @@ describe('V2-004 — capability vs authorization discrimination', () => {
       workflowRequest([step('observe', 'browser.observe')], WORKFLOW_REF),
       authorization('denied', WORKFLOW_REF),
     );
-    const [decision] = evaluation.steps;
+    const decision = evaluation.steps[0]!;
     expect(decision.advertised?.capability).toBe('browser.observe');
     expect(decision.eligible).toBe(false);
     expect(decision.reasons).toEqual(['authorization_denied']);

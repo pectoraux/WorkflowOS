@@ -77,7 +77,7 @@ describe('V2-004 — capability advertisement and versioning', () => {
         ],
       }),
     );
-    const [advertised] = descriptor.capabilities;
+    const advertised = descriptor.capabilities[0]!;
     expect(advertised.trust.assurance).toBeNull();
   });
 

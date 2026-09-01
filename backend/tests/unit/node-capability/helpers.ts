@@ -62,7 +62,7 @@ export function advertisement(
   return {
     capability,
     capabilityVersion: 1,
-    executionClasses: [...executionClasses],
+    executionClasses: [...executionClasses] as CapabilityAdvertisement['executionClasses'],
     health: 'healthy',
     trust: FIXTURE_TRUST,
     ...overrides,
