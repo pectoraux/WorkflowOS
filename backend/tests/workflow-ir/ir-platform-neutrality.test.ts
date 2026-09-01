@@ -103,7 +103,7 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
         ['selenium.click', 'browser.click'],
       ];
       for (const [alias, canonical] of cases) {
-        const doc = structuredClone(minimalIr()) as { nodes: Array<Record<string, unknown>> };
+        const doc = structuredClone(minimalIr()) as unknown as { nodes: Array<Record<string, unknown>> };
         doc.nodes[1]!.capability = alias;
         const err = expectWorkflowIRError(
           () => validateWorkflowIR(doc),
@@ -115,7 +115,7 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
     });
 
     it('accepts a genuinely new canonical-namespace capability (registry is extensible)', () => {
-      const doc = structuredClone(minimalIr()) as { nodes: Array<Record<string, unknown>>; requirements: { capabilities: string[] } };
+      const doc = structuredClone(minimalIr()) as unknown as { nodes: Array<Record<string, unknown>>; requirements: { capabilities: string[] } };
       doc.nodes[1]!.capability = 'calendar.event.create';
       doc.requirements.capabilities = ['calendar.event.create'];
       expect(() => validateWorkflowIR(doc)).not.toThrow();
@@ -135,7 +135,7 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
         'hostEndpoint',
         'screenCoordinates',
       ]) {
-        const doc = structuredClone(minimalIr()) as { nodes: Array<Record<string, unknown>> };
+        const doc = structuredClone(minimalIr()) as unknown as { nodes: Array<Record<string, unknown>> };
         doc.nodes[1]![leak] = 'platform-specific';
         expectWorkflowIRError(() => validateWorkflowIR(doc), 'UNKNOWN_FIELD', leak);
       }
@@ -143,7 +143,7 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
 
     it('rejects platform-specific value types', () => {
       for (const bad of ['dom_element', 'screenshot', 'xpath', 'ui_tree']) {
-        const doc = structuredClone(minimalIr()) as {
+        const doc = structuredClone(minimalIr()) as unknown as {
           nodes: Array<Record<string, unknown>>;
         };
         doc.nodes[1]!.inputs = [{ id: 'in', type: bad }];
@@ -153,7 +153,7 @@ describe('WorkflowIR platform neutrality and registry conformance', () => {
 
     it('rejects non-canonical placement ids (registry vocabulary only)', () => {
       for (const bad of ['local_only', 'on_premise', 'edge_node', 'cloud_only', 'mobile']) {
-        const doc = structuredClone(minimalIr()) as {
+        const doc = structuredClone(minimalIr()) as unknown as {
           requirements: { placement: Record<string, unknown> };
         };
         doc.requirements.placement = { locality: bad };

@@ -49,15 +49,19 @@ describe('WorkflowIR semantic equivalence across clients', () => {
       ...clientB.provenance,
       sourceReferences: [...(clientB.provenance.sourceReferences ?? [])].reverse(),
     };
-    // client B also states every optional default explicitly
+    // client B also states every optional default explicitly (approval steps
+    // must not state a failure policy at all — approval outcomes are
+    // decisions, not retries — so their explicit default is the field's
+    // absence)
     clientB.nodes = clientB.nodes.map((n) => {
       if (n.kind !== 'step') return n;
-      return {
+      const stated = {
         ...n,
         pauseSafe: n.pauseSafe ?? false,
         requestApproval: n.requestApproval ?? false,
-        failure: n.failure ?? { retry: 0 },
       };
+      if (n.requestApproval === true) return stated;
+      return { ...stated, failure: n.failure ?? { retry: 0 } };
     });
 
     const textA = serializeWorkflowIR(clientA);
@@ -155,6 +159,13 @@ describe('WorkflowIR semantic equivalence across clients', () => {
       const changed = structuredClone(minimalIr()) as DeepMutableWorkflowIR;
       const step = changed.nodes.find((n) => n.kind === 'step');
       if (step && step.kind === 'step') step.capability = 'filesystem.write';
+      // keep the authored requirement set in agreement (a disagreeing set is
+      // INVALID_FIELD by schema — the discrimination here is the capability
+      // semantics, not the disagreement error)
+      changed.requirements = {
+        ...changed.requirements,
+        capabilities: ['filesystem.write'],
+      };
       expect(workflowIRsAreSemanticallyEqual(changed, minimalIr())).toBe(false);
     });
   });

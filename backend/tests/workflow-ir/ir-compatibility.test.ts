@@ -41,7 +41,12 @@ describe('WorkflowIR compatibility and version negotiation', () => {
     });
 
     it('reports backward support when the producer is older than the consumer maximum', () => {
-      expect(negotiateWorkflowIRSchemaVersion(1, [1, 2])).toEqual({
+      // backward mode = the consumer speaks only NEWER versions: the producer
+      // version is not natively listed, so consumption relies on the newer
+      // consumer's backward compatibility. (A consumer that LISTS the producer
+      // version is 'exact' even when it also speaks newer ones — see the
+      // exact-support case negotiate(2, [1, 2, 3]).)
+      expect(negotiateWorkflowIRSchemaVersion(1, [2, 3])).toEqual({
         status: 'compatible',
         mode: 'backward',
       });

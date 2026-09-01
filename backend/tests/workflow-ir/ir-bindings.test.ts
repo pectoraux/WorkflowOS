@@ -247,10 +247,12 @@ describe('WorkflowIR typed binding validation', () => {
 
     it('rejects a binding into an undeclared workflow output', () => {
       const doc = rawMut(typedDataIr(), (m) => {
-        findBinding(m, 'transform', 'out').target = {
-          kind: 'workflow_output',
-          output: 'no_such_output',
-        };
+        // the binding SOURCED from transform.out targets the workflow output;
+        // findBinding matches by TARGET port, so find it by its source side
+        const binding = bindingsOf(m).find(
+          (b) => (b.source as Record<string, unknown>).kind === 'node_output',
+        )!;
+        binding.target = { kind: 'workflow_output', output: 'no_such_output' };
       });
       expectWorkflowIRError(() => validateWorkflowIR(doc), 'INVALID_BINDING');
     });
@@ -425,6 +427,11 @@ describe('WorkflowIR typed binding validation', () => {
           kind: 'literal',
           literal: { type: 'string', value: 'direct literal' },
         };
+        // 'payload' is no longer referenced by any binding — a dead workflow
+        // input would be UNBOUND_WORKFLOW_INPUT, so drop the declaration too
+        m.inputs = (m.inputs as Record<string, unknown>[]).filter(
+          (input) => input.id !== 'payload',
+        );
       });
       const ir = validateWorkflowIR(doc);
       const binding = ir.dataBindings.find(

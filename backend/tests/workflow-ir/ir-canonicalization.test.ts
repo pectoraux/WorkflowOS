@@ -47,7 +47,11 @@ describe('WorkflowIR canonicalization', () => {
 
   it('contains no insignificant whitespace', () => {
     const text = serializeWorkflowIR(realWeeklyReportIr());
-    expect(text).not.toMatch(/\s/);
+    // instructions legitimately contain spaces INSIDE string values — the
+    // canonical-form rule is no whitespace BETWEEN tokens. Re-serializing the
+    // parsed document with the platform's compact JSON.stringify must
+    // therefore reproduce the canonical bytes exactly.
+    expect(text).toBe(JSON.stringify(JSON.parse(text)));
   });
 
   it('sorts object keys lexicographically at every level', () => {
@@ -139,23 +143,26 @@ describe('WorkflowIR canonicalization', () => {
 
   it('omits optional fields equal to their schema default', () => {
     const explicit = structuredClone(realWeeklyReportIr()) as DeepMutableWorkflowIR;
-    // state every default explicitly…
+    // state every default explicitly… (approval steps must NOT state a
+    // failure policy at all — approval outcomes are decisions, not retries —
+    // so the explicit default there is the field's absence)
     explicit.nodes = explicit.nodes.map((n) => {
-      if (n.kind === 'step') {
-        return {
-          ...n,
-          pauseSafe: n.pauseSafe ?? false,
-          requestApproval: n.requestApproval ?? false,
-          failure: n.failure ?? { retry: 0 },
-        };
-      }
-      return n;
+      if (n.kind !== 'step') return n;
+      const stated = {
+        ...n,
+        pauseSafe: n.pauseSafe ?? false,
+        requestApproval: n.requestApproval ?? false,
+      };
+      if (n.requestApproval === true) return stated;
+      return { ...stated, failure: n.failure ?? { retry: 0 } };
     });
     // …and the serialization must equal the authored (default-omitted) form
     expect(serializeWorkflowIR(explicit)).toBe(serializeWorkflowIR(realWeeklyReportIr()));
     const ir = validateWorkflowIR(realWeeklyReportIr());
     expect(ir.nodes.some((n) => n.kind === 'step' && 'requestApproval' in n && n.requestApproval === false)).toBe(false);
-    expect(ir.nodes.some((n) => n.kind === 'end' && 'outcome' in n && n.outcome === 'success')).toBe(false);
+    // the success end-outcome is the omitted default: the only explicit
+    // outcome value the schema admits is 'failure'
+    expect(serializeWorkflowIR(realWeeklyReportIr())).not.toMatch(/"outcome":"(?!failure")/);
   });
 
   it('omits empty optional collections', () => {

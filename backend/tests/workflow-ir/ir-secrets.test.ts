@@ -145,7 +145,7 @@ describe('WorkflowIR secret non-leakage', () => {
     }
     expect(() => validateWorkflowIR(doc)).toThrow(/TYPE_MISMATCH/);
     // read_crm_export.engagements (json) can be replaced by a json literal:
-    const doc2 = structuredClone(realWeeklyReportIr()) as {
+    const doc2 = structuredClone(realWeeklyReportIr()) as unknown as {
       dataBindings: Array<Record<string, unknown>>;
     };
     for (const binding of doc2.dataBindings) {

@@ -53,7 +53,10 @@ describe('V2-003 dogfooding: real workflow IR round-trip', () => {
 
   it('step 2 — serialization is deterministic canonical bytes', () => {
     expect(canonicalBytes).toBe(serializeWorkflowIR(realWeeklyReportIr()));
-    expect(canonicalBytes).not.toMatch(/\s/);
+    // no insignificant whitespace BETWEEN tokens (instructions legitimately
+    // contain spaces inside their string values): the platform's compact
+    // JSON.stringify of the parsed document must reproduce the bytes exactly
+    expect(canonicalBytes).toBe(JSON.stringify(JSON.parse(canonicalBytes)));
   });
 
   it('step 3 — deserialization reconstructs the identical semantics', () => {

@@ -72,12 +72,16 @@ describe('WorkflowIR semantic digest', () => {
       const explicit = structuredClone(realWeeklyReportIr()) as DeepMutableWorkflowIR;
       explicit.nodes = explicit.nodes.map((n) => {
         if (n.kind !== 'step') return n;
-        return {
+        const stated = {
           ...n,
           pauseSafe: n.pauseSafe ?? false,
           requestApproval: n.requestApproval ?? false,
-          failure: n.failure ?? { retry: 0 },
         };
+        // approval steps must not state a failure policy at all (approval
+        // outcomes are decisions, not retries) — the explicit default there
+        // is the field's absence
+        if (n.requestApproval === true) return stated;
+        return { ...stated, failure: n.failure ?? { retry: 0 } };
       });
       expect(computeWorkflowIRDigest(explicit)).toBe(
         computeWorkflowIRDigest(realWeeklyReportIr()),
@@ -139,6 +143,14 @@ describe('WorkflowIR semantic digest', () => {
           const node = doc.nodes.find((n) => n.id === 'upload_report');
           if (node && node.kind === 'step' && 'capability' in node)
             node.capability = 'filesystem.write';
+          // keep the authored requirement set in agreement with the derived
+          // set (a disagreeing requirements set is INVALID_FIELD by schema)
+          doc.requirements = {
+            ...doc.requirements,
+            capabilities: doc.requirements.capabilities.map((c) =>
+              c === 'browser.upload' ? 'filesystem.write' : c,
+            ),
+          };
         },
       ],
       [
@@ -264,6 +276,12 @@ describe('WorkflowIR semantic digest', () => {
           const node = doc.nodes.find((n) => n.id === 'upload_report');
           if (node && node.kind === 'step' && 'capability' in node)
             node.capability = 'browser.download';
+          doc.requirements = {
+            ...doc.requirements,
+            capabilities: doc.requirements.capabilities.map((c) =>
+              c === 'browser.upload' ? 'browser.download' : c,
+            ),
+          };
         },
       ],
       [

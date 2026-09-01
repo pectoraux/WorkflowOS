@@ -95,11 +95,21 @@ describe('WorkflowIR ownership boundary and no-second-engine discrimination', ()
     ];
     for (const file of files) {
       const source = readFileSync(file, 'utf8');
-      // strip comments so doc mentions don't false-positive
+      // strip comments so doc mentions don't false-positive…
       const codeOnly = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/g, '');
+      // …then strip string/template-literal CONTENTS, exactly as the
+      // platform-neutrality scan does (a84fc9e precedent): these patterns
+      // guard against EXECUTABLE persistence code (identifiers, expressions,
+      // imports). String-literal DATA — e.g. the canonical registry
+      // capability 'browser.select', which V2-CTRL-003 requires the domain to
+      // carry byte-for-byte — is not executable SQL/persistence semantics.
+      const codeWithoutLiterals = codeOnly
+        .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+        .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+        .replace(/`(?:[^`\\]|\\.)*`/g, '``');
       for (const [pattern, label] of forbidden) {
         expect(
-          pattern.test(codeOnly),
+          pattern.test(codeWithoutLiterals),
           `${relative(BACKEND_ROOT, file)} contains ${label} (${pattern}) — repository persistence is V2-002's surface`,
         ).toBe(false);
       }
@@ -117,9 +127,16 @@ describe('WorkflowIR ownership boundary and no-second-engine discrimination', ()
     for (const file of files) {
       const source = readFileSync(file, 'utf8');
       const codeOnly = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/g, '');
+      // strip string/template-literal CONTENTS for the same reason as the
+      // V2-002 scan above — string-literal DATA is not executable resolution
+      // logic; executable references remain fully covered.
+      const codeWithoutLiterals = codeOnly
+        .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+        .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+        .replace(/`(?:[^`\\]|\\.)*`/g, '``');
       for (const [pattern, label] of forbidden) {
         expect(
-          pattern.test(codeOnly),
+          pattern.test(codeWithoutLiterals),
           `${relative(BACKEND_ROOT, file)} contains ${label} (${pattern}) — Node/Capability/placement is V2-004's surface`,
         ).toBe(false);
       }

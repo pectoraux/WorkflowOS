@@ -15,7 +15,11 @@ import {
   realWeeklyReportIr,
   expectWorkflowIRError,
 } from './fixtures.js';
-import type { DeepMutableWorkflowIR, WorkflowIR } from '../../src/workflow-ir/index.js';
+import type {
+  DeepMutableWorkflowIR,
+  WorkflowIR,
+  WorkflowIRErrorReason,
+} from '../../src/workflow-ir/index.js';
 
 /**
  * V2-003 — WorkflowIR schema validation tests.
@@ -58,7 +62,7 @@ describe('WorkflowIR schema validation', () => {
   it('pins the frozen error-reason vocabulary', () => {
     // Adding/renaming a reason is a breaking schema change and must be a
     // deliberate act — this test pins the exact sorted vocabulary.
-    expect(WORKFLOW_IR_ERROR_REASONS).toEqual([...
+    expect(WORKFLOW_IR_ERROR_REASONS).toEqual([
       'AMBIGUOUS_CONTROL',
       'CAPABILITY_ALIAS',
       'CONTROL_CYCLE',
@@ -95,6 +99,7 @@ describe('WorkflowIR schema validation', () => {
       'UNKNOWN_FIELD',
       'UNKNOWN_NODE',
       'UNKNOWN_PORT',
+      'UNREACHABLE_NODE',
       'UNSUPPORTED_SCHEMA_VERSION',
     ]);
     expect(new Set(WORKFLOW_IR_ERROR_REASONS).size).toBe(WORKFLOW_IR_ERROR_REASONS.length);
@@ -304,7 +309,9 @@ describe('WorkflowIR schema validation', () => {
 
     it('rejects duplicate node ids', () => {
       const doc = rawMut(minimalIr(), (m) => {
-        (m.nodes as Record<string, unknown>[])[2]!.id = 'done';
+        // minimalIr nodes: [start, do_work, done] — renaming the END node to
+        // the step's id collides (a self-identical 'done' would be a no-op)
+        (m.nodes as Record<string, unknown>[])[2]!.id = 'do_work';
       });
       expectWorkflowIRError(() => validateWorkflowIR(doc), 'DUPLICATE_NODE_ID');
     });
@@ -430,7 +437,7 @@ describe('WorkflowIR schema validation', () => {
     });
 
     it('rejects invalid provenance', () => {
-      const cases: Array<[string, unknown, string]> = [
+      const cases: Array<[string, unknown, WorkflowIRErrorReason]> = [
         ['unknown origin', { origin: 'teaching' }, 'INVALID_PROVENANCE'],
         ['empty generator', { origin: 'authored', generator: '' }, 'INVALID_PROVENANCE'],
         [
