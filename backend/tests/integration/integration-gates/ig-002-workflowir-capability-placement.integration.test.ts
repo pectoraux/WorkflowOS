@@ -17,14 +17,11 @@ import {
   type NodePlatformClass,
   type NodeRequirementSet,
 } from '../../../src/node-capability/index.js';
-import {
-  buildMinimalDocument,
-  withNode,
-  type WorkflowIrDocument,
-} from '../../unit/workflow-ir/helpers.js';
+import { buildMinimalDocument, withNode } from '../../unit/workflow-ir/helpers.js';
 import {
   computeWorkflowVersionSemanticDigest,
   validateWorkflowIrDocument,
+  type WorkflowIrDocument,
 } from '../../../src/workflow-ir/index.js';
 
 const CLOCK_BASE = 1_733_568_000_000;
@@ -171,7 +168,16 @@ describe('IG-002 — platform-neutral WorkflowIR capability + placement compatib
     expect(device?.eligible).toBe(true);
     expect(cloud?.eligible).toBe(false);
     expect(cloud?.placementEligible).toBe(false);
-    expect(cloud?.reasons.some((reason) => reason.dimension === 'placement' || reason.dimension === 'privacy')).toBe(true);
+    // Dimension-honest assertion: privacy violations are placement-dimension
+    // facts in V2-004, so the rejection is asserted on the REASON CODES
+    // (locality + the privacy.localOnly constraint the adapter projects for
+    // device_local), not on a nonexistent 'privacy' eligibility dimension.
+    expect(
+      cloud?.reasons.some(
+        (reason) =>
+          reason.code === 'PLACEMENT_LOCALITY_VIOLATION' || reason.code === 'PRIVACY_LOCAL_ONLY_VIOLATION',
+      ),
+    ).toBe(true);
 
     const impossibleWorkflow = withNode(buildMinimalDocument(), 'observe', {
       spec: { class: 'deterministic_api', capability: 'browser.navigate' },
