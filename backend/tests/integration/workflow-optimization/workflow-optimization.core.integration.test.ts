@@ -340,6 +340,61 @@ function authorExistingNormalizerDocument(): WorkflowIrDocument {
     .build();
 }
 
+/**
+ * The multi-requirement negative workflow: scan_board declares TWO API-stable
+ * ordinary requirements (github.repository.read + spreadsheet.read). The
+ * deterministic_api spec carries exactly ONE capability — substituting would
+ * silently drop part of the node's execution contract, so the analyzer must
+ * propose NOTHING for it (the full requirement set stays intact).
+ */
+function authorMultiRequirementReportDocument(): WorkflowIrDocument {
+  const base = authorDigestReportDocument();
+  return {
+    ...base,
+    ir: {
+      ...base.ir,
+      nodes: base.ir.nodes.map((node) =>
+        node.id === 'scan_board'
+          ? {
+              ...node,
+              capabilityRequirements: ['github.repository.read', 'spreadsheet.read'],
+            }
+          : node,
+      ),
+    },
+  };
+}
+
+/**
+ * The differently-capable duplicates workflow: scan_board plus a second
+ * structurally identical agentic scan (scan_b — same task, same ports, same
+ * failure policy, placement, completion evidence) whose capabilityRequirements
+ * DIFFER. Their execution contracts differ, so they are NOT duplicates and
+ * must never be grouped for reuse (the reuse substitution would replace both
+ * nodes' distinct contracts with workflow.execute).
+ */
+function authorDifferentlyCapableScansDocument(): WorkflowIrDocument {
+  const base = authorDigestReportDocument();
+  const scan = base.ir.nodes.find((node) => node.id === 'scan_board')!;
+  const scanB: typeof scan = {
+    ...scan,
+    id: 'scan_b',
+    capabilityRequirements: ['spreadsheet.read'],
+  };
+  return {
+    ...base,
+    ir: {
+      ...base.ir,
+      nodes: [...base.ir.nodes, scanB],
+      edges: [
+        ...base.ir.edges,
+        { from: 'fetch_tickets', to: 'scan_b', on: 'success' as const },
+        { from: 'scan_b', to: 'approve_digest', on: 'success' as const },
+      ],
+    },
+  };
+}
+
 describe('V2-011 — analyze, propose, approve and materialize a candidate version on the real stack', () => {
   let stack: TestAuthStack;
   let server: FastifyInstance;
@@ -876,5 +931,132 @@ describe('V2-011 — analyze, propose, approve and materialize a candidate versi
       subworkflow: { workflowId: existing.workflowId, versionRef: existing.version.id },
     });
     expect(validateWorkflowIrDocument(candidateParsed.document).ok).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // The multi-requirement regression (architect review, PR #146 point 1):
+  // an agentic node declaring MULTIPLE API-stable requirements must NEVER be
+  // substituted — the deterministic_api spec carries exactly ONE capability,
+  // so substitution would silently DROP part of the node's execution
+  // contract. Nothing is proposed; no candidate version is ever created.
+  // -----------------------------------------------------------------------
+  it('the multi-requirement negative: an agentic node with MULTIPLE API-stable requirements yields NO candidate (the capability contract can never shrink)', async () => {
+    const { workflowId, version: version1 } = await createWorkflowThroughRoutes(
+      'multi-requirement-report',
+      'Multi-Requirement Maintenance Report',
+      authorMultiRequirementReportDocument(),
+    );
+
+    const readRes = await server.inject({
+      method: 'GET',
+      url: `/workflow-repository/workflows/${workflowId}/versions/${version1.id}`,
+      headers: { 'x-api-key': operatorKey },
+    });
+    const parsed = parseWorkflowIrDocument(JSON.stringify((readRes.json() as { version: VersionPayload }).version.content));
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) throw new Error('unreachable');
+    const document = parsed.document;
+
+    // the analysis proposes NOTHING for the multi-requirement node
+    const analysis = optimization.analyzeWorkflow(document);
+    expect(analysis.opportunities).toEqual([]);
+    expect(analysis.rejected).toEqual([]);
+
+    // and proposal creation is typed-rejected (nothing is ever derived)
+    let notFound = false;
+    try {
+      optimization.createProposal({
+        ownerId: operatorUserId,
+        workflowId,
+        versionId: version1.id,
+        document,
+        opportunityNodeId: 'scan_board',
+      });
+    } catch (error) {
+      notFound = (error as { code?: string }).code === 'OPPORTUNITY_NOT_FOUND';
+    }
+    expect(notFound).toBe(true);
+
+    // NO candidate version was created (still exactly one version)
+    const versionsRes = await server.inject({
+      method: 'GET',
+      url: `/workflow-repository/workflows/${workflowId}/versions`,
+      headers: { 'x-api-key': operatorKey },
+    });
+    const versions = (versionsRes.json() as { versions: VersionPayload[] }).versions;
+    expect(versions).toHaveLength(1);
+    expect(versions[0]!.id).toBe(version1.id);
+
+    // the stored v1 still carries the FULL requirement set, byte-identical
+    const storedScan = document.ir.nodes.find((n) => n.id === 'scan_board')!;
+    expect(storedScan.capabilityRequirements).toEqual([
+      'github.repository.read',
+      'spreadsheet.read',
+    ]);
+  });
+
+  // -----------------------------------------------------------------------
+  // The capability-requirements signature regression (architect review,
+  // PR #146 point 2): structurally identical agentic nodes with DIFFERENT
+  // capability requirements are NOT duplicates — never grouped for reuse.
+  // -----------------------------------------------------------------------
+  it('the differently-capable duplicates negative: structurally identical agentic nodes with DIFFERENT requirements are NOT grouped for reuse', async () => {
+    const { workflowId, version: version1 } = await createWorkflowThroughRoutes(
+      'divergent-scans-report',
+      'Divergent Scans Maintenance Report',
+      authorDifferentlyCapableScansDocument(),
+    );
+
+    const readRes = await server.inject({
+      method: 'GET',
+      url: `/workflow-repository/workflows/${workflowId}/versions/${version1.id}`,
+      headers: { 'x-api-key': operatorKey },
+    });
+    const parsed = parseWorkflowIrDocument(JSON.stringify((readRes.json() as { version: VersionPayload }).version.content));
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    if (!parsed.ok) throw new Error('unreachable');
+    const document = parsed.document;
+
+    // NO reuse grouping over the differently-capable scans
+    const analysis = optimization.analyzeWorkflow(document);
+    expect(analysis.opportunities.filter((o) => o.kind === 'workflow_reuse')).toEqual([]);
+    expect(analysis.rejected).toEqual([]);
+
+    // both single-requirement scans remain ordinary substitution candidates
+    const apiNodes = analysis.opportunities
+      .filter((o) => o.kind === 'api_substitution')
+      .map((o) => (o.kind === 'api_substitution' ? o.nodeId : ''));
+    expect(apiNodes).toEqual(['scan_board', 'scan_b']);
+
+    // a proposal on scan_b resolves the SAFE api_substitution — never a
+    // reuse grouping of the two differently-capable nodes
+    const proposal = optimization.createProposal({
+      ownerId: operatorUserId,
+      workflowId,
+      versionId: version1.id,
+      document,
+      opportunityNodeId: 'scan_b',
+    });
+    expect(proposal.kind).toBe('api_substitution');
+    expect(proposal.affectedNodeIds).toEqual(['scan_b']);
+    // the substituted candidate carries scan_b's own requirement — verbatim
+    const substitutedScan = proposal.candidateDocument.ir.nodes.find(
+      (n) => n.id === 'scan_b',
+    )!;
+    expect(substitutedScan.capabilityRequirements).toEqual(['spreadsheet.read']);
+    expect(substitutedScan.spec).toEqual({
+      class: 'deterministic_api',
+      capability: 'spreadsheet.read',
+    });
+
+    // NO candidate version was materialized (still exactly one version)
+    const versionsRes = await server.inject({
+      method: 'GET',
+      url: `/workflow-repository/workflows/${workflowId}/versions`,
+      headers: { 'x-api-key': operatorKey },
+    });
+    const versions = (versionsRes.json() as { versions: VersionPayload[] }).versions;
+    expect(versions).toHaveLength(1);
+    expect(versions[0]!.id).toBe(version1.id);
   });
 });

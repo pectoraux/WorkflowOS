@@ -3,6 +3,7 @@ import {
   authorSensitiveSubstitutableDocument,
   authorHumanDuplicateDocument,
   authorCleanSubstitutableDocument,
+  authorMultiRequirementAgenticDocument,
   BASELINE,
   composeOptimizationService,
 } from './helpers.js';
@@ -10,6 +11,7 @@ import {
   WorkflowOptimizationError,
   type OptimizationAnalysis,
 } from '../../../src/workflow-optimization/index.js';
+import { deriveApiSubstitutionCandidate } from '../../../src/workflow-optimization/internal/candidate-derivation.js';
 
 /**
  * V2-011 — UNSAFE OPTIMIZATION REJECTION (the required regression).
@@ -171,6 +173,55 @@ describe('V2-011 — fail-closed input guards', () => {
           reuseTarget: { workflowId: '', versionRef: '' },
         }),
       'REUSE_TARGET_INVALID',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // The capability-contract preservation guard (architect review, PR #146
+  // point 1, defense in depth): the derivation itself is fail-closed — an
+  // api_substitution candidate can ONLY be derived for a node declaring
+  // EXACTLY ONE capability requirement. The deterministic_api spec carries a
+  // single capability; deriving for a multi-requirement (or zero-requirement)
+  // node would silently DROP part of the node's execution contract, so the
+  // derivation refuses instead (a future rules version that wants genuine
+  // multi-capability composition must extend this derivation deliberately).
+  // The analyzer never routes such nodes here; the guard holds regardless.
+  // ---------------------------------------------------------------------
+  it('deriving an api_substitution candidate for a MULTI-requirement node is fail-closed (the contract can never silently shrink)', () => {
+    const document = authorMultiRequirementAgenticDocument();
+    const typed = expectTypedError(
+      () => deriveApiSubstitutionCandidate(document, 'scan_board'),
+      'OPTIMIZATION_INPUT_INVALID',
+    );
+    expect(typed.details.nodeId).toBe('scan_board');
+    expect(typed.details.declaredRequirements).toEqual([
+      'github.repository.read',
+      'spreadsheet.read',
+    ]);
+  });
+
+  it('deriving an api_substitution candidate for a ZERO-requirement node is fail-closed', () => {
+    const document = authorCleanSubstitutableDocument();
+    const stripped = {
+      ...document,
+      ir: {
+        ...document.ir,
+        nodes: document.ir.nodes.map((node) =>
+          node.id === 'scan_board' ? { ...node, capabilityRequirements: [] } : node,
+        ),
+      },
+    };
+    expectTypedError(
+      () => deriveApiSubstitutionCandidate(stripped as never, 'scan_board'),
+      'OPTIMIZATION_INPUT_INVALID',
+    );
+  });
+
+  it('deriving an api_substitution candidate for an unknown node id is fail-closed (no silent no-op)', () => {
+    const document = authorCleanSubstitutableDocument();
+    expectTypedError(
+      () => deriveApiSubstitutionCandidate(document, 'no_such_node'),
+      'OPTIMIZATION_INPUT_INVALID',
     );
   });
 });

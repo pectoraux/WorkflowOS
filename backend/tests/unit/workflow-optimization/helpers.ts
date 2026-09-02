@@ -518,6 +518,177 @@ export function authorTwoSubstitutableNodesDocument(): WorkflowIrDocument {
     .build();
 }
 
+/**
+ * The multi-requirement fixture: scan_board declares TWO API-stable ordinary
+ * requirements. A multi-requirement agentic node is NOT substitutable: the
+ * deterministic_api spec carries exactly ONE capability, so substituting
+ * would silently drop part of the node's execution contract — the analyzer
+ * must detect NO opportunity for it (the full requirement set is preserved).
+ */
+export function authorMultiRequirementAgenticDocument(): WorkflowIrDocument {
+  const base = authorCleanSubstitutableDocument();
+  return {
+    ...base,
+    ir: {
+      ...base.ir,
+      nodes: base.ir.nodes.map((node) =>
+        node.id === 'scan_board'
+          ? {
+              ...node,
+              capabilityRequirements: ['github.repository.read', 'spreadsheet.read'],
+            }
+          : node,
+      ),
+    },
+  };
+}
+
+/**
+ * Two agentic nodes with IDENTICAL structure (same task string, same ports,
+ * same failure policy, placement, completion evidence) — the second node's
+ * capability requirements are `secondScanRequirements`. When the two nodes
+ * declare DIFFERENT requirements they are NOT duplicates (their execution
+ * contracts differ) and must never be grouped for reuse; when they declare
+ * IDENTICAL requirements they ARE duplicates (the boundary's positive side).
+ */
+function authorAgenticDuplicatePairDocument(
+  secondScanRequirements: readonly string[],
+): WorkflowIrDocument {
+  return createWorkflowIrBuilder()
+    .withStart('fetch_tickets')
+    .addWorkflowInput({ name: 'ticketQuery', type: { kind: 'string' } })
+    .addWorkflowOutput({
+      name: 'digestReport',
+      type: { kind: 'string' },
+      from: { kind: 'node_output', node: 'send_digest', output: 'messageId' },
+    })
+    .addNode({
+      id: 'fetch_tickets',
+      executionClass: 'deterministic_api',
+      spec: { class: 'deterministic_api', capability: 'github.repository.read' },
+      capabilityRequirements: ['github.repository.read'],
+      placement: 'cloud_allowed',
+      inputs: [
+        { name: 'repository', type: { kind: 'string' }, binding: { kind: 'literal', value: 'pectoraux/WorkflowOS' } },
+        { name: 'query', type: { kind: 'string' }, binding: { kind: 'workflow_input', input: 'ticketQuery' } },
+      ],
+      outputs: [{ name: 'tickets', type: { kind: 'json' } }],
+      failurePolicy: { strategy: 'fail_workflow' },
+      completionEvidence: 'observation',
+    })
+    .addNode({
+      id: 'scan_a',
+      executionClass: 'agentic_computer_use',
+      spec: {
+        class: 'agentic_computer_use',
+        task: 'Scan the repository board and summarize the open ticket digest.',
+      },
+      capabilityRequirements: ['github.repository.read'],
+      placement: 'cloud_allowed',
+      inputs: [
+        { name: 'tickets', type: { kind: 'json' }, binding: { kind: 'node_output', node: 'fetch_tickets', output: 'tickets' } },
+      ],
+      outputs: [
+        { name: 'digest', type: { kind: 'string' } },
+        { name: 'openCount', type: { kind: 'number' } },
+      ],
+      failurePolicy: { strategy: 'retry_then_fail_workflow', maxAttempts: 2 },
+      completionEvidence: 'verification',
+    })
+    .addNode({
+      id: 'scan_b',
+      executionClass: 'agentic_computer_use',
+      spec: {
+        class: 'agentic_computer_use',
+        task: 'Scan the repository board and summarize the open ticket digest.',
+      },
+      capabilityRequirements: [...secondScanRequirements],
+      placement: 'cloud_allowed',
+      inputs: [
+        { name: 'tickets', type: { kind: 'json' }, binding: { kind: 'node_output', node: 'fetch_tickets', output: 'tickets' } },
+      ],
+      outputs: [
+        { name: 'digest', type: { kind: 'string' } },
+        { name: 'openCount', type: { kind: 'number' } },
+      ],
+      failurePolicy: { strategy: 'retry_then_fail_workflow', maxAttempts: 2 },
+      completionEvidence: 'verification',
+    })
+    .addNode({
+      id: 'approve_digest',
+      executionClass: 'human',
+      spec: {
+        class: 'human',
+        human: { kind: 'approval', instruction: 'Approve the digest report before sending.' },
+      },
+      capabilityRequirements: [],
+      placement: 'device_local',
+      inputs: [],
+      outputs: [{ name: 'approved', type: { kind: 'boolean' } }],
+      failurePolicy: { strategy: 'fail_workflow' },
+      completionEvidence: 'human_confirmation',
+    })
+    .addNode({
+      id: 'send_digest',
+      executionClass: 'deterministic_api',
+      spec: { class: 'deterministic_api', capability: 'messaging.send' },
+      capabilityRequirements: ['messaging.send'],
+      placement: 'cloud_preferred',
+      inputs: [
+        { name: 'text', type: { kind: 'string' }, binding: { kind: 'node_output', node: 'scan_a', output: 'digest' } },
+        { name: 'credentials', type: { kind: 'secret' }, binding: { kind: 'secret_ref', ref: 'digest-bot@secrets' } },
+      ],
+      outputs: [{ name: 'messageId', type: { kind: 'string' } }],
+      failurePolicy: { strategy: 'fail_workflow' },
+      completionEvidence: 'verification',
+    })
+    .addNode({
+      id: 'record_rejection',
+      executionClass: 'human',
+      spec: {
+        class: 'human',
+        human: {
+          kind: 'information',
+          instruction: 'Record why the digest report was rejected.',
+          provides: { name: 'reason', type: { kind: 'string' } },
+        },
+      },
+      capabilityRequirements: [],
+      placement: 'device_local',
+      inputs: [],
+      outputs: [{ name: 'reason', type: { kind: 'string' } }],
+      failurePolicy: { strategy: 'fail_workflow' },
+      completionEvidence: 'human_confirmation',
+    })
+    .addEdge({ from: 'fetch_tickets', to: 'scan_a', on: 'success' })
+    .addEdge({ from: 'fetch_tickets', to: 'scan_b', on: 'success' })
+    .addEdge({ from: 'scan_a', to: 'approve_digest', on: 'success' })
+    .addEdge({ from: 'scan_b', to: 'approve_digest', on: 'success' })
+    .addEdge({ from: 'approve_digest', to: 'send_digest', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'rejected' } })
+    .build();
+}
+
+/**
+ * The differently-capable duplicates fixture: structurally identical agentic
+ * nodes whose capabilityRequirements DIFFER — NOT duplicates; never grouped
+ * for reuse (the reuse substitution would replace both nodes' distinct
+ * execution contracts with workflow.execute).
+ */
+export function authorDifferentlyCapableAgenticDuplicatesDocument(): WorkflowIrDocument {
+  return authorAgenticDuplicatePairDocument(['spreadsheet.read']);
+}
+
+/**
+ * The identically-capable duplicates fixture: structurally identical agentic
+ * nodes with IDENTICAL capabilityRequirements — genuine duplicates; still
+ * grouped for reuse (the signature boundary's positive side).
+ */
+export function authorAgenticDuplicatesDocument(): WorkflowIrDocument {
+  return authorAgenticDuplicatePairDocument(['github.repository.read']);
+}
+
 // ============================================================================
 // Deterministic mutations of fixture documents (surface-divergence probes)
 // ============================================================================
