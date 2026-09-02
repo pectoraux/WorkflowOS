@@ -80,7 +80,7 @@ export type {
 export { deriveReverseTeachingLesson } from './internal/derivation.js';
 
 // The service (injected deterministic sources; store port).
-export { DefaultReverseTeachingSessionService } from './internal/session-service.js';
+export { DefaultReverseTeachingSessionService } from './internal/reverse-teaching-session-service.js';
 
 // The reference store + deterministic source factories (tests + dogfooding).
 export {
