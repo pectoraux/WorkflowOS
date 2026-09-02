@@ -134,3 +134,16 @@ Two full fresh-stack runs in one process: ~14 s wall (each run: stack build + mi
 4. **The unsafe rejection is covered by the integration battery** (a sensitive-capability workflow → typed SENSITIVE_CAPABILITY_SUBSTITUTION → no candidate created) rather than duplicated in this transcript; the dogfooding clause is the run-pair comparison.
 5. **The candidate version is deliberately NOT activated** (the installation still pins v1): activation is the owner's separate decision on the V2-002/V2-009 surfaces, outside V2-011's owned scope ("does not own … automatic activation of optimized versions").
 6. **CI environment difference**: local PGlite (WASM) vs CI's real PostgreSQL behind `WORKFLOWOS_DATABASE_URL` (unset here) — the same divergence honestly recorded by every prior V2 dogfooding evidence.
+
+## Re-verification after the PR #146 corrections (architect REQUEST_CHANGES round)
+
+After the architect's repository-level review of PR #146 found two blocking
+correctness defects (API substitution could drop required capabilities for
+multi-requirement nodes; the reuse duplicate signature ignored
+`capabilityRequirements`), the module was corrected on this same branch
+(commits `04c6398` RED regressions → `f6ab415` GREEN fixes) and this
+experiment was RE-RUN at the corrected head:
+
+- Invocation: `bunx tsx tests/integration/workflow-optimization/run-optimization-dogfooding.ts` from `backend/` → exit 0, `DOGFOODING RESULT: PASS (deterministic across two fresh runs)`.
+- Result: identical to the recorded transcript — same two fresh-stack runs, all six sections PASS, transcripts byte-identical after normalization, the same deterministic content digests (baseline V2-003 semantic digest `6d1d51ee6…f8d6`; analysis identity `opt_b4ce4…b3de` — UNCHANGED by the corrections, as expected: the dogfooding workflow's agentic node declares exactly one API-stable requirement, so its analysis output is untouched by the single-requirement restriction and by the capability-aware duplicate signature).
+- Scope of the corrections relative to this experiment: none of the six recorded sections changed; the corrections only close the two holes the architect identified (multi-requirement substitution and differently-capable reuse grouping), neither of which is exercised by this fixture — both are covered by dedicated RED→GREEN regressions in the unit battery (`analysis-detection.test.ts`, `unsafe-optimization.test.ts`) and the integration battery (`workflow-optimization.core.integration.test.ts`, two new negatives on the real stack: no candidate version created for a multi-requirement agentic node; differently-capable scans never grouped for reuse).
