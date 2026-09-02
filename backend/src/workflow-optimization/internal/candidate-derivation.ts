@@ -8,8 +8,11 @@
  * mechanism changes:
  *
  *   - api_substitution: the agentic_computer_use spec becomes the
- *     deterministic_api spec carrying the primary API-stable ordinary
- *     requirement; the requirements become exactly that capability;
+ *     deterministic_api spec carrying the single API-stable ordinary
+ *     requirement (EXACTLY ONE — the derivation is fail-closed below:
+ *     a node declaring any other number of requirements can never be
+ *     substituted here, so its execution contract can never silently
+ *     shrink); the requirements become exactly that capability;
  *   - workflow_reuse: each duplicate site's spec becomes an OPAQUE
  *     subworkflow reference to the owner-supplied existing workflow
  *     version (V2-003: opaque identifiers — repository semantics own
@@ -22,6 +25,7 @@
  */
 import type { WorkflowIrDocument, SubworkflowDependency } from '../../workflow-ir/index.js';
 import type { SubworkflowReuseTarget } from '../types.js';
+import { WorkflowOptimizationError } from '../types.js';
 
 /** The honest compatibility declaration for a task-surface-preserving candidate. */
 const EQUIVALENT_COMPATIBILITY = {
@@ -40,6 +44,35 @@ export function deriveApiSubstitutionCandidate(
   nodeId: string,
 ): WorkflowIrDocument {
   const cloned = cloneDocument(baseline);
+
+  // FAIL-CLOSED target resolution: an unresolvable node id must never
+  // produce a silent no-op "candidate" that merely re-declares equivalence.
+  const target = cloned.ir.nodes.find((node) => node.id === nodeId);
+  if (!target) {
+    throw new WorkflowOptimizationError(
+      'OPTIMIZATION_INPUT_INVALID',
+      `api_substitution target node ${nodeId} does not exist in the baseline document`,
+      { nodeId, baselineNodeIds: cloned.ir.nodes.map((node) => node.id) },
+    );
+  }
+
+  // FAIL-CLOSED capability-contract preservation: the deterministic_api spec
+  // carries EXACTLY ONE capability. The analyzer only routes single-requirement
+  // nodes here, but the derivation enforces its own input contract regardless
+  // — substituting a node with any other number of requirements would
+  // silently drop part of its execution contract (capabilityRequirements sit
+  // outside the task-surface equivalence surface by design), so this refuses
+  // instead. A future rules version that composes genuine multi-capability
+  // candidates must extend THIS derivation deliberately.
+  if (target.capabilityRequirements.length !== 1) {
+    throw new WorkflowOptimizationError(
+      'OPTIMIZATION_INPUT_INVALID',
+      `api_substitution requires exactly one capability requirement; node ${target.id} declares ${target.capabilityRequirements.length}`,
+      { nodeId: target.id, declaredRequirements: [...target.capabilityRequirements] },
+    );
+  }
+  const apiCapability = target.capabilityRequirements[0]!;
+
   return {
     ...cloned,
     compatibility: EQUIVALENT_COMPATIBILITY,
@@ -49,7 +82,6 @@ export function deriveApiSubstitutionCandidate(
         if (node.id !== nodeId) {
           return node;
         }
-        const apiCapability = node.capabilityRequirements[0]!;
         return {
           ...node,
           executionClass: 'deterministic_api' as const,

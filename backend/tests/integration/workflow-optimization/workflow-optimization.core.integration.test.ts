@@ -1023,10 +1023,11 @@ describe('V2-011 — analyze, propose, approve and materialize a candidate versi
     expect(analysis.rejected).toEqual([]);
 
     // both single-requirement scans remain ordinary substitution candidates
+    // (canonical serialization order: 'scan_b' sorts before 'scan_board')
     const apiNodes = analysis.opportunities
       .filter((o) => o.kind === 'api_substitution')
       .map((o) => (o.kind === 'api_substitution' ? o.nodeId : ''));
-    expect(apiNodes).toEqual(['scan_board', 'scan_b']);
+    expect(apiNodes).toEqual(['scan_b', 'scan_board']);
 
     // a proposal on scan_b resolves the SAFE api_substitution — never a
     // reuse grouping of the two differently-capable nodes

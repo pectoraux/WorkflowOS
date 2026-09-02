@@ -181,7 +181,12 @@ export interface ApiSubstitutionOpportunity {
   readonly declaredTask: string;
   /** the declared capability requirements (verbatim — the rationale's evidence). */
   readonly declaredRequirements: readonly string[];
-  /** the primary API-stable ordinary requirement the candidate will call. */
+  /**
+   * The single API-stable ordinary requirement the candidate will call
+   * (exactly one — the deterministic_api spec carries one capability, so a
+   * multi-requirement node is never substitutable under rules-v1 without
+   * dropping part of its execution contract).
+   */
   readonly apiCapability: string;
   /** the fixed-template rationale (declared facts only — never invented). */
   readonly rationale: string;

@@ -157,11 +157,17 @@ function maintenanceBreakdownOf(document: WorkflowIrDocument): MaintenanceBreakd
   return { nodeCount, duplicateNodeCount, agenticNodeCount, score };
 }
 
-/** The structural signature used for duplicate detection (mirrors analysis.ts). */
+/**
+ * The structural signature used for duplicate detection (mirrors analysis.ts
+ * — INCLUDING capabilityRequirements: the declared requirements are part of
+ * the duplicated logic's identity, so differently-capable nodes are different
+ * logic and never count as duplicates).
+ */
 function duplicateSignatureOf(node: WorkflowNode): string {
   return JSON.stringify({
     executionClass: node.executionClass,
     spec: node.spec,
+    capabilityRequirements: [...node.capabilityRequirements],
     inputs: node.inputs,
     outputs: node.outputs,
     failurePolicy: node.failurePolicy,

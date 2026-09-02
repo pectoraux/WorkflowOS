@@ -8,16 +8,19 @@
  * Detection rules (rules version `workflowos-optimization-rules-v1`):
  *
  *   - api_substitution: an `agentic_computer_use` node whose declared
- *     capabilityRequirements are non-empty and ALL API-stable (every
- *     requirement has a deterministic API — the agent loop is not
- *     required). REJECTED when the requirements intersect the merged
- *     V2-008 SENSITIVE set (the substitution would strip the
- *     computer-use runtime's grants and takeover boundaries).
+ *     capabilityRequirements are EXACTLY ONE API-stable ordinary
+ *     capability (the deterministic_api spec carries a single capability —
+ *     a multi-requirement node is not substitutable without dropping part
+ *     of its execution contract, so rules-v1 never proposes one). REJECTED
+ *     when the requirement is in the merged V2-008 SENSITIVE set (the
+ *     substitution would strip the computer-use runtime's grants and
+ *     takeover boundaries).
  *   - workflow_reuse: duplicated non-subworkflow nodes (identical class,
- *     spec payload, ports/bindings, failure policy, placement, completion
- *     evidence — only the node id differs). REJECTED when the group is
- *     human (optimizations may never touch human decision points) or when
- *     the group's requirements are sensitive.
+ *     spec payload, capability requirements, ports/bindings, failure
+ *     policy, placement, completion evidence — only the node id differs;
+ *     differently-capable nodes are different logic and never group). REJECTED
+ *     when the group is human (optimizations may never touch human decision
+ *     points) or when the group's requirements are sensitive.
  *
  * Every rationale is a FIXED template interpolating ONLY declared facts
  * (the no-invention guarantee — the V2-006/V2-010 teaching discipline).
@@ -44,6 +47,8 @@ import { OPTIMIZATION_RULES_VERSION, WorkflowOptimizationError } from '../types.
 interface NodeSignature {
   readonly executionClass: WorkflowNode['executionClass'];
   readonly spec: unknown;
+  /** the declared capability requirements — the nodes' execution CONTRACT. */
+  readonly capabilityRequirements: readonly string[];
   readonly inputs: unknown;
   readonly outputs: unknown;
   readonly failurePolicy: unknown;
@@ -55,6 +60,7 @@ function signatureOf(node: WorkflowNode): NodeSignature {
   return {
     executionClass: node.executionClass,
     spec: node.spec,
+    capabilityRequirements: [...node.capabilityRequirements],
     inputs: node.inputs,
     outputs: node.outputs,
     failurePolicy: node.failurePolicy,
@@ -118,6 +124,17 @@ export function analyzeWorkflowDocument(document: WorkflowIrDocument): Optimizat
     }
     const task = node.spec.class === 'agentic_computer_use' ? node.spec.task : '';
     if (!allRequirementsApiStable(node.capabilityRequirements)) {
+      continue;
+    }
+    // EXACTLY ONE requirement: the deterministic_api spec carries a single
+    // capability, and capabilityRequirements are deliberately OUTSIDE the
+    // task-surface equivalence surface (the mechanism may change; the
+    // contract may never shrink). Substituting a multi-requirement node
+    // would silently drop its other requirements — rules-v1 restricts
+    // substitution to the provably contract-preserving case. A future rules
+    // version may compose genuine multi-capability candidates; it must then
+    // also extend the derivation and the equivalence proof deliberately.
+    if (node.capabilityRequirements.length !== 1) {
       continue;
     }
     const sensitive = sensitiveRequirementsOf(node.capabilityRequirements);
