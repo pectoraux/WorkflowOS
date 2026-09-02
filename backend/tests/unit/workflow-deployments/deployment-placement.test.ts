@@ -11,7 +11,6 @@
  * battery on the real matcher).
  */
 import { describe, it, expect } from 'vitest';
-import { WorkflowDeploymentError } from '../../../src/workflow-deployments/index.js';
 import {
   checkPlacementCompatibility,
   deploymentRequirementSetOf,
@@ -41,8 +40,8 @@ function planOf(placement: WorkflowNode['placement']) {
     .addNode(node('step_one', placement))
     .build();
   const compiled = compileWorkflow(JSON.parse(serializeWorkflowIrDocument(doc)));
-  expect(compiled.ok).toBe(true);
-  return compiled.artifact.payload.plan;
+  if (!compiled.ok) throw new Error(`fixture plan failed to compile: ${compiled.diagnostics[0]?.message}`);
+  return compiled.artifact.plan;
 }
 
 describe('V2-009 — deployment location classes (constitution §12 semantics)', () => {
@@ -180,10 +179,10 @@ describe('V2-009 — deployment ↔ compiled-plan placement compatibility (V2-00
       .addEdge({ from: 'a', to: 'b', on: 'success' })
       .build();
     const compiled = compileWorkflow(JSON.parse(serializeWorkflowIrDocument(doc)));
-    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) throw new Error('fixture plan failed to compile');
     const result = checkPlacementCompatibility({
       policy: { ...base, placement: { required: 'device_local' } },
-      plan: compiled.artifact.payload.plan,
+      plan: compiled.artifact.plan,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.detail).toContain('cloud_required');
@@ -195,12 +194,12 @@ describe('V2-009 — the V2-004 requirement-set projection (the matcher contract
     const set = deploymentRequirementSetOf({
       placement: { required: 'device_preferred', fallbackOrder: ['cloud_allowed'] },
       privacy: { localOnly: false },
-      minTrustTier: 'standard',
+      minTrustTier: 'trusted',
     });
     expect(set.capabilities).toEqual([]);
     expect(set.placement).toEqual({ required: 'device_preferred', fallbackOrder: ['cloud_allowed'] });
     expect(set.privacy).toEqual({ localOnly: false });
-    expect(set.minTrustTier).toBe('standard');
+    expect(set.minTrustTier).toBe('trusted');
   });
 
   it('defaults: no trust tier, no human-approval requirement, degraded health floor', () => {

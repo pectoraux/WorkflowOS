@@ -147,14 +147,17 @@ describe('V2-009 — daily wall-clock occurrence derivation (timezone-correct)',
     expect(occ2!.scheduledAt).toBe('2026-09-01T09:00:00.000Z');
   });
 
-  it('derives 09:00 America/New_York as 13:00Z in EDT and 14:00Z in EST (the DST shift is in the INSTANT, honestly)', () => {
+  it('derives 09:00 America/New_York as 13:00Z in EDT (same day) and 14:00Z in EST (after fall-back) — the DST shift is in the INSTANT, honestly', () => {
     const spec = validateScheduleSpec({ kind: 'daily', timezone: 'America/New_York', timeOfDay: '09:00' });
-    // before fall-back (EDT): cursor 2026-10-31T12:00Z → 2026-11-01T13:00Z
-    const before = nextOccurrenceAfter(spec, utc('2026-10-31T12:00:00.000Z'), ANCHOR);
-    expect(before!.scheduledAt).toBe('2026-11-01T13:00:00.000Z');
-    // after fall-back (EST): cursor 2026-11-01T14:00Z → 2026-11-02T14:00Z
-    const after = nextOccurrenceAfter(spec, utc('2026-11-01T14:00:00.000Z'), ANCHOR);
-    expect(after!.scheduledAt).toBe('2026-11-02T14:00:00.000Z');
+    // cursor 2026-10-31T12:00Z (local 08:00 EDT) → TODAY's 09:00 EDT = 13:00Z
+    const sameDay = nextOccurrenceAfter(spec, utc('2026-10-31T12:00:00.000Z'), ANCHOR);
+    expect(sameDay!.scheduledAt).toBe('2026-10-31T13:00:00.000Z');
+    // after today's fire → 2026-11-01 09:00 EST (post fall-back) = 14:00Z
+    const afterFallBack = nextOccurrenceAfter(spec, utc('2026-10-31T13:00:00.000Z'), ANCHOR);
+    expect(afterFallBack!.scheduledAt).toBe('2026-11-01T14:00:00.000Z');
+    // the day after is still EST: 2026-11-02 09:00 = 14:00Z
+    const next = nextOccurrenceAfter(spec, utc('2026-11-01T14:00:00.000Z'), ANCHOR);
+    expect(next!.scheduledAt).toBe('2026-11-02T14:00:00.000Z');
   });
 
   it('GAP BOUNDARY: daily 02:30 America/New_York across 2026-03-08 fires at the gap end 07:00Z (typed gap_shifted)', () => {
@@ -163,9 +166,9 @@ describe('V2-009 — daily wall-clock occurrence derivation (timezone-correct)',
     const occ = nextOccurrenceAfter(spec, utc('2026-03-07T12:00:00.000Z'), ANCHOR);
     expect(occ!.scheduledAt).toBe('2026-03-08T07:00:00.000Z');
     expect(occ!.resolution).toBe('gap_shifted');
-    // the NEXT day is a normal 02:30 EST = 07:30Z
+    // the NEXT day is a normal 02:30 EDT (post spring-forward) = 06:30Z
     const next = nextOccurrenceAfter(spec, utc('2026-03-08T07:00:00.000Z'), ANCHOR);
-    expect(next!.scheduledAt).toBe('2026-03-09T07:30:00.000Z');
+    expect(next!.scheduledAt).toBe('2026-03-09T06:30:00.000Z');
     expect(next!.resolution).toBe('normal');
   });
 

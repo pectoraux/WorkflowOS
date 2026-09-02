@@ -107,3 +107,13 @@ export type {
   NodeDirectoryReadPort,
   DefaultWorkflowDeploymentServiceDeps,
 } from './types.js';
+
+// The service (PostgreSQL-authoritative; injected clock).
+export { DefaultWorkflowDeploymentService } from './internal/trigger-service.js';
+
+// The deterministic injected stepping clock (tests + harnesses).
+export { createSteppingTriggerClock } from './internal/clock.js';
+export {
+  formatUtcTimestamp,
+  epochMsOf,
+} from './internal/clock.js';
