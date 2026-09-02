@@ -122,6 +122,7 @@ export function authorCleanSubstitutableDocument(): WorkflowIrDocument {
     .addEdge({ from: 'fetch_tickets', to: 'scan_board', on: 'success' })
     .addEdge({ from: 'scan_board', to: 'approve_digest', on: 'success' })
     .addEdge({ from: 'approve_digest', to: 'send_digest', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'approved' } })
     .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'rejected' } })
     .build();
 }
@@ -218,6 +219,7 @@ export function authorSensitiveSubstitutableDocument(): WorkflowIrDocument {
     .addEdge({ from: 'fetch_tickets', to: 'write_report', on: 'success' })
     .addEdge({ from: 'write_report', to: 'approve_digest', on: 'success' })
     .addEdge({ from: 'approve_digest', to: 'send_digest', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'approved' } })
     .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'rejected' } })
     .build();
 }
