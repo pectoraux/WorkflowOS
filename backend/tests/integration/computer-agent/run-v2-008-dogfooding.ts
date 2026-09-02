@@ -134,6 +134,7 @@ function check(ok: boolean, label: string, detail = ''): void {
     failures += 1;
   }
   const mark = ok ? 'PASS' : 'FAIL';
+  // eslint-disable-next-line no-console
   console.log(`  [${mark}] ${label}${detail ? ` — ${detail}` : ''}`);
 }
 
@@ -353,7 +354,9 @@ function createTriageDecider(externalWrite: (path: string, content: string) => P
 const WALL_START = Date.now();
 
 async function main(): Promise<number> {
+  // eslint-disable-next-line no-console
   console.log(`V2-008 dogfooding run — Work Order ${WORK_ORDER_ID}, base ${BASE_SHA}`);
+  // eslint-disable-next-line no-console
   console.log(`wall clock start: ${WALL_START}ms (the only wall-clock lines; all product clocks are injected)`);
 
   // ---- the real sandbox + the real fixture files ----
@@ -363,7 +366,9 @@ async function main(): Promise<number> {
   for (const file of INBOX_FILES) {
     await writeFile(join(root, file.path), file.content, 'utf8');
   }
+  // eslint-disable-next-line no-console
   console.log(`real host sandbox: ${root}`);
+  // eslint-disable-next-line no-console
   console.log(`real fixtures: ${INBOX_FILES.map((file) => file.path).join(', ')}`);
 
   // ---- the real stack (PGlite + repository + run service + V2-004) ----
@@ -414,6 +419,7 @@ async function main(): Promise<number> {
   // ---- author the workflow through the real repository ----
   const document = authorTriageWorkflow();
   const authored = await harness.authorWorkflow({ document, slug: 'daily-triage' });
+  // eslint-disable-next-line no-console
   console.log(`workflow authored: ${authored.workflowId} version ${authored.versionId} (semantic digest ${authored.semanticDigest})`);
 
   // ---- request + execute the run ----
@@ -422,6 +428,7 @@ async function main(): Promise<number> {
     versionId: authored.versionId,
     triggerId: 'v2-008-dogfooding-manual-1',
   });
+  // eslint-disable-next-line no-console
   console.log(`run requested: ${run.id} (state ${run.state})`);
 
   const decider = createTriageDecider(externalWrite);
@@ -430,6 +437,7 @@ async function main(): Promise<number> {
     hosts: [host],
     decider,
   });
+  // eslint-disable-next-line no-console
   console.log('drive 1 →', JSON.stringify({ state: report1.state, pausedAt: report1.pausedAtStepId, steps: report1.steps.map((step) => `${step.stepId}:${step.outcome}`) }));
 
   // (A) the run paused at the HUMAN approval pause point
@@ -455,6 +463,7 @@ async function main(): Promise<number> {
     humanUserId: harness.ownerUserId,
     decider,
   });
+  // eslint-disable-next-line no-console
   console.log('drive 2 →', JSON.stringify({ state: report2.state, pausedAt: report2.pausedAtStepId, takeoverRequested: report2.takeoverRequested }));
 
   // (D) the agent requested the HUMAN TAKEOVER at the finalize step
@@ -468,6 +477,7 @@ async function main(): Promise<number> {
     userId: HUMAN_USER_ID_EXTERNAL,
     host,
   });
+  // eslint-disable-next-line no-console
   console.log(`takeover session: ${session.id} (human ${HUMAN_USER_ID_EXTERNAL} on host ${session.nodeId})`);
 
   // the human first OBSERVES the stale file (fresh observation through the host)
@@ -512,6 +522,7 @@ async function main(): Promise<number> {
     hosts: [host],
     decider,
   });
+  // eslint-disable-next-line no-console
   console.log('drive 3 →', JSON.stringify({ state: report3.state, steps: report3.steps.map((step) => `${step.stepId}:${step.outcome}`) }));
   check(report3.state === 'completed', 'the run COMPLETED end-to-end on the real host after the takeover hand-back');
 
@@ -552,6 +563,7 @@ async function main(): Promise<number> {
   const originalCandidate = captured.find((attestation) => attestation.statement.stepId === 'write_report');
   if (!originalCandidate) {
     check(false, 'the write-report attestation was captured (required for the tamper/replay negatives)');
+     
     console.error('V2-008 dogfooding FAILED (no captured write-report attestation)');
     process.exit(1);
   }
@@ -629,11 +641,14 @@ async function main(): Promise<number> {
   await harness.teardown();
 
   const wallDuration = Date.now() - WALL_START;
+  // eslint-disable-next-line no-console
   console.log(`checks: ${checks - failures}/${checks} passed; wall duration ${wallDuration}ms`);
   if (failures > 0) {
+     
     console.error(`V2-008 dogfooding FAILED (${failures} failing checks)`);
     return 1;
   }
+  // eslint-disable-next-line no-console
   console.log('V2-008 dogfooding PASSED');
   return 0;
 }
@@ -643,6 +658,7 @@ main()
     process.exit(code);
   })
   .catch((error) => {
+     
     console.error('V2-008 dogfooding runner crashed:', error);
     process.exit(1);
   });
