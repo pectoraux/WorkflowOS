@@ -160,3 +160,37 @@ Wall duration 4146 ms (single process; real PGlite in-memory, real filesystem I/
 ## Resulting action
 
 V2-008 implementation + deterministic battery + real-host dogfooding are complete on the branch; the Work Order is READY_FOR_ARCHITECT_REVIEW (merge decision is the architect's alone). No frozen-contract contradictions were encountered: the runtime consumes V2-003/V2-004/V2-005/V2-007/V2-014 exactly through their merged barrels and defines no second authority of any of their dimensions.
+
+---
+
+# Correction round — the PR #142 architect blocker (attestation completion boundary)
+
+## The blocker (audited by the architect on the actual branch)
+
+`completeStepWithAttestation()` recorded the step as `succeeded` BEFORE enforcing `AgentAttestationPolicy.required`: a missing attester key, a failed independent V2-014 verification, or a rejected V2-005 attachment could leave a durably succeeded step while `runLoop()` still reported `completed` and the walk could ultimately call `completeRun()`.
+
+## The correction (commits `55cfc21` red → `463b6ee` green)
+
+1. **Enforcement before durable success:** the gate order is now support check → independent V2-014 verification → V2-005 boundary attach → only then `recordStepCompleted('succeeded')`. The atomic direction is the safe one: a crash between the attach and the step record converges on re-drive (the binding is durable, the step command is idempotent); the inverse order is exactly the blocked defect.
+2. **Typed propagation:** required-attestation failures surface as typed runtime failures — `AGENT_ATTESTATION_UNAVAILABLE` (no key) and the new `AGENT_ATTESTATION_REJECTED` (V2-014 rejection or V2-005 attach rejection, the typed code carried in the detail). Both `runLoop` call sites (the deterministic_api structured path and the agentic verified-completion path) durably fail the step and return `outcome: 'failed'`; the walk routes the failure through the declared failure policy, so `completeRun()` is unreachable while a required attestation is unsatisfied.
+3. **The real boundary's typed throw is honored:** the REAL V2-005 `attachAttestation` RAISES `WorkflowRunError RUN_ATTESTATION_*` (durably recorded, never returned as a value — the previous code's returned-shape check was dead code and the throw escaped the runtime unhandled). The correction catches exactly the `RUN_ATTESTATION*` typed throws and maps them; anything else rethrows. V2-005 and V2-014 semantics are consumed, never redefined.
+4. **Optional policy unchanged:** honest absence/rejection still recorded; the step still completes when attestation is not required.
+
+## The three deterministic negative regressions (required correction #4)
+
+Red on the pre-fix head, green after the fix — in BOTH batteries:
+
+- **Unit (`tests/unit/computer-agent/attestation-completion-gate.test.ts`, deterministic, ManualClock):** (1) no attester key + required → `AGENT_ATTESTATION_UNAVAILABLE`; (2) independent V2-014 rejection (`trustedAttesterKeyIds: []` trusts nobody) → `AGENT_ATTESTATION_REJECTED` carrying `ATTESTATION_ATTESTER_UNEXPECTED`, the boundary never asked; (3) V2-005 attach rejection (the recorder double mirrors the real boundary's typed-throw discipline) → `AGENT_ATTESTATION_REJECTED` carrying `RUN_ATTESTATION_REJECTED`, no binding. Each proves: zero succeeded step completions, exactly one durably failed step completion, no `complete` command, run state `failed`.
+- **Real stack (`tests/integration/computer-agent/computer-agent.attestation-gate.integration.test.ts`, real PGlite + the real V2-005 boundary + a real Ed25519 key):** the same three negatives against the durable PostgreSQL shape — the step record is `outcome: 'failed'` / `status: 'failed'`, the run state is `failed`, no (or exactly the pre-failure) bindings. Case (3) is a REAL boundary rejection: a host that signs every attestation with one constant nonce → the first attach consumes the nonce in the boundary's DURABLE run-scoped replay registry → the second attach is the typed `ATTESTATION_REPLAYED` throw, durably recorded in `attestationRejections`, the second step never succeeds, the run fails.
+
+## Re-verification after the correction (point #5 of the blocker)
+
+- **Dogfooding runner re-run:** 37/37 checks PASS, exit 0, wall ~3.8s (identical transcript shape; the attestation boundary events now precede `workflow.step.completed` in the reconstructed timeline — the corrected order).
+- **Computer-agent battery:** 18 files / 111 tests, all green (91 unit incl. the 3 new gate tests + 20 integration incl. the 3 new real-stack negatives).
+- **e2e timeline pin:** updated to the corrected order (`execution.attestation.verified` + `verification.completed` BEFORE `workflow.step.completed`) — the attestation is now verifiably attached before the step is durably completed.
+- **Typecheck:** 0 errors. **Lint:** scoped eslint clean; repo-wide `bun run lint` exit 0.
+- **Full local suite (disjoint chunks over all 265 vitest files):** 4318 tests — 4250 passed / 3 failed / 65 skipped. The only failures are the inherited WORK-069 governance trio (governance-state W052-AC01 + parallel-eligibility W052-AC03 ×2), pre-existing on main @ `d36499c`, zero governance files in this diff.
+
+## Correction classification
+
+**PASS** — required attestation is now a completion gate at the exact boundary the architect specified: no required-attestation failure can leave a succeeded step, and `completeRun()` is prevented on every negative path, proven deterministically (unit) and durably (real stack).

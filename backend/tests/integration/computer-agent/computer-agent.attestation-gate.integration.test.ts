@@ -64,7 +64,7 @@ class FixedNonceHost implements AttestingComputerHost {
   readonly nodeId: string;
   readonly sessionToken: string;
   readonly platformClass: AttestingComputerHost['platformClass'];
-  readonly capabilities: readonly AttestingComputerHost['capabilities'];
+  readonly capabilities: AttestingComputerHost['capabilities'];
   readonly attestationSupport: AttestingComputerHost['attestationSupport'];
   private readonly inner: AttestingComputerHost;
   private signed = 0;
