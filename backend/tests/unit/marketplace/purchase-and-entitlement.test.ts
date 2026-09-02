@@ -152,8 +152,11 @@ describe('paid acceptance (the payment-adapter boundary)', () => {
       offers: [oneTimeOffer()],
     });
     const offerId = created.revision.offers[0]!.id;
+    // A PUBLISHER member (who can see their own draft listing — the no-
+    // existence-leak discipline keeps non-publishers at the uniform
+    // not-found) reaches the published-status gate on the acceptance path.
     await expectMarketplaceError(
-      harness.service.acceptOffer(customerPrincipal, {
+      harness.service.acceptOffer(publisherPrincipal, {
         listingId: created.listing.id,
         offerId,
         customerOrganizationId: CUSTOMER_ORG,

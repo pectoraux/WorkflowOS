@@ -97,7 +97,17 @@ describe('listing creation (draft, revision 1 pins the exact version)', () => {
     const harness = buildUnitHarness();
     const seeded = await seedPublisherWorkflow(harness);
     // The outsider cannot SEE the workflow at all: the reader (the V2-002
-    // authority's read boundary) denies BEFORE any listing exists.
+    // authority's read boundary) denies BEFORE any listing exists. (The
+    // fixture re-seeds the workflow PRIVATE so the authority genuinely
+    // denies the outsider — a public workflow would be visible to any
+    // authenticated principal.)
+    harness.reader.seedWorkflow({
+      id: seeded.workflowId,
+      organizationId: PUBLISHER_ORG,
+      ownerUserId: 'unit-publisher-owner',
+      slug: 'digest-report',
+      visibility: 'private',
+    });
     await expect(
       harness.service.createListing(outsiderPrincipal, {
         organizationId: PUBLISHER_ORG,
@@ -387,6 +397,6 @@ describe('the creator maintenance update (an EXPLICIT new revision, never an in-
       }),
       'MARKETPLACE_LISTING_NOT_FOUND',
     );
-    expect(await isMarketplaceError(Promise.reject(new Error('x')), 'x')).toBe(false);
+    expect(await isMarketplaceError(new Error('x'), 'x')).toBe(false);
   });
 });

@@ -217,6 +217,11 @@ export function authorBreakingUpdateDocument(): WorkflowIrDocument {
       type: { kind: 'string' },
       from: { kind: 'node_output', node: 'send_digest', output: 'messageId' },
     })
+    .withCompatibility({
+      compatibilityLevel: 'incompatible',
+      inputSurfaceChange: 'breaking',
+      outputSurfaceChange: 'none',
+    })
     .addNode({
       id: 'fetch_tickets',
       executionClass: 'deterministic_api',
@@ -231,19 +236,39 @@ export function authorBreakingUpdateDocument(): WorkflowIrDocument {
       completionEvidence: 'observation',
     })
     .addNode({
+      id: 'scan_board',
+      executionClass: 'agentic_computer_use',
+      spec: {
+        class: 'agentic_computer_use',
+        task: 'Scan the repository board and summarize the open ticket digest.',
+      },
+      capabilityRequirements: ['github.repository.read'],
+      placement: 'cloud_allowed',
+      inputs: [
+        { name: 'tickets', type: { kind: 'json' }, binding: { kind: 'node_output', node: 'fetch_tickets', output: 'tickets' } },
+      ],
+      outputs: [
+        { name: 'digest', type: { kind: 'string' } },
+        { name: 'openCount', type: { kind: 'number' } },
+      ],
+      failurePolicy: { strategy: 'retry_then_fail_workflow', maxAttempts: 2 },
+      completionEvidence: 'verification',
+    })
+    .addNode({
       id: 'send_digest',
       executionClass: 'deterministic_api',
       spec: { class: 'deterministic_api', capability: 'messaging.send' },
       capabilityRequirements: ['messaging.send'],
       placement: 'cloud_preferred',
       inputs: [
-        { name: 'text', type: { kind: 'string' }, binding: { kind: 'node_output', node: 'fetch_tickets', output: 'tickets' } },
+        { name: 'text', type: { kind: 'string' }, binding: { kind: 'node_output', node: 'scan_board', output: 'digest' } },
       ],
       outputs: [{ name: 'messageId', type: { kind: 'string' } }],
       failurePolicy: { strategy: 'fail_workflow' },
       completionEvidence: 'verification',
     })
-    .addEdge({ from: 'fetch_tickets', to: 'send_digest', on: 'success' })
+    .addEdge({ from: 'fetch_tickets', to: 'scan_board', on: 'success' })
+    .addEdge({ from: 'scan_board', to: 'send_digest', on: 'success' })
     .build();
 }
 

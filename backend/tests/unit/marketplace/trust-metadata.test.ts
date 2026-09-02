@@ -190,6 +190,8 @@ describe('trust ≠ authorization (the marketplace-economics rule)', () => {
     const harness = buildUnitHarness();
     const { created } = await createDraftListing(harness);
     const keys = Object.keys(created.revision.trust).sort();
+    // (Default lexicographic sort: 'semanticDigest' sorts BEFORE
+    // 'sensitiveCapabilities'.)
     expect(keys).toEqual([
       'contentDigest',
       'dependencyGraph',
@@ -198,8 +200,8 @@ describe('trust ≠ authorization (the marketplace-economics rule)', () => {
       'publisherOrganizationId',
       'publisherUserId',
       'requiredCapabilities',
-      'sensitiveCapabilities',
       'semanticDigest',
+      'sensitiveCapabilities',
       'versionId',
       'versionNumber',
       'workflowId',

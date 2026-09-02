@@ -169,7 +169,20 @@ describe('customer cancellation (the explicit maintenance-cancellation contract)
 
 describe('historical facts are never rewritten (explicit transitions only)', () => {
   it('the settlement facts survive cancellation and refund unchanged', async () => {
-    const { harness, entitlementId, transactionId, seeded, listingId } = await purchasedFixture();
+    // A SUBSCRIPTION entitlement (the only entitlement both transitions
+    // legally apply to: cancellation is subscription-only, refund applies
+    // to any succeeded settlement).
+    const harness = buildUnitHarness();
+    const seeded = await seedPublisherWorkflow(harness);
+    const listingId = await createPublishedListing(harness, seeded, [subscriptionOffer()]);
+    const listing = await harness.service.getListing(publisherPrincipal, listingId);
+    const accepted = await harness.service.acceptOffer(customerPrincipal, {
+      listingId,
+      offerId: listing.revision.offers[0]!.id,
+      customerOrganizationId: CUSTOMER_ORG,
+    });
+    const entitlementId = accepted.entitlement.id;
+    const transactionId = accepted.transaction!.id;
     await harness.service.publishNewVersion(publisherPrincipal, {
       listingId,
       versionId: seeded.version2Id,
@@ -183,7 +196,7 @@ describe('historical facts are never rewritten (explicit transitions only)', () 
     expect(entitlement.transactionId).toBe(transactionId);
     expect(entitlement.grantedAt).toBeGreaterThan(0);
     const transaction = await harness.service.getTransaction(customerPrincipal, transactionId);
-    expect(transaction.amount).toBe('19.99');
+    expect(transaction.amount).toBe('4.50');
     expect(transaction.adapterReference).not.toBeNull();
     // The listing's revision history is untouched by the commerce lifecycle.
     const history = await harness.service.listListingRevisions(publisherPrincipal, listingId);
