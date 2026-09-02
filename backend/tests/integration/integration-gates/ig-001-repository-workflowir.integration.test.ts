@@ -184,6 +184,9 @@ describe('IG-001 — repository ↔ WorkflowIR semantic round-trip', () => {
     );
     expect(sourceInstall.installation.versionId).toBe(source.initialVersion.id);
 
+    // Cross-tenant forks must come from a deliberately forkable source scope.
+    await service.updateWorkflow({ userId: ownerId }, source.workflow.id, { visibility: 'public' });
+
     const fork = await service.forkWorkflow(
       { userId: forkOwnerId },
       {
