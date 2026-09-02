@@ -95,6 +95,10 @@ export function authorTriageDocument(): WorkflowIrDocument {
     .addNode(notifyNode)
     .addEdge({ from: 'fetch_issue', to: 'review_gate', on: 'success' })
     .addEdge({ from: 'review_gate', to: 'notify_channel', on: { outcome: 'approved' } })
+    // An approval node must cover BOTH declared outcomes (V2-003
+    // IR_HUMAN_OUTCOME_UNCOVERED); the rejected branch also routes to the
+    // notification step — fixture-only, keeps the 3-declared-step set.
+    .addEdge({ from: 'review_gate', to: 'notify_channel', on: { outcome: 'rejected' } })
     .build();
 }
 
