@@ -31,9 +31,37 @@
  *   - NO teaching (V2-006/V2-010), optimization (V2-011), scheduling/events
  *     (V2-009) or self-hosting composition (IG-005 — later gate).
  *
- * RED-STAGE BARREL: types only (the implementation lands in the GREEN
- * commit; the value exports appear there).
+ * GREEN-STAGE BARREL: the full public surface (types + the service + the
+ * reference store/payment adapter + the deterministic source factories).
  */
+
+// The service (the one domain authority for listing/offer/entitlement/
+// transaction/report state; version/workflow facts flow ONLY through the
+// MarketplaceVersionReader port — the real V2-002 repository service in
+// composition).
+export { DefaultMarketplaceService } from './internal/marketplace-service.js';
+
+// The reference store + deterministic source factories (the V2-006/V2-010/
+// V2-011 family precedent; durable marketplace persistence is a
+// separately-owned later concern).
+export {
+  InMemoryMarketplaceStore,
+  createSequentialIdFactory,
+  createSteppingClock,
+} from './internal/in-memory-store.js';
+
+// The deterministic in-memory TEST payment adapter (the reference
+// implementation of the adapter boundary — NO real provider calls, NO
+// provider semantics anywhere in this module).
+export {
+  InMemoryPaymentAdapter,
+  IN_MEMORY_PAYMENT_FAILURE_CODES,
+} from './internal/in-memory-payment-adapter.js';
+export type {
+  InMemoryPaymentAdapterOptions,
+  ObservedCharge,
+} from './internal/in-memory-payment-adapter.js';
+
 export {
   // §0 frozen vocabularies
   MARKETPLACE_COMMERCIAL_MODELS,

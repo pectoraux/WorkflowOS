@@ -607,11 +607,20 @@ export interface MarketplaceStore {
 
   putTransaction(transaction: MarketplaceTransaction): void;
   getTransaction(transactionId: string): MarketplaceTransaction | undefined;
+  /** The settlement attempts of one customer organization for one listing. */
+  listTransactionsForOrganization(
+    customerOrganizationId: string,
+    listingId: string,
+  ): readonly MarketplaceTransaction[];
 
   putReport(report: MarketplaceAbuseReport): void;
   getReport(reportId: string): MarketplaceAbuseReport | undefined;
-  /** The create-or-converge key: ONE report per (reporter, listing). */
-  findReportByReporter(reporterUserId: string, listingId: string): MarketplaceAbuseReport | undefined;
+  /** The create-or-converge key: ONE report per (reporter, listing, reason). */
+  findReportByReporter(
+    reporterUserId: string,
+    listingId: string,
+    reason: MarketplaceReportReason,
+  ): MarketplaceAbuseReport | undefined;
   listReportsForListing(listingId: string): readonly MarketplaceAbuseReport[];
 }
 
@@ -756,6 +765,7 @@ export const MARKETPLACE_ERROR_CODES = [
   'MARKETPLACE_VERSION_NOT_NEWER',
   'MARKETPLACE_VERSION_CONTENT_NOT_PARSEABLE',
   'MARKETPLACE_LISTING_ALREADY_RETIRED',
+  'MARKETPLACE_LISTING_NOT_PUBLISHED',
   'MARKETPLACE_OFFER_NOT_FOUND',
   'MARKETPLACE_OFFER_SUPERSEDED',
   'MARKETPLACE_OFFER_INVALID',
