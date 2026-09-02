@@ -270,12 +270,12 @@ async function runExperiment(runLabel: string): Promise<string> {
   });
   await server.ready();
 
-  const inject = async (method: string, url: string, payload?: unknown) =>
+  const inject = (method: string, url: string, payload?: unknown) =>
     server.inject({
-      method,
+      method: method as never,
       url,
       headers: { 'x-api-key': OPERATOR_KEY },
-      ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}),
+      payload: payload === undefined ? undefined : (JSON.parse(JSON.stringify(payload)) as never),
     });
 
   try {

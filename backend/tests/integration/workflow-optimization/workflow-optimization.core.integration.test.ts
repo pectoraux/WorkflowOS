@@ -815,7 +815,8 @@ describe('V2-011 — analyze, propose, approve and materialize a candidate versi
     const analysis = optimization.analyzeWorkflow(document);
     const reuse = analysis.opportunities.find((o) => o.kind === 'workflow_reuse');
     expect(reuse).toBeDefined();
-    expect(reuse!.kind === 'workflow_reuse' ? reuse.nodeIds : []).toEqual(['normalize_a', 'normalize_b']);
+    const reuseNodeIds = reuse?.kind === 'workflow_reuse' ? reuse.nodeIds : [];
+    expect(reuseNodeIds).toEqual(['normalize_a', 'normalize_b']);
 
     // propose WITH the real existing workflow version as the target
     const proposal = optimization.createProposal({
