@@ -328,6 +328,13 @@ export const AGENT_FAILURE_CODES = [
   'AGENT_PLAN_UNAVAILABLE',
   /** attestation required by policy but honestly unavailable on the host */
   'AGENT_ATTESTATION_UNAVAILABLE',
+  /**
+   * A REQUIRED attestation was rejected — by the runtime's independent
+   * V2-014 verification or by the V2-005 run-boundary attach. Required
+   * attestation is a completion gate: the step is durably failed (never
+   * succeeded) and the run cannot complete on this path.
+   */
+  'AGENT_ATTESTATION_REJECTED',
   /** subworkflow execution is out of this runtime's scope (honest, typed) */
   'AGENT_SUBWORKFLOW_UNSUPPORTED',
 ] as const;

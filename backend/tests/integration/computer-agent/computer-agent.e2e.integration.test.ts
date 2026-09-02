@@ -242,7 +242,11 @@ describe('V2-008 computer-agent runtime — end-to-end on the real stack', () =>
     for (const name of events) {
       expect(registryNames.has(name)).toBe(true);
     }
-    // the exact reconstructed sequence (deterministic drive):
+    // the exact reconstructed sequence (deterministic drive): the
+    // attestation is verified + attached BEFORE the step is durably
+    // completed (the PR #142 blocker correction — required attestation is
+    // a completion gate, so the attestation boundary events precede
+    // workflow.step.completed):
     expect(events).toEqual([
       'workflow.run.requested',
       'workflow.run.started',
@@ -255,9 +259,9 @@ describe('V2-008 computer-agent runtime — end-to-end on the real stack', () =>
       'capability.invocation.requested',
       'capability.invocation.completed',
       'observation.recorded',
-      'workflow.step.completed',
       'execution.attestation.verified',
       'verification.completed',
+      'workflow.step.completed',
       'workflow.run.completed',
     ]);
     // the timeline is sequence-ordered (stable reconstruction order):

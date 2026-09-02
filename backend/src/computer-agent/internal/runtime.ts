@@ -17,6 +17,15 @@
  * post-action effect observation is what the runtime trusts — never the
  * claim string.
  *
+ * ATTESTATION COMPLETION GATE: AgentAttestationPolicy.required makes
+ * attestation a PRECONDITION of durable step success — support check,
+ * independent V2-014 verification and the V2-005 boundary attach all run
+ * BEFORE recordStepCompleted('succeeded'). A required-attestation failure
+ * is a typed runtime failure (AGENT_ATTESTATION_UNAVAILABLE /
+ * AGENT_ATTESTATION_REJECTED): the step is durably failed, the run cannot
+ * complete on that path, and completeRun() is unreachable while the
+ * required attestation is unsatisfied.
+ *
  * RECOVERY HONESTY: after a failed action the effect is UNKNOWN until
  * re-observed. Recoverable failures (stale observation, target changed,
  * transient host) re-enter the loop with the failure in the decider's
@@ -839,6 +848,24 @@ export class ComputerAgentRuntime {
         observationCommitments,
         evidenceReferences,
       });
+      if (completed.failure !== null) {
+        // the attestation completion gate FAILED: the step is durably
+        // failed (never succeeded) and the typed failure propagates — the
+        // walk routes it through the failure policy (completeRun is never
+        // reached while a required attestation is unsatisfied).
+        await this.failStepRecord(principal, state, unit);
+        return {
+          stepId: unit.unit,
+          executionClass: 'deterministic_api',
+          outcome: 'failed',
+          actions,
+          observations,
+          attestationsAttached: completed.attached,
+          attestationsRejected: completed.rejected,
+          failure: completed.failure,
+          nodeId: host.nodeId,
+        };
+      }
       return {
         stepId: unit.unit,
         executionClass: 'deterministic_api',
@@ -1053,6 +1080,24 @@ export class ComputerAgentRuntime {
             observationCommitments,
             evidenceReferences,
           });
+          if (completed.failure !== null) {
+            // the attestation completion gate FAILED: the step is durably
+            // failed (never succeeded) and the typed failure propagates —
+            // the walk routes it through the failure policy (completeRun
+            // is never reached while a required attestation is unsatisfied).
+            await this.failStepRecord(principal, state, unit);
+            return {
+              stepId: unit.unit,
+              executionClass: 'agentic_computer_use',
+              outcome: 'failed',
+              actions,
+              observations,
+              attestationsAttached: completed.attached,
+              attestationsRejected: completed.rejected,
+              failure: completed.failure,
+              nodeId: host.nodeId,
+            };
+          }
           return {
             stepId: unit.unit,
             executionClass: 'agentic_computer_use',
@@ -1175,6 +1220,19 @@ export class ComputerAgentRuntime {
     return result;
   }
 
+  /**
+   * The attestation completion gate. ENFORCEMENT ORDER (the PR #142
+   * blocker correction): attestation policy is enforced BEFORE the durable
+   * step success — support check → independent V2-014 verification → the
+   * V2-005 boundary attach — and only when every required gate passes is
+   * the step recorded 'succeeded'. A required-attestation failure (no
+   * attester key, independent verification rejection, boundary attach
+   * rejection) returns a TYPED failure with the step NOT durably
+   * succeeded; the caller fails the step honestly and the walk fails the
+   * run — completeRun() is never reached on this path. Under an OPTIONAL
+   * policy the honest absence/rejection is recorded and the step still
+   * completes (attestation never fabricates an obligation).
+   */
   private async completeStepWithAttestation(
     principal: WorkflowPrincipal,
     state: WalkState,
@@ -1184,17 +1242,6 @@ export class ComputerAgentRuntime {
       executionClass: 'deterministic_api' | 'agentic_computer_use';
     },
   ): Promise<{ attached: number; rejected: number; failure: AgentFailure | null }> {
-    await this.recorder.recordStepCompleted(
-      principal,
-      this.command(state.run.id, `step-complete-${unit.unit}`),
-      {
-        runId: state.run.id,
-        stepId: unit.unit,
-        outcome: 'succeeded',
-        outputCommitments: material.outputCommitments,
-      },
-    );
-
     const fullMaterial: StepAttestationMaterial = {
       workflowId: state.run.workflowId,
       workflowVersionId: state.run.versionId,
@@ -1206,8 +1253,10 @@ export class ComputerAgentRuntime {
       ...material,
     };
 
-    // Attestation production where the host supports the V2-014 contract;
-    // HONEST absence otherwise (never fabricated, never up-claimed).
+    // Gate 1 — attestation production where the host supports the V2-014
+    // contract; HONEST absence otherwise (never fabricated, never
+    // up-claimed). A REQUIRED policy makes the absence a typed failure
+    // BEFORE any durable step-success record exists.
     const isAttesting =
       host.attestationSupport.supported &&
       typeof (host as AttestingComputerHost).signStatement === 'function';
@@ -1237,6 +1286,7 @@ export class ComputerAgentRuntime {
           description: 'honest attestation-absence record: host has no attester key (no V2-014 support)',
         },
       );
+      await this.recordStepSucceeded(principal, state, unit, material);
       return { attached: 0, rejected: 0, failure: null };
     }
 
@@ -1251,43 +1301,121 @@ export class ComputerAgentRuntime {
       epoch: this.epoch,
       validityMs: this.policy.attestation.validityMs ?? 300_000,
     });
-    // the INDEPENDENT verifier path (merged V2-014 verifier + explicit policy)
+
+    // Gate 2 — the INDEPENDENT verifier path (merged V2-014 verifier +
+    // explicit policy) BEFORE any durable step-success record. A REQUIRED
+    // policy makes a typed rejection a step failure; an optional policy
+    // records the honest rejection and still completes (never auto-accepts).
     const verification = verifyStepAttestationIndependently(attestation, fullMaterial, this.policy.attestation, {
       now: this.clock(),
       epoch: this.epoch,
       replayRegistry: this.replayRegistry,
     });
     if (!verification.ok) {
+      if (this.policy.attestation.required) {
+        return {
+          attached: 0,
+          rejected: 1,
+          failure: {
+            code: 'AGENT_ATTESTATION_REJECTED',
+            detail: `required attestation rejected by the independent V2-014 verifier: ${verification.failure.code} — ${verification.failure.detail}`,
+            recoverable: false,
+          },
+        };
+      }
       // typed rejection honored honestly — never auto-accepted
+      await this.recordStepSucceeded(principal, state, unit, material);
       return { attached: 0, rejected: 1, failure: null };
     }
-    const attach = await this.recorder.attachAttestation(
+
+    // Gate 3 — the V2-005 run-boundary attach BEFORE the durable
+    // step-success record. The REAL boundary RAISES its typed rejections
+    // (WorkflowRunError RUN_ATTESTATION_* — durably recorded in its command
+    // ledger, never returned as a value): the typed throw is honored as the
+    // boundary's rejection; anything else is not a rejection and rethrows.
+    try {
+      const attach = await this.recorder.attachAttestation(
+        principal,
+        this.command(state.run.id, `att-${attestation.attestationId}`),
+        {
+          runId: state.run.id,
+          attemptNumber: state.attemptNumber,
+          stepId: unit.unit,
+          attestation,
+          policy: {
+            ...(this.policy.attestation.maxAgeMs !== undefined
+              ? { maxAgeMs: this.policy.attestation.maxAgeMs }
+              : {}),
+            ...(this.policy.attestation.requiredAssurance !== undefined
+              ? { requiredAssurance: this.policy.attestation.requiredAssurance }
+              : {}),
+            ...(this.policy.attestation.trustedAttesterKeyIds !== undefined
+              ? { trustedAttesterKeyIds: this.policy.attestation.trustedAttesterKeyIds }
+              : {}),
+          },
+        },
+      );
+      const attachFailed = attach.result as { ok?: boolean; code?: string; message?: string };
+      if (attachFailed && typeof attachFailed.ok === 'boolean' && !attachFailed.ok) {
+        // V2-005 boundary typed rejection (e.g. RUN_ATTESTATION_REPLAYED)
+        if (this.policy.attestation.required) {
+          return {
+            attached: 0,
+            rejected: 1,
+            failure: {
+              code: 'AGENT_ATTESTATION_REJECTED',
+              detail: `the V2-005 run boundary rejected the required attestation: ${attachFailed.code ?? 'RUN_ATTESTATION_REJECTED'} — ${attachFailed.message ?? ''}`,
+              recoverable: false,
+            },
+          };
+        }
+        await this.recordStepSucceeded(principal, state, unit, material);
+        return { attached: 0, rejected: 1, failure: null };
+      }
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (typeof code === 'string' && code.startsWith('RUN_ATTESTATION')) {
+        if (this.policy.attestation.required) {
+          return {
+            attached: 0,
+            rejected: 1,
+            failure: {
+              code: 'AGENT_ATTESTATION_REJECTED',
+              detail: `the V2-005 run boundary rejected the required attestation: ${code} — ${(err as Error).message}`,
+              recoverable: false,
+            },
+          };
+        }
+        await this.recordStepSucceeded(principal, state, unit, material);
+        return { attached: 0, rejected: 1, failure: null };
+      }
+      throw err;
+    }
+
+    // Every attestation gate passed — NOW the durable step success (a
+    // required-attestation failure can never leave a succeeded step, and
+    // a crash between the attach and this record converges on re-drive:
+    // the attestation binding is durable, the step record is idempotent).
+    await this.recordStepSucceeded(principal, state, unit, material);
+    return { attached: 1, rejected: 0, failure: null };
+  }
+
+  private async recordStepSucceeded(
+    principal: WorkflowPrincipal,
+    state: WalkState,
+    unit: CompiledUnit,
+    material: { outputCommitments: readonly string[] },
+  ): Promise<void> {
+    await this.recorder.recordStepCompleted(
       principal,
-      this.command(state.run.id, `att-${attestation.attestationId}`),
+      this.command(state.run.id, `step-complete-${unit.unit}`),
       {
         runId: state.run.id,
-        attemptNumber: state.attemptNumber,
         stepId: unit.unit,
-        attestation,
-        policy: {
-          ...(this.policy.attestation.maxAgeMs !== undefined
-            ? { maxAgeMs: this.policy.attestation.maxAgeMs }
-            : {}),
-          ...(this.policy.attestation.requiredAssurance !== undefined
-            ? { requiredAssurance: this.policy.attestation.requiredAssurance }
-            : {}),
-          ...(this.policy.attestation.trustedAttesterKeyIds !== undefined
-            ? { trustedAttesterKeyIds: this.policy.attestation.trustedAttesterKeyIds }
-            : {}),
-        },
+        outcome: 'succeeded',
+        outputCommitments: material.outputCommitments,
       },
     );
-    const attachFailed = attach.result as { ok?: boolean; code?: string; message?: string };
-    if (attachFailed && typeof attachFailed.ok === 'boolean' && !attachFailed.ok) {
-      // V2-005 boundary typed rejection (e.g. RUN_ATTESTATION_REPLAYED)
-      return { attached: 0, rejected: 1, failure: null };
-    }
-    return { attached: 1, rejected: 0, failure: null };
   }
 
   private async failStepRecord(
