@@ -282,7 +282,6 @@ async function createWorkflow(
 
 /** Flip a workflow's repository visibility through the REAL route. */
 async function setVisibility(
-  t: { organizationId: string },
   workflowId: string,
   visibility: 'private' | 'organization' | 'public',
 ): Promise<void> {
@@ -292,7 +291,6 @@ async function setVisibility(
 
 /** Create a NEW immutable version through the REAL V2-002 route. */
 async function createVersion(
-  t: { organizationId: string },
   workflowId: string,
   parentVersionId: string,
   scanTask: string,
@@ -328,7 +326,7 @@ describe('V2-012 — the marketplace over the REAL V2-002 authority (fork → mo
     // --- 0. the ORIGINAL author creates v1 (private) -----------------------
     const { workflowId: sourceWorkflowId, version: sourceV1 } = await createWorkflow(author, 'digest-source', 'Scan the repository board and summarize the open ticket digest.');
     expect(sourceV1.versionNumber).toBe(1);
-    await setVisibility(author, sourceWorkflowId, 'public');
+    await setVisibility(sourceWorkflowId, 'public');
 
     // --- 1. FORK through the REAL V2-002 fork route -------------------------
     const forkRes = await injectJson('POST', `/organizations/${forker.organizationId}/workflow-repository/forks`, {
@@ -359,11 +357,11 @@ describe('V2-012 — the marketplace over the REAL V2-002 authority (fork → mo
     const forkV1 = forkBody.initialVersion;
     expect(forkV1.id).not.toBe(sourceV1.id);
     expect(forkV1.contentDigest).toBe(sourceV1.contentDigest);
-    const forkV2 = await createVersion(forker, fork.id, forkV1.id, 'Scan the repository board and summarize the ticket digest, maintenance release 2.');
+    const forkV2 = await createVersion(fork.id, forkV1.id, 'Scan the repository board and summarize the ticket digest, maintenance release 2.');
     expect(forkV2.versionNumber).toBe(2);
     expect(forkV2.contentDigest).not.toBe(forkV1.contentDigest);
     // The derivative goes PUBLIC (repository collaboration → distribution).
-    await setVisibility(forker, fork.id, 'public');
+    await setVisibility(fork.id, 'public');
 
     // --- 3. PUBLISH: the forker lists + publishes the derivative ------------
     const listed = await market.createListing(operatorPrincipal, {
@@ -467,7 +465,7 @@ describe('V2-012 — the marketplace over the REAL V2-002 authority (fork → mo
     expect(installation.status).toBe('enabled');
 
     // --- 7. CREATOR MAINTENANCE UPDATE: an explicit NEW version + revision --
-    const forkV3 = await createVersion(forker, fork.id, forkV2.id, 'Scan the repository board and summarize the ticket digest, maintenance release 3.');
+    const forkV3 = await createVersion(fork.id, forkV2.id, 'Scan the repository board and summarize the ticket digest, maintenance release 3.');
     expect(forkV3.versionNumber).toBe(3);
     const [updateA, updateB] = await Promise.all([
       market.publishNewVersion(operatorPrincipal, { listingId: listed.listing.id, versionId: forkV3.id }),
@@ -595,7 +593,7 @@ describe('V2-012 — the marketplace over the REAL V2-002 authority (fork → mo
     ).rejects.toMatchObject({ code: 'MARKETPLACE_WORKFLOW_NOT_PUBLIC' });
     // Making the workflow public unblocks publication (the authority's own
     // visibility is the distribution gate).
-    await setVisibility(author, workflowId, 'public');
+    await setVisibility(workflowId, 'public');
     const published = await market.publishListing(operatorPrincipal, {
       listingId: drafted.listing.id,
     });

@@ -63,7 +63,6 @@
  * wfw_/wfwv_/wfin_ repository ids, run labels). Exits non-zero when any
  * experiment check fails (fail-closed runner).
  */
-import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../../../src/api/server.js';
 import { ApiKeyAuthProvider } from '../../../src/modules/auth/internal/api-key-auth-provider.js';
@@ -111,10 +110,6 @@ function norm(value: string): string {
 function check(id: string, ok: boolean, message: string): void {
   if (!ok) failures += 1;
   transcript.push(`[${ok ? 'PASS' : 'FAIL'}] ${id} :: ${message}`);
-}
-
-function sha256Of(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 // ============================================================================
@@ -269,6 +264,11 @@ async function runExperiment(runLabel: string): Promise<string> {
       tenants.push({ organizationId: org.id, ownerUserId: owner.id });
     }
     const [author, forker, customer] = tenants;
+    // Fail-closed tenant setup (the loop pushed exactly one tenant per label,
+    // but the compiler cannot see it — guard rather than assert).
+    if (!author || !forker || !customer) {
+      throw new Error('v2-012 dogfooding: tenant setup incomplete');
+    }
 
     // The marketplace service composed OVER the real authority.
     const payments = new InMemoryPaymentAdapter();
