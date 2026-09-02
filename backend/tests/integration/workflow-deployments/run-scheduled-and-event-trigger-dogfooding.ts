@@ -77,6 +77,7 @@ const TRANSCRIPT_LINES: string[] = [];
 
 function line(text = ''): void {
   TRANSCRIPT_LINES.push(text);
+  // eslint-disable-next-line no-console
   console.log(text);
 }
 
@@ -147,14 +148,15 @@ async function runExperiment(): Promise<string[]> {
       payload?: unknown,
     ): Promise<{ status: number; body: Record<string, unknown> }> => {
       const response = await app.inject({
-        method,
+        method: method as 'GET' | 'POST',
         url,
         headers: payload === undefined
           ? { authorization: `Bearer ${API_KEY}` }
           : { authorization: `Bearer ${API_KEY}`, 'content-type': 'application/json' },
-        payload,
+        payload: payload as Record<string, unknown> | string | undefined,
       });
-      return { status: response.statusCode, body: (response.json?.() ?? {}) as Record<string, unknown> };
+      const raw = response as unknown as { statusCode: number; json: () => unknown };
+      return { status: raw.statusCode, body: (raw.json?.() ?? {}) as Record<string, unknown> };
     };
 
     // --- the operator tenant + the REAL device node ------------------------
@@ -343,7 +345,7 @@ async function runExperiment(): Promise<string[]> {
 
     const recoveredDevice = registerNode(offlineNodes, 'v2-009-dogfooding-recovered', 'desktop');
     clock.advance(2_000);
-    const offlineTick2 = await offlineDeployments.tick(principal, { organizationId: org.id });
+    await offlineDeployments.tick(principal, { organizationId: org.id });
     const recoveredDelivery = await offlineDeployments.getDelivery(principal, pendingId);
     line(`# device recovered through the real protocol: delivery state=${recoveredDelivery.state} node=${recoveredDelivery.resolvedNodeId} run=${recoveredDelivery.runId !== null ? 'created' : 'none'}`);
     if (recoveredDelivery.state !== 'delivered' || recoveredDelivery.resolvedNodeId !== recoveredDevice.nodeId) {
@@ -417,15 +419,21 @@ async function main(): Promise<void> {
   const normalized2 = normalize(run2);
 
   const identical = normalized1 === normalized2;
+  // eslint-disable-next-line no-console
   console.log(`\ndeterminism: transcripts ${identical ? 'IDENTICAL after normalization' : 'DIVERGED'}`);
   if (!identical) {
+    // eslint-disable-next-line no-console
     console.log('--- RUN 1 (normalized) ---');
+    // eslint-disable-next-line no-console
     console.log(normalized1);
+    // eslint-disable-next-line no-console
     console.log('--- RUN 2 (normalized) ---');
+    // eslint-disable-next-line no-console
     console.log(normalized2);
     process.exitCode = 1;
     return;
   }
+  // eslint-disable-next-line no-console
   console.log('\nDOGFOODING RESULT: PASS (deterministic across two fresh runs)');
 }
 
