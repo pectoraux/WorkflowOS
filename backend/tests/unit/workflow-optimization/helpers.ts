@@ -197,9 +197,28 @@ export function authorSensitiveSubstitutableDocument(): WorkflowIrDocument {
       failurePolicy: { strategy: 'fail_workflow' },
       completionEvidence: 'verification',
     })
+    .addNode({
+      id: 'record_rejection',
+      executionClass: 'human',
+      spec: {
+        class: 'human',
+        human: {
+          kind: 'information',
+          instruction: 'Record why the digest report was rejected.',
+          provides: { name: 'reason', type: { kind: 'string' } },
+        },
+      },
+      capabilityRequirements: [],
+      placement: 'device_local',
+      inputs: [],
+      outputs: [{ name: 'reason', type: { kind: 'string' } }],
+      failurePolicy: { strategy: 'fail_workflow' },
+      completionEvidence: 'human_confirmation',
+    })
     .addEdge({ from: 'fetch_tickets', to: 'write_report', on: 'success' })
     .addEdge({ from: 'write_report', to: 'approve_digest', on: 'success' })
     .addEdge({ from: 'approve_digest', to: 'send_digest', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_digest', to: 'record_rejection', on: { outcome: 'rejected' } })
     .build();
 }
 

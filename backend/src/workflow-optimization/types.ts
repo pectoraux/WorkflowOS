@@ -97,6 +97,19 @@ export type UnsafeOptimizationReason = (typeof UNSAFE_OPTIMIZATION_REASONS)[numb
 // §1  The deterministic comparison rubric (frozen, modeled)
 // ============================================================================
 
+/** Recursively freeze a JSON-shaped constant (vocabulary freeze at load). */
+function freezeValue<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    if (!Object.isFrozen(value)) {
+      Object.freeze(value);
+    }
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      freezeValue((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
+}
+
 /**
  * The frozen modeled rubric: deterministic scoring functions over DECLARED
  * facts only. These are MODELS (documented weights — honest about being
@@ -112,7 +125,7 @@ export type UnsafeOptimizationReason = (typeof UNSAFE_OPTIMIZATION_REASONS)[numb
  *   - maintenance: node count + duplicated logic (2x weight) + agentic
  *     nodes (opaque task strings are hard to maintain).
  */
-export const OPTIMIZATION_RUBRIC = {
+export const OPTIMIZATION_RUBRIC = freezeValue({
   rulesVersion: OPTIMIZATION_RULES_VERSION,
   latencyUnitsPerExecutionClass: {
     deterministic_api: 1,
@@ -137,7 +150,7 @@ export const OPTIMIZATION_RUBRIC = {
     perDuplicateNode: 2,
     perAgenticNode: 1,
   },
-} as const;
+} as const);
 export type OptimizationRubric = typeof OPTIMIZATION_RUBRIC;
 
 // ============================================================================
@@ -350,6 +363,8 @@ export interface MaterializationRecord {
 export interface OptimizationProposal {
   readonly id: string;
   readonly kind: OptimizationOpportunityKind;
+  /** the workflow owner — the only principal who may approve/materialize. */
+  readonly ownerId: string;
   readonly provenance: ProposalProvenance;
   /** the nodes the proposed change touches (never human nodes). */
   readonly affectedNodeIds: readonly string[];

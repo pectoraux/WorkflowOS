@@ -80,12 +80,12 @@ describe('V2-011 — the approval gate', () => {
       opportunityNodeId: 'scan_board',
     });
     await service.approveProposal({ proposalId: proposal.id, ownerId: BASELINE.ownerId });
-    await expect(
+    expect(() =>
       service.approveProposal({ proposalId: proposal.id, ownerId: BASELINE.ownerId }),
-    ).rejects.toMatchObject({ code: 'PROPOSAL_ALREADY_DECIDED' });
-    await expect(
+    ).toThrow(/PROPOSAL_ALREADY_DECIDED/);
+    expect(() =>
       service.rejectProposal({ proposalId: proposal.id, ownerId: BASELINE.ownerId }),
-    ).rejects.toMatchObject({ code: 'PROPOSAL_ALREADY_DECIDED' });
+    ).toThrow(/PROPOSAL_ALREADY_DECIDED/);
   });
 
   it('rejection is terminal: a rejected proposal can never be materialized', async () => {
@@ -120,9 +120,9 @@ describe('V2-011 — the approval gate', () => {
       document: authorCleanSubstitutableDocument(),
       opportunityNodeId: 'scan_board',
     });
-    await expect(
+    expect(() =>
       service.approveProposal({ proposalId: proposal.id, ownerId: 'someone-else' }),
-    ).rejects.toMatchObject({ code: 'OWNER_MISMATCH' });
+    ).toThrow(/OWNER_MISMATCH/);
     await service.approveProposal({ proposalId: proposal.id, ownerId: BASELINE.ownerId });
     await expect(
       service.materializeProposal({ proposalId: proposal.id, ownerId: 'someone-else' }),

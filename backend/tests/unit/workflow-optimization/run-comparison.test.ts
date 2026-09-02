@@ -133,12 +133,12 @@ describe('V2-011 — correctness FIRST, then resource cost and maintainability',
       invocationDelta: -1,
     });
     // maintainability signals
-    expect(comparison.maintainabilitySignals.baselineDistinctCapabilities.sort()).toEqual([
+    expect([...comparison.maintainabilitySignals.baselineDistinctCapabilities].sort()).toEqual([
       'browser.observe',
       'github.repository.read',
       'messaging.send',
     ]);
-    expect(comparison.maintainabilitySignals.optimizedDistinctCapabilities.sort()).toEqual([
+    expect([...comparison.maintainabilitySignals.optimizedDistinctCapabilities].sort()).toEqual([
       'github.repository.read',
       'messaging.send',
     ]);

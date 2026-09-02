@@ -71,3 +71,17 @@ export type {
   WorkflowOptimizationServiceDeps,
   WorkflowOptimizationErrorCode,
 } from './types.js';
+
+// The service (the proposal lifecycle: analysis → proposal with provenance
+// + the unsafe guard → the owner approval gate → materialization through
+// the port; never an activation).
+export { DefaultWorkflowOptimizationService } from './internal/workflow-optimization-service.js';
+
+// The reference store + deterministic source factories (the V2-006/V2-010
+// family precedent; durable proposal persistence is a separately-owned
+// later concern).
+export {
+  InMemoryOptimizationProposalStore,
+  createSequentialIdFactory,
+  createSteppingClock,
+} from './internal/in-memory-store.js';

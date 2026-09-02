@@ -21,7 +21,7 @@ import {
  */
 describe('V2-011 — the baseline document is never mutated', () => {
   it('analysis + proposal + materialization leave the input document unchanged', async () => {
-    const { service, materializer } = composeOptimizationService();
+    const { service } = composeOptimizationService();
     const document = authorCleanSubstitutableDocument();
     const before = documentToPlainJson(document);
 

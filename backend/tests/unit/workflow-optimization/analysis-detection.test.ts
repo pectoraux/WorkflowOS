@@ -118,10 +118,11 @@ describe('V2-011 — analysis determinism and immutability', () => {
     const { service } = composeOptimizationService();
     const analysis = service.analyzeWorkflow(authorCleanSubstitutableDocument());
     expect(() => {
-      (analysis as { document: { ir: { start: string } } }).document.ir.start = 'mutated';
+      (analysis as unknown as { document: { ir: { start: string } } }).document.ir.start = 'mutated';
     }).toThrow();
     expect(() => {
-      (analysis as { opportunities: [{ nodeId: string }] }).opportunities[0]!.nodeId = 'mutated';
+      (analysis as unknown as { opportunities: { nodeId: string }[] }).opportunities[0]!.nodeId =
+        'mutated';
     }).toThrow();
   });
 
