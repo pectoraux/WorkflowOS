@@ -1462,6 +1462,5 @@ out.push(
   'DETERMINISM NOTE: re-running this harness yields identical transcripts after normalizing run-scoped bookkeeping (the uuid-derived repository identities and the run ids they pin, key-derived attestation identities/digests/signatures, and wall duration); the pinned WorkflowVersion semantic digest and all real artifact commitments are cross-run-stable constants asserted in-code.',
 );
 
-// eslint-disable-next-line no-console
 process.stdout.write(`${out.join('\n')}\n`);
 process.exit(totalFailures === 0 ? 0 : 1);
