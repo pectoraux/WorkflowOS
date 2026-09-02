@@ -58,6 +58,7 @@ import {
   type AttestingComputerHost,
   type BrowserPageElement,
   type ComputerAgentPolicy,
+  type DesktopEnvironment,
   type ComputerAgentRunRecorder,
   type ComputerHostAdapter,
 } from '../../../src/computer-agent/index.js';
@@ -150,15 +151,21 @@ export function buildApprovalFlowDocument(): WorkflowIrDocument {
     completionEvidence: 'human_confirmation',
   };
   const notify: WorkflowNode = {
+    // the post-approval notification step (fixture: a deterministic
+    // filesystem flag-write the attached desktop host can really execute —
+    // the notify semantics are the pause-approval test's, not messaging's)
     id: 'notify',
     executionClass: 'deterministic_api',
-    spec: { class: 'deterministic_api', capability: 'messaging.send' },
-    capabilityRequirements: ['messaging.send'],
-    placement: 'cloud_allowed',
-    inputs: [],
+    spec: { class: 'deterministic_api', capability: 'filesystem.write' },
+    capabilityRequirements: ['filesystem.write'],
+    placement: 'device_local',
+    inputs: [
+      { name: 'path', type: { kind: 'string' }, binding: { kind: 'literal', value: 'reports/notified.flag' } },
+      { name: 'content', type: { kind: 'string' }, binding: { kind: 'literal', value: 'TRIAGE APPROVED' } },
+    ],
     outputs: [{ name: 'messageId', type: { kind: 'string' } }],
     failurePolicy: { strategy: 'fail_workflow' },
-    completionEvidence: 'verification',
+    completionEvidence: 'observation',
   };
   return createWorkflowIrBuilder()
     .withStart('organize')
@@ -374,7 +381,8 @@ export interface ComputerAgentTestStack {
   attachDesktopHost(options: {
     nodes: NodeCapabilityService;
     keySeed: string;
-    environment: ScriptedDesktopEnvironment;
+    /** Any DesktopEnvironment port implementation (scripted OR real-fs). */
+    environment: DesktopEnvironment;
     attesterKey?: AttesterKeyPair;
     capabilities?: readonly CapabilityAdvertisement[];
     /** The host adapter clock (defaults to the stack's shared agent clock). */

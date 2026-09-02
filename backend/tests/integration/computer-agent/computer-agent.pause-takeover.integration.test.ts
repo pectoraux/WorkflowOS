@@ -186,30 +186,61 @@ describe('V2-008 computer-agent runtime — human pause + takeover on the real s
     expect(session.userId).toBe(HUMAN_USER_ID);
     expect(session.nodeId).toBe(nodeId);
 
-    // ---- [F-A] the human's first protocol action is typed-rejected by the
-    // real V2-005 boundary: invocations record only while the run is RUNNING:
-    await expect(
-      runtime.performTakeoverAction(session, harness.principal, host, {
-        kind: 'observe',
-        capability: 'filesystem.read',
-        subject: REPORT_PATH,
-      }),
-    ).rejects.toMatchObject({ name: 'WorkflowRunError', code: 'RUN_NOT_RUNNING' });
+    // ---- the human's first protocol action RESUMES the run under the human
+    // executor (a human acting IS execution — V2-005 records invocations
+    // only while running; the resume continues the SAME attempt):
+    const observation = await runtime.performTakeoverAction(session, harness.principal, host, {
+      kind: 'observe',
+      capability: 'filesystem.read',
+      subject: REPORT_PATH,
+    });
+    expect(observation.result.ok).toBe(true);
+    expect(environment.readFile(REPORT_PATH)).toBeNull(); // still nothing written
+    let history = await harness.runService.getRunHistory(harness.principal, run.id);
+    expect(history.run.state).toBe('running');
+    expect(history.invocations.length).toBe(1); // the human observation row
+    expect(history.attempts.length).toBe(1); // the SAME attempt continues
+    // the timeline shows paused → resumed (takeover) in order:
+    const names = history.timeline.map((entry) => entry.eventName);
+    expect(names.indexOf('workflow.run.paused')).toBeLessThan(names.lastIndexOf('workflow.run.resumed'));
 
-    // the host was untouched (the recording precedes the host invocation):
-    expect(environment.readFile(REPORT_PATH)).toBeNull();
-    const history = await harness.runService.getRunHistory(harness.principal, run.id);
-    expect(history.invocations.length).toBe(0); // no invocation row was created
-    expect(history.evidence.filter((evidence) => evidence.evidenceClass === 'human_confirmation').length).toBe(0);
-    // the typed rejection IS durably recorded in the command log:
-    const rejectedCommand = history.commands.find(
-      (command) => command.result.ok === false && command.result.code === 'RUN_NOT_RUNNING',
-    );
-    expect(rejectedCommand).toBeDefined();
-    expect(rejectedCommand?.commandType).toBe('record_invocation_requested');
-    // the run is still paused with the suspended attempt (fail-closed, no state change):
-    expect(history.run.state).toBe('paused');
-    expect(history.attempts[0]!.state).toBe('suspended');
+    // ---- the human's grounded ACT through the same universal protocol:
+    const observed =
+      observation.result.ok && observation.result.kind === 'observed' ? observation.result.observation : null;
+    const target = observed?.elements.find((element) => element.elementId === REPORT_PATH);
+    const humanWrite = await runtime.performTakeoverAction(session, harness.principal, host, {
+      kind: 'act',
+      capability: 'filesystem.write',
+      grounding: target
+        ? { observationId: observed!.observationId, targetElementId: target.elementId, targetDigest: target.digest }
+        : null,
+      parameters: { path: REPORT_PATH, content: 'HUMAN-CONFIRMED' },
+    });
+    expect(humanWrite.result.ok).toBe(true);
+    expect(environment.readFile(REPORT_PATH)).toBe('HUMAN-CONFIRMED'); // the REAL write
+    history = await harness.runService.getRunHistory(harness.principal, run.id);
+    const humanEvidence = history.evidence.filter((evidence) => evidence.producerKind === 'human');
+    expect(humanEvidence.length).toBe(2); // the human observation + the human act
+    expect(humanEvidence.every((evidence) => evidence.producerId === HUMAN_USER_ID)).toBe(true);
+    expect(humanEvidence.some((evidence) => evidence.evidenceClass === 'human_confirmation')).toBe(true);
+
+    // ---- hand-back: the decider re-drive sees the human's real work and
+    // verifies completion against it (the walk entry is the takeover step):
+    const final = await runtime.finishTakeover(harness.principal, session, {
+      mode: 'hand-back',
+      hosts: [host],
+      decider: createObserveWriteVerifyDecider({ reportPath: REPORT_PATH, content: 'HUMAN-CONFIRMED' }),
+      workflowInputs: { reportPath: REPORT_PATH },
+    });
+    expect(final.state).toBe('completed');
+    expect(final.failure).toBeNull();
+    history = await harness.runService.getRunHistory(harness.principal, run.id);
+    expect(history.run.state).toBe('completed');
+    expect(history.steps[0]!.stepId).toBe('organize');
+    expect(history.steps[0]!.status).toBe('completed');
+    expect(history.steps[0]!.outcome).toBe('succeeded');
+    // the human's real write was NOT re-executed (at-most-once host ledger):
+    expect(environment.readFile(REPORT_PATH)).toBe('HUMAN-CONFIRMED');
   });
 
   it('finishTakeover complete-step hands the run back and completes it; requestTakeover on the completed run is COMPUTER_AGENT_RUN_NOT_PAUSED', async () => {
@@ -266,7 +297,7 @@ describe('V2-008 computer-agent runtime — human pause + takeover on the real s
     ).rejects.toMatchObject({ name: 'ComputerAgentError', code: 'COMPUTER_AGENT_RUN_NOT_PAUSED' });
   });
 
-  it('[F-B] finishTakeover hand-back (decider re-drive) hits the exactly-once boundary: RUN_COMMAND_PAYLOAD_CONFLICT', async () => {
+  it('[F-B] finishTakeover hand-back (decider re-drive) converges exactly-once: observations fresh, acts at-most-once, run completed', async () => {
     const nodes = harness.freshNodeDirectory();
     const environment = freshDesktopEnvironment();
     const { host } = harness.attachDesktopHost({ nodes, keySeed: 'takeover-handback-desktop', environment });
@@ -291,24 +322,26 @@ describe('V2-008 computer-agent runtime — human pause + takeover on the real s
       host,
     });
 
-    // hand-back re-drives the agentic step with a COMPLETING decider; the
-    // runtime's first-decision intent evidence command id was already used
-    // by the takeover decision (same id, different payload) → the real
-    // exactly-once boundary rejects it typed:
-    await expect(
-      runtime.finishTakeover(harness.principal, session, {
-        mode: 'hand-back',
-        hosts: [host],
-        decider: createObserveWriteVerifyDecider({ reportPath: REPORT_PATH, content: 'HUMAN-CONFIRMED' }),
-        workflowInputs: { reportPath: REPORT_PATH },
-      }),
-    ).rejects.toMatchObject({ name: 'WorkflowRunError', code: 'RUN_COMMAND_PAYLOAD_CONFLICT' });
+    // hand-back (no human action performed): finishTakeover resumes the
+    // still-paused run and the walk re-drives the takeover step with a
+    // COMPLETING decider — drive-fresh observation ids + act-ledger
+    // convergence make the re-drive converge instead of conflicting:
+    const final = await runtime.finishTakeover(harness.principal, session, {
+      mode: 'hand-back',
+      hosts: [host],
+      decider: createObserveWriteVerifyDecider({ reportPath: REPORT_PATH, content: 'RE-DRIVEN REPORT' }),
+      workflowInputs: { reportPath: REPORT_PATH },
+    });
+    expect(final.state).toBe('completed');
+    expect(final.failure).toBeNull();
 
-    // the run was resumed by the (failed) hand-back and stays non-terminal in
-    // the DB with the step still started (the conflict is durable + typed):
     const history = await harness.runService.getRunHistory(harness.principal, run.id);
-    expect(['running', 'paused']).toContain(history.run.state);
-    expect(history.steps[0]!.status).toBe('started');
-    expect(environment.readFile(REPORT_PATH)).toBeNull();
+    expect(history.run.state).toBe('completed');
+    expect(history.steps[0]!.stepId).toBe('organize');
+    expect(history.steps[0]!.status).toBe('completed');
+    expect(history.steps[0]!.outcome).toBe('succeeded');
+    expect(environment.readFile(REPORT_PATH)).toBe('RE-DRIVEN REPORT');
+    // no duplicate step records (the re-drive converged on the durable row):
+    expect(history.steps.filter((step) => step.stepId === 'organize').length).toBe(1);
   });
 });

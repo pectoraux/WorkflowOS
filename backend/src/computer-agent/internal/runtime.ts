@@ -135,6 +135,28 @@ interface WalkState {
   reports: StepExecutionReport[];
   humanOutcome?: string;
   humanProvidedValue?: unknown;
+  /**
+   * Steps completed in THIS call before the walk started (e.g. the human
+   * step a resume just completed): they route successors like
+   * history-completed steps, using humanOutcome where declared.
+   */
+  extraCompleted?: ReadonlySet<string>;
+  /**
+   * The walk entry override: the IN-FLIGHT step (a resume, a takeover
+   * hand-back, a re-drive of a paused run) instead of plan.entry — the
+   * completed prefix converges by construction and the walk continues
+   * exactly where execution actually is.
+   */
+  entry?: string;
+  /**
+   * The OBSERVATION-id drive discriminator (history-derived: 1 + timeline
+   * length at walk start — strictly monotonic across drives, convergent on
+   * crash re-drive). Observations are READS: each drive re-executes them
+   * fresh (honest reality), so their invocation ids are drive-scoped.
+   * ACTS keep drive-stable ids — the host ledger converges them (never a
+   * second side effect).
+   */
+  drive?: number;
 }
 
 /** The computer-agent runtime (see the module header). */
@@ -184,6 +206,7 @@ export class ComputerAgentRuntime {
       workflowInputs: input.workflowInputs ?? {},
       values: initialValues(input.workflowInputs ?? {}),
       reports: [],
+      entry: run.state === 'paused' ? findPausedStep(history) ?? undefined : undefined,
     });
   }
 
@@ -249,6 +272,9 @@ export class ComputerAgentRuntime {
       reports: [],
       humanOutcome: input.humanOutcome,
       humanProvidedValue: input.providedValue,
+      extraCompleted:
+        unit && unit.executionClass === 'human' ? new Set([pausedStepId]) : undefined,
+      entry: pausedStepId,
     });
   }
 
@@ -312,10 +338,30 @@ export class ComputerAgentRuntime {
         };
       }
     }
-    const invocationId = `tak-${session.runId}-${session.stepId}-${String(++live.seq).padStart(4, '0')}`;
+    const actionSeq = ++live.seq;
     const run = await this.loadRun(principal, session.runId);
+    // The human taking over IS execution: a paused run is RESUMED under the
+    // human executor before the first recorded action (V2-005 records steps
+    // and invocations only while running — the resume continues the SAME
+    // attempt per the attempt rule; the command id converges on re-drive).
+    let executionState = run.state;
+    if (executionState === 'paused') {
+      await this.recorder.resumeRun(
+        principal,
+        this.command(session.runId, `takeover-resume-${session.stepId}`),
+        { runId: session.runId },
+      );
+      executionState = 'running';
+    }
+    if (executionState !== 'running') {
+      throw new ComputerAgentError('COMPUTER_AGENT_RUN_TERMINAL', `run ${session.runId} is ${executionState}`);
+    }
     const { history } = await this.resolvePlanAndHistory(principal, run);
     const attemptNumber = latestAttemptNumber(history);
+    const invocationId =
+      request.kind === 'act'
+        ? `tak-${session.runId}-${session.stepId}-${String(actionSeq).padStart(4, '0')}`
+        : takeoverObservationIdOf(session.runId, 1 + history.timeline.length, session.stepId, actionSeq);
     const invocationRequested = await this.recorder.recordInvocationRequested(
       principal,
       this.command(session.runId, `inv-${invocationId}`),
@@ -376,12 +422,18 @@ export class ComputerAgentRuntime {
       throw new ComputerAgentError('COMPUTER_AGENT_TAKEOVER_SESSION_CLOSED', session.id);
     }
     const run = await this.loadRun(principal, session.runId);
-    if (run.state !== 'paused') {
-      throw new ComputerAgentError('COMPUTER_AGENT_RUN_NOT_PAUSED', `run ${session.runId} is ${run.state}`);
+    if (run.state !== 'paused' && run.state !== 'running') {
+      throw new ComputerAgentError('COMPUTER_AGENT_RUN_TERMINAL', `run ${session.runId} is ${run.state}`);
     }
-    await this.recorder.resumeRun(principal, this.command(session.runId, `resume-${session.runId}`), {
-      runId: session.runId,
-    });
+    // resume only when still paused (takeover actions already resumed under
+    // the human executor); complete-step also requires a running run.
+    if (run.state === 'paused') {
+      await this.recorder.resumeRun(
+        principal,
+        this.command(session.runId, `takeover-finish-resume-${session.stepId}`),
+        { runId: session.runId },
+      );
+    }
     if (input.mode === 'complete-step') {
       await this.recorder.recordStepCompleted(
         principal,
@@ -408,6 +460,7 @@ export class ComputerAgentRuntime {
       workflowInputs: input.workflowInputs ?? {},
       values: initialValues(input.workflowInputs ?? {}),
       reports: [],
+      entry: session.stepId,
     });
   }
 
@@ -416,20 +469,56 @@ export class ComputerAgentRuntime {
   // ==========================================================================
 
   private async walk(principal: WorkflowPrincipal, state: WalkState): Promise<RunExecutionReport> {
-    const completed = new Set(
-      state.history.steps.filter((step) => step.status === 'completed').map((step) => step.stepId),
-    );
-    const queue: string[] = [state.plan.entry];
+    if (state.drive === undefined) {
+      state.drive = 1 + state.history.timeline.length;
+    }
+    const completed = new Set<string>([
+      ...state.history.steps.filter((step) => step.status === 'completed').map((step) => step.stepId),
+      ...(state.extraCompleted ?? []),
+    ]);
+    const reachedInHistory = new Set<string>(state.history.steps.map((step) => step.stepId));
+    const queue: string[] = [state.entry ?? state.plan.entry];
     let terminalFailure: AgentFailure | null = null;
     let pausedAtStepId: string | null = null;
     let takeoverRequested = false;
 
     while (queue.length > 0) {
       const unitId = queue.shift();
-      if (unitId === undefined || completed.has(unitId)) {
+      if (unitId === undefined) {
         continue;
       }
       const unit = findUnit(state.plan, unitId);
+      if (completed.has(unitId)) {
+        // A step completed before this drive (history or this call): route
+        // its declared continuation so the walk converges on the frontier
+        // (never dead-ends on an already-executed prefix).
+        const completedUnit = unit;
+        if (completedUnit && completedUnit.executionClass === 'human') {
+          if (state.humanOutcome !== undefined) {
+            const outcomeEdge = completedUnit.onOutcomes.find((edge) => edge.outcome === state.humanOutcome);
+            if (outcomeEdge) {
+              queue.push(outcomeEdge.to);
+              continue;
+            }
+          }
+          // No explicit outcome in this walk: continue along the outcome
+          // edge the durable record already REACHED (the original drive
+          // started its target); all targets only in the crash window that
+          // predates any successor start.
+          const reached = completedUnit.onOutcomes.filter((edge) => reachedInHistory.has(edge.to));
+          const targets = reached.length > 0 ? reached : completedUnit.onOutcomes;
+          for (const edge of targets) {
+            queue.push(edge.to);
+          }
+          continue;
+        }
+        if (completedUnit) {
+          for (const successor of completedUnit.onSuccess) {
+            queue.push(successor);
+          }
+        }
+        continue;
+      }
       if (!unit) {
         terminalFailure = {
           code: 'AGENT_PLAN_UNAVAILABLE',
@@ -779,7 +868,7 @@ export class ComputerAgentRuntime {
       });
       await this.recorder.recordEvidence(
         principal,
-        this.command(state.run.id, `ev-${evidenceKey(`${unit.unit}-decision-${actions}`, 'intent')}`),
+        this.command(state.run.id, `ev-${evidenceKey(`d${state.drive!}-${unit.unit}-decision-${actions}`, 'intent')}`),
         {
           runId: state.run.id,
           attemptNumber: state.attemptNumber,
@@ -818,7 +907,7 @@ export class ComputerAgentRuntime {
         };
       }
       if (decision.decision === 'observe') {
-        const invocationId = invocationIdOf(state.run.id, state.attemptNumber, unit.unit, cycle, actions + 1);
+        const invocationId = observationInvocationIdOf(state.run.id, state.attemptNumber, state.drive!, unit.unit, actions + 1);
         const authorized = checkInvocationAuthorization(this.policy.safeAction, decision.capability, unit.unit);
         if (!authorized.ok) {
           await this.failStepRecord(principal, state, unit);
@@ -931,7 +1020,7 @@ export class ComputerAgentRuntime {
       if (decision.decision === 'complete') {
         // EVIDENCE TRUTH: the claim verifies only against the runtime's own
         // verification observation — never the claim itself.
-        const verifyInvocationId = `inv-${state.run.id}-a${state.attemptNumber}-${unit.unit}-v${actions + 1}`;
+        const verifyInvocationId = `inv-${state.run.id}-a${state.attemptNumber}-d${state.drive!}-${unit.unit}-v${actions + 1}`;
         const authorized = checkInvocationAuthorization(this.policy.safeAction, decision.verify.capability, unit.unit);
         if (!authorized.ok) {
           await this.failStepRecord(principal, state, unit);
@@ -1295,8 +1384,19 @@ export class ComputerAgentRuntime {
 // §9 Pure helpers (deterministic ids, values, expectations, classification)
 // ==========================================================================
 
+/** ACT invocation id: drive-STABLE (host-ledger convergence = at-most-once). */
 function invocationIdOf(runId: string, attemptNumber: number, stepId: string, cycle: number, seq: number): string {
   return `inv-${runId}-a${attemptNumber}-${stepId}-c${cycle}-${String(seq).padStart(4, '0')}`;
+}
+
+/** OBSERVATION invocation id: drive-fresh (reads re-execute honestly). */
+function observationInvocationIdOf(runId: string, attemptNumber: number, drive: number, stepId: string, seq: number): string {
+  return `inv-${runId}-a${attemptNumber}-d${drive}-${stepId}-${String(seq).padStart(4, '0')}`;
+}
+
+/** Takeover OBSERVATION id: drive-fresh (the human re-observes honestly). */
+function takeoverObservationIdOf(runId: string, drive: number, stepId: string, seq: number): string {
+  return `tak-${runId}-d${drive}-${stepId}-${String(seq).padStart(4, '0')}`;
 }
 
 function evidenceKey(scope: string, kind: string): string {
