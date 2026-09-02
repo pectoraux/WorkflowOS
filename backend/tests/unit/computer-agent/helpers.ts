@@ -199,6 +199,13 @@ export function createRecorderDouble(options: {
   versionId: string;
   versionSemanticDigest: string;
   clock: ManualClock;
+  /**
+   * The typed V2-005 attach rejection the REAL boundary throws on a bad
+   * attestation (WorkflowRunError — RUN_ATTESTATION_*; durably recorded,
+   * never returned as a value). Set to make every attachAttestation call
+   * reject with this typed discipline (the completion-gate regressions).
+   */
+  attachAttestationRejection?: { code: string; message: string };
 }): RecorderDouble {
   const { runId } = options;
   const baseRun: WorkflowRun = {
@@ -421,6 +428,17 @@ export function createRecorderDouble(options: {
       });
     },
     async attachAttestation(_principal, command, input) {
+      if (options.attachAttestationRejection !== undefined) {
+        // The REAL V2-005 boundary claims the command row and then RAISES the
+        // typed rejection (executeCommand: fillCommandResult({ok:false}) +
+        // re-throw). The double mirrors that ledger discipline exactly: the
+        // command is claimed, the rejection is a THROW, never a value.
+        commands.push(command.commandId);
+        throw Object.assign(new Error(options.attachAttestationRejection.message), {
+          name: 'WorkflowRunError',
+          code: options.attachAttestationRejection.code,
+        });
+      }
       return execute(command, () => {
         const binding: RunAttestationBinding = {
           attestationId: input.attestation.attestationId,
@@ -574,6 +592,8 @@ export function createAgentHarness(options: {
   runId?: string;
   stepId?: string;
   epoch?: number;
+  /** The typed V2-005 attach rejection (see createRecorderDouble). */
+  attachAttestationRejection?: { code: string; message: string };
 }): AgentHarness {
   const runId = options.runId ?? 'run_unit_1';
   const stepId = options.stepId ?? 'organize';
@@ -586,6 +606,9 @@ export function createAgentHarness(options: {
     versionId: 'ver_unit_1',
     versionSemanticDigest: semanticDigest,
     clock,
+    ...(options.attachAttestationRejection !== undefined
+      ? { attachAttestationRejection: options.attachAttestationRejection }
+      : {}),
   });
   const nodes = new DefaultNodeCapabilityService({ clock: () => clock.epochMs() });
   const version = createVersionDouble({ id: 'ver_unit_1', workflowId: 'wf_unit_1', document });
