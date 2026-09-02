@@ -30,8 +30,8 @@ describe('V2-010 evidence separation', () => {
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'approve_draft', mode: 'performed', learnerResult: 'approved' });
     service.acknowledgeStepSafety({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'record_outcome' });
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'record_outcome', mode: 'performed', learnerResult: 'recorded' });
-    service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.' });
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'escalate_backlog', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the manual procedure lives in the referenced subworkflow version.' });
+    service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.' });
     service.finalizeLesson({ sessionId: session.id, learnerId: LEARNER_ID });
     return service.getSession({ sessionId: session.id, learnerId: LEARNER_ID });
   }
@@ -90,9 +90,7 @@ describe('V2-010 evidence separation', () => {
     }
     // the detail values are JSON-safe scalars only
     for (const value of Object.values(record.detail)) {
-      expect(['string', 'number', 'boolean', 'object']).includes(typeof value === 'object' ? 'object' : typeof value === 'undefined' ? 'undefined' : typeof value as string).toBe(true);
-      expect(value).not.toBeNull();
-      expect(typeof value === 'object' ? JSON.stringify(value) : value).not.toBeNull();
+      expect(value === null ? 'null' : typeof value).toMatch(/^(string|number|boolean|null)$/);
     }
   });
 });

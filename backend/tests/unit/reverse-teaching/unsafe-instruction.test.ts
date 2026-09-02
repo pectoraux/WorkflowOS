@@ -105,6 +105,6 @@ describe('V2-010 unsafe instruction handling', () => {
       sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'draft_followup',
       mode: 'performed', learnerResult: 'I drafted the follow-up messages by hand.',
     });
-    expect(performed.progress.performedStepCount).toBe(2);
+    expect(performed.progress.performedSteps.length).toBe(2);
   });
 });

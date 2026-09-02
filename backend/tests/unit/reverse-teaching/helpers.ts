@@ -177,18 +177,26 @@ export function authorDailyFollowupDocument(): WorkflowIrDocument {
     .addEdge({ from: 'draft_followup', to: 'approve_draft', on: 'success' })
     .addEdge({ from: 'approve_draft', to: 'send_followup', on: { outcome: 'approved' } })
     .addEdge({ from: 'approve_draft', to: 'record_outcome', on: { outcome: 'approved' } })
+    .addEdge({ from: 'approve_draft', to: 'escalate_backlog', on: { outcome: 'rejected' } })
     .addEdge({ from: 'record_outcome', to: 'escalate_backlog', on: 'success' })
     .build();
 }
 
-/** The expected canonical manual performance order of the fixture. */
+/**
+ * The expected canonical manual performance order of the fixture.
+ *
+ * The V2-006 canonical Kahn traversal with the sorted ready-set tie-break:
+ * after `approve_draft` unlocks BOTH `record_outcome` and `send_followup`,
+ * `record_outcome` sorts first; completing it then makes `escalate_backlog`
+ * ready, which sorts before `send_followup`.
+ */
 export const EXPECTED_STEP_ORDER = [
   'fetch_open_tickets',
   'draft_followup',
   'approve_draft',
   'record_outcome',
-  'send_followup',
   'escalate_backlog',
+  'send_followup',
 ] as const;
 
 /**

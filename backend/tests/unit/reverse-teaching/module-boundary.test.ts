@@ -68,8 +68,8 @@ describe('V2-010 — no execution, run or attestation concepts in the module sou
 describe('V2-010 — the module consumes ONLY the merged workflow-ir, teaching-sessions and computer-agent barrels', () => {
   it('src/reverse-teaching imports no other sibling domain, no internals, no persistence, no providers', () => {
     const violations: string[] = [];
-    const allowed = /from\s+'\.\.\/(workflow-ir|teaching-sessions|computer-agent)\/index\.js'/;
-    const siblingImport = /from\s+'\.\.\/(\.\.\/)?([a-z-]+)\/([a-z./-]*)'/;
+    const allowed = /from\s+'\.\.\/(?:\.\.\/)?(workflow-ir|teaching-sessions|computer-agent)\/index\.js'/;
+    const siblingImport = /from\s+'\.\.\/(\.\.\/)?([a-z-]+)\/([a-z./-]*)'/g;
     for (const file of MODULE_FILES) {
       const source = stripComments(readFileSync(file, 'utf-8'));
       const matches = [...source.matchAll(siblingImport)];

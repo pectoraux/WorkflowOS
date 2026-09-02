@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { authorDailyFollowupDocument, pinOf, buildTestService, LEARNER_ID } from './helpers.js';
-import {
-  ReverseTeachingError,
-  type InstalledVersionPin,
-} from '../../../src/reverse-teaching/index.js';
+import { ReverseTeachingError } from '../../../src/reverse-teaching/index.js';
 import { computeWorkflowVersionSemanticDigest } from '../../../src/workflow-ir/index.js';
 
 /**
@@ -52,11 +49,11 @@ describe('V2-010 version pinning', () => {
     const service = buildTestService();
     const pin = pinOf(document);
     expectCode(
-      () => service.createSession({ learnerId: LEARNER_ID, pin: { ...pin, semanticDigest: { ...pin.semanticDigest, algorithm: 'md5' } } }),
+      () => service.createSession({ learnerId: LEARNER_ID, pin: { ...pin, semanticDigest: { ...pin.semanticDigest, algorithm: 'md5' as never } } }),
       'PIN_DIGEST_ALGORITHM_UNSUPPORTED',
     );
     expectCode(
-      () => service.createSession({ learnerId: LEARNER_ID, pin: { ...pin, semanticDigest: { ...pin.semanticDigest, domain: 'wrong/domain' } } }),
+      () => service.createSession({ learnerId: LEARNER_ID, pin: { ...pin, semanticDigest: { ...pin.semanticDigest, domain: 'wrong/domain' as never } } }),
       'PIN_DIGEST_DOMAIN_MISMATCH',
     );
     expectCode(
@@ -70,9 +67,7 @@ describe('V2-010 version pinning', () => {
     const pin = pinOf(document);
     const session = service.createSession({ learnerId: LEARNER_ID, pin });
     // a DIFFERENT document (different semantics) must fail the pin check
-    const other = authorDailyFollowupDocument();
-    other.ir.nodes.find((n) => n.id === 'draft_followup')!;
-    const tampered = JSON.parse(JSON.stringify(other)) as typeof other;
+    const tampered = JSON.parse(JSON.stringify(authorDailyFollowupDocument())) as ReturnType<typeof authorDailyFollowupDocument>;
     (tampered.ir.nodes.find((n: { id: string }) => n.id === 'draft_followup')!.spec as { task: string }).task =
       'A different task that changes the semantic digest.';
     expectCode(() => service.beginLesson({ sessionId: session.id, document: tampered }), 'VERSION_PIN_MISMATCH');

@@ -41,7 +41,7 @@ describe('V2-010 learner progress', () => {
       mode: 'acknowledged_disclosure',
       learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.',
     });
-    expect(s1.progress.performedStepCount).toBe(1);
+    expect(s1.progress.performedSteps.length).toBe(1);
     expect(s1.progress.nextStepNodeId).toBe('draft_followup');
     expect(s1.performedSteps[0]!.mode).toBe('acknowledged_disclosure');
 
@@ -55,7 +55,7 @@ describe('V2-010 learner progress', () => {
       sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'draft_followup',
       mode: 'performed', learnerResult: 'I drafted the follow-up messages by hand.',
     });
-    expect(s2.progress.performedStepCount).toBe(2);
+    expect(s2.progress.performedSteps.length).toBe(2);
     expect(s2.progress.safetyAcknowledgedStepIds).toContain('draft_followup');
 
     // step 3: human_declared ordinary
@@ -69,18 +69,19 @@ describe('V2-010 learner progress', () => {
       sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'record_outcome',
       mode: 'performed', learnerResult: 'I recorded "customer confirmed" in the spreadsheet.',
     });
-    expect(s4.progress.performedStepCount).toBe(4);
-    // step 5: system_performed
+    expect(s4.progress.performedSteps.length).toBe(4);
+    // step 5: subworkflow_reference
     const s5 = service.performManualStep({
-      sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup',
-      mode: 'acknowledged_disclosure',
-      learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.',
-    });
-    // step 6: subworkflow_reference
-    const s6 = service.performManualStep({
       sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'escalate_backlog',
       mode: 'acknowledged_disclosure',
       learnerResult: 'acknowledged: the manual procedure lives in the referenced subworkflow version.',
+    });
+    void s5;
+    // step 6: system_performed
+    const s6 = service.performManualStep({
+      sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup',
+      mode: 'acknowledged_disclosure',
+      learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.',
     });
     expect(s6.progress.allStepsPerformed).toBe(true);
     expect(s6.progress.nextStepNodeId).toBeNull();
@@ -153,11 +154,12 @@ describe('V2-010 learner progress', () => {
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'approve_draft', mode: 'performed', learnerResult: 'approved' });
     service.acknowledgeStepSafety({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'record_outcome' });
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'record_outcome', mode: 'performed', learnerResult: 'recorded' });
-    service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.' });
     service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'escalate_backlog', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the manual procedure lives in the referenced subworkflow version.' });
+    service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'send_followup', mode: 'acknowledged_disclosure', learnerResult: 'acknowledged: the workflow performs this step itself; no manual equivalent is declared.' });
     const finalization = service.finalizeLesson({ sessionId: session.id, learnerId: LEARNER_ID });
     expect(finalization.sessionStatus).toBe('completed');
-    expect(finalization.performedStepCount).toBe(6);
+    // 3 performed by hand (draft, approve, record) + 3 disclosure-acknowledged (fetch, escalate, send) = 6 total
+    expect(finalization.performedStepCount).toBe(3);
     expect(finalization.disclosureAcknowledgedStepCount).toBe(3);
     // the completed session is terminal: no further performance, pause or finalize
     expectCode(() => service.performManualStep({ sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'fetch_open_tickets', mode: 'acknowledged_disclosure', learnerResult: 'x' }), 'SESSION_ALREADY_COMPLETED');
@@ -165,13 +167,14 @@ describe('V2-010 learner progress', () => {
     expectCode(() => service.finalizeLesson({ sessionId: session.id, learnerId: LEARNER_ID }), 'SESSION_ALREADY_COMPLETED');
   });
 
-  it('performing steps requires a begun lesson (not_started rejection)', () => {
+  it('performing steps requires a begun+active lesson (typed rejections in the V2-006 guard order)', () => {
     const service = buildTestService();
     const session = service.createSession({ learnerId: LEARNER_ID, pin: pinOf(document) });
+    // performManualStep guards active first (the V2-006 confirmCheckpoint order)
     expectCode(() => service.performManualStep({
       sessionId: session.id, learnerId: LEARNER_ID, nodeId: 'fetch_open_tickets',
       mode: 'acknowledged_disclosure', learnerResult: 'x',
-    }), 'LESSON_NOT_BEGUN');
+    }), 'SESSION_NOT_ACTIVE');
     expectCode(() => service.getLesson({ sessionId: session.id, learnerId: LEARNER_ID }), 'LESSON_NOT_BEGUN');
   });
 });

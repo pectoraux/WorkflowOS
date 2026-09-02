@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { authorDailyFollowupDocument, EXPECTED_STEP_ORDER, EXPECTED_SAFETY, assertConsumedSensitivityExpectations } from './helpers.js';
 import { deriveReverseTeachingLesson } from '../../../src/reverse-teaching/index.js';
+import type { WorkflowIrDocument } from '../../../src/workflow-ir/index.js';
 
 /**
  * V2-010 — the reverse-teaching derivation regressions (Work Order:
@@ -27,9 +28,11 @@ describe('V2-010 derivation — extraction and determinism', () => {
     expect(lesson.prerequisites.some((p) => p.kind === 'required_capability' && p.value.includes('messaging.send'))).toBe(true);
     // steps
     expect(lesson.steps.map((step) => step.nodeId)).toEqual([...EXPECTED_STEP_ORDER]);
-    // decision points (composed from the V2-006 base lesson)
-    expect(lesson.decisionPoints.map((d) => d.nodeId)).toEqual(['approve_draft']);
+    // decision points (composed from the V2-006 base lesson — every human step:
+    // the approval decision AND the information the person must provide)
+    expect(lesson.decisionPoints.map((d) => d.nodeId)).toEqual(['approve_draft', 'record_outcome']);
     expect(lesson.decisionPoints[0]!.outcomes).toContain('approved');
+    expect(lesson.decisionPoints[0]!.outcomes).toContain('rejected');
     // expected outcomes (workflow outputs + terminal steps + step outputs)
     expect(lesson.expectedOutcomes.some((o) => o.kind === 'workflow_output' && o.value.includes('messageId'))).toBe(true);
     expect(lesson.expectedOutcomes.some((o) => o.kind === 'terminal_step' && o.value.includes('escalate_backlog'))).toBe(true);
@@ -43,14 +46,14 @@ describe('V2-010 derivation — extraction and determinism', () => {
 
   it('is order-independent: shuffled node/edge arrays derive the identical lesson', () => {
     const a = deriveReverseTeachingLesson(authorDailyFollowupDocument());
-    const shuffled: typeof a.base = {
+    const shuffled: WorkflowIrDocument = {
       ...authorDailyFollowupDocument(),
       ir: {
         ...authorDailyFollowupDocument().ir,
         nodes: [...authorDailyFollowupDocument().ir.nodes].reverse(),
         edges: [...authorDailyFollowupDocument().ir.edges].reverse(),
       },
-    } as never;
+    };
     const b = deriveReverseTeachingLesson(shuffled);
     expect(JSON.stringify(b)).toBe(JSON.stringify(a));
   });
