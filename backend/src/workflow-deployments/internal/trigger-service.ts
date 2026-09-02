@@ -135,7 +135,11 @@ export class DefaultWorkflowDeploymentService implements WorkflowDeploymentServi
       plan: compiled.artifact.plan,
     });
     if (!compatibility.ok) {
-      throw new WorkflowDeploymentError('DEPLOYMENT_PLAN_INCOMPATIBLE', compatibility.detail);
+      throw new WorkflowDeploymentError(
+        'DEPLOYMENT_PLAN_INCOMPATIBLE',
+        'the placement policy is incompatible with the pinned version plan (locality is a correctness constraint)',
+        compatibility.detail,
+      );
     }
 
     const id = deriveDeploymentId(input.organizationId, input.workflowId, input.versionId, input.name);

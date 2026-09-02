@@ -602,7 +602,8 @@ export type {
  * by the merged NodeCapabilityService.
  */
 export type NodeDirectoryReadPort = {
-  matchNodes: (requirement: NodeRequirementSet) => Promise<NodeMatchResult>;
+  /** The merged matcher is synchronous (V2-004's contract). */
+  matchNodes: (requirement: NodeRequirementSet) => NodeMatchResult;
   listNodes: () => readonly NodeRecord[];
 };
 

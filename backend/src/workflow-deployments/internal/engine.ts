@@ -28,13 +28,14 @@ import type {
   WorkflowPrincipal,
 } from '../types.js';
 import { WorkflowDeploymentError } from '../types.js';
-import { epochMsOf, formatUtcTimestamp } from './clock.js';
+import { epochMsOf, formatUtcTimestamp, toUtcIsoString } from './clock.js';
 import {
   backoffDelayMs,
   isWithinMissWindow,
 } from './delivery-policy.js';
 import {
   eventMatchesPattern,
+  eventSchemaOf,
   eventTriggerTypeOf,
   validateEventPayload,
 } from './event-schema.js';
@@ -132,6 +133,11 @@ export class TriggerEngine {
     }
     const validation = validateEventPayload(input.eventType, input.payload);
     if (!validation.ok) {
+      // Unknown event TYPES are a vocabulary failure (distinct code); the
+      // payload-shape failures are schema failures.
+      if (eventSchemaOf(input.eventType) === null) {
+        throw new WorkflowDeploymentError('EVENT_TYPE_UNKNOWN', 'the event type is not in the frozen registry vocabulary', input.eventType);
+      }
       throw new WorkflowDeploymentError('EVENT_SCHEMA_INVALID', 'the event payload failed its typed schema', validation.detail);
     }
     const occurredAt = input.occurredAt === undefined ? now : toCanonical(input.occurredAt);
@@ -153,8 +159,10 @@ export class TriggerEngine {
       eventId: ingested.row.event_id,
       eventType: ingested.row.event_type,
       source: ingested.row.source,
-      occurredAt: toCanonical(ingested.row.occurred_at),
-      receivedAt: toCanonical(ingested.row.received_at),
+      // Wire/database timestamps normalize to fixed-format UTC (PGlite
+      // returns TIMESTAMPTZ as Date objects; the canonical string passes).
+      occurredAt: toUtcIsoString(ingested.row.occurred_at),
+      receivedAt: toUtcIsoString(ingested.row.received_at),
       payloadCommitment: ingested.row.payload_commitment,
     };
 
