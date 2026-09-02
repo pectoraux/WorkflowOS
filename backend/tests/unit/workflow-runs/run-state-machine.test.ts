@@ -36,7 +36,9 @@ describe('V2-005 — the explicit run state machine', () => {
   it('marks exactly completed/failed/cancelled terminal', () => {
     expect([...TERMINAL_WORKFLOW_RUN_STATES]).toEqual(['completed', 'failed', 'cancelled']);
     for (const state of WORKFLOW_RUN_STATES) {
-      expect(isTerminalRunState(state)).toBe(TERMINAL_WORKFLOW_RUN_STATES.includes(state));
+      expect(isTerminalRunState(state)).toBe(
+        (TERMINAL_WORKFLOW_RUN_STATES as readonly string[]).includes(state),
+      );
     }
   });
 

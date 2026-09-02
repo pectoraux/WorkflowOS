@@ -129,7 +129,24 @@ describe('V2-005 module boundary (determinism, sibling separation, attestation a
 
   it('imports only sanctioned specifiers (node:crypto, module-internal, merged sibling BARRELS, platform types)', () => {
     const violations: string[] = [];
-    const specifierPattern = /(?:from\s*|import\s*|export\s+(?:type\s+)?\{[^}]*\}\s+from\s*)['"]([^'"]+)['"]/g;
+    // Real import/export statements ONLY (the earlier loose `from\s*['"]`
+    // alternative false-positived on template literals inside error-message
+    // strings, e.g. `legal targets from "${from}"` — not an import).
+    const specifierPattern =
+      /(?:import\s+[^;]*?from\s*|export\s+(?:type\s+)?\{[^}]*\}\s*from\s*|import\s*['"])['"]([^'"]+)['"]/g;
+    // The merged sibling BARREL entry points (resolved from THIS module's
+    // directory; internal/ paths are never sanctioned — checked below).
+    const SIBLING_BARREL_PATHS = new Set(
+      [
+        '../workflow-repository/index.ts',
+        '../workflow-ir/index.ts',
+        '../execution-attestation/index.ts',
+      ].map((rel) => join(MODULE_DIR, rel)),
+    );
+    const resolveCandidates = (from: string, specifier: string): string[] => {
+      const resolved = join(from, specifier);
+      return [resolved, `${resolved}.ts`, resolved.replace(/\.js$/, '.ts'), join(resolved, 'index.ts')];
+    };
     for (const file of MODULE_FILES) {
       const source = readFileSync(file, 'utf8');
       for (const match of source.matchAll(specifierPattern)) {
@@ -137,16 +154,13 @@ describe('V2-005 module boundary (determinism, sibling separation, attestation a
         if (ALLOWED_NON_RELATIVE_IMPORTS.has(specifier)) continue;
         if (specifier === 'node:crypto' || specifier.startsWith('node:')) continue;
         if (specifier.startsWith('.')) {
-          const resolved = join(dirname(file), specifier);
-          const candidates = [
-            resolved,
-            `${resolved}.ts`,
-            resolved.replace(/\.js$/, '.ts'),
-            join(resolved, 'index.ts'),
-          ];
+          const candidates = resolveCandidates(dirname(file), specifier);
           const inside = candidates.some((c) => existsSync(c) && c.startsWith(MODULE_DIR));
-          if (!inside) {
-            violations.push(`${relative(MODULE_DIR, file)} imports outside the module: "${specifier}"`);
+          if (inside) continue;
+          // merged sibling BARREL entry point only (never their internal/)
+          const isSiblingBarrel = candidates.some((c) => SIBLING_BARREL_PATHS.has(c) && existsSync(c));
+          if (!isSiblingBarrel) {
+            violations.push(`${relative(MODULE_DIR, file)} imports outside the module (not a merged sibling barrel): "${specifier}"`);
           }
           continue;
         }

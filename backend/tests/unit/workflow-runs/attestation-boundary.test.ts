@@ -4,15 +4,28 @@
  * attestation semantics) and feeds it run-derived binding expectations +
  * an injected freshness context. Proven here with REAL V2-014 Ed25519
  * attestations — no DB, no mocks of the crypto path.
+ *
+ * The "claims hardware_backed WITHOUT representable evidence" case models a
+ * FOREIGN producer: the merged V2-014 signer itself refuses to sign such an
+ * envelope (fail-closed at the source), so the fixture builds a REAL
+ * correctly-signed envelope through the exported canonical-JSON discipline +
+ * node:crypto directly — exactly what a non-WorkflowOS producer of the same
+ * protocol would emit. The verifier (the only verification authority) must
+ * fail closed on it.
  */
 import { describe, it, expect } from 'vitest';
+import { sign as ed25519Sign } from 'node:crypto';
 import {
   generateAttesterKeyPair,
   signExecutionAttestation,
   computeExecutionDigest,
   executionValueCommitment,
   verifyAttestation,
+  deriveAttesterKeyId,
+  deriveAttestationIdentity,
+  canonicalJsonStringify,
   type ExecutionStatement,
+  type ExecutionAttestation,
   type ReplayRegistry,
   type AttestationVerificationPolicy,
   type AssuranceLevel,
@@ -86,6 +99,33 @@ function signed(statement: ExecutionStatement, assurance: AssuranceLevel = 'soft
     assurance,
     issuedAt: ISSUED_AT,
   });
+}
+
+/**
+ * A FOREIGN producer's envelope: a REAL, correctly-computed Ed25519
+ * signature over the canonical unsigned-envelope preimage, but claiming
+ * `hardware_backed` with NO representable assurance evidence. The merged
+ * signer refuses to produce this shape (fail-closed at the source); a foreign
+ * signer of the same protocol can — the verifier must reject it.
+ */
+function foreignSignedClaimingHardwareWithoutEvidence(statement: ExecutionStatement): ExecutionAttestation {
+  const key = generateAttesterKeyPair();
+  const executionDigest = computeExecutionDigest(statement);
+  const attesterKeyId = deriveAttesterKeyId(key.publicKeyDer);
+  const unsigned = {
+    objectType: 'workflowos/execution-attestation/v1',
+    envelopeSchemaVersion: 1,
+    attestationId: deriveAttestationIdentity(executionDigest.digest, attesterKeyId),
+    executionDigest,
+    statement,
+    attesterKeyId,
+    attesterPublicKey: key.publicKeyDer,
+    assurance: 'hardware_backed',
+    issuedAt: ISSUED_AT,
+  };
+  const preimage = canonicalJsonStringify(unsigned);
+  const signature = ed25519Sign(null, Buffer.from(preimage, 'utf8'), key.privateKey).toString('hex');
+  return { ...unsigned, signature } as unknown as ExecutionAttestation;
 }
 
 function policyWith(
@@ -239,7 +279,10 @@ describe('V2-005 — the run-boundary verification policy (consumes V2-014 verba
 
   it('an attestation claiming hardware_backed WITHOUT representable evidence is rejected', () => {
     const registry = fakeReplayRegistry();
-    const attestation = signed(statementFor(), 'hardware_backed');
+    // The merged signer refuses to sign this shape; a FOREIGN producer of the
+    // same protocol can emit it with a REAL signature — the verifier (and
+    // therefore the run boundary) must still fail closed on it.
+    const attestation = foreignSignedClaimingHardwareWithoutEvidence(statementFor());
     const result = verifyAttestation(attestation, policyWith(registry));
     expect(result.ok).toBe(false);
     if (!result.ok) {

@@ -23,6 +23,7 @@ const registry = JSON.parse(readFileSync(REGISTRY_JSON_PATH, 'utf8')) as {
   executionClasses: string[];
   evidence: string[];
   assurance: string[];
+  authorityRules: string[];
 };
 
 describe('V2-005 registry conformance (frozen V2-CTRL-003, no drift)', () => {

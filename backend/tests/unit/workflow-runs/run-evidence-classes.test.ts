@@ -7,7 +7,6 @@ import { describe, it, expect } from 'vitest';
 import {
   RUN_EVIDENCE_CLASSES,
   WorkflowRunError,
-  type RunEvidenceClass,
 } from '../../../src/workflow-runs/index.js';
 import {
   assertRunEvidenceClass,
