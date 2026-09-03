@@ -3,6 +3,7 @@ import {
   packageFirstPartyExecution,
   artifactByKind,
   type AttestationVerification,
+  type FirstPartyWorkflowArtifact,
   type FirstPartyWorkflowManifest,
   type FirstPartyPinFacts,
   type PackageFirstPartyExecutionInput,
@@ -10,6 +11,8 @@ import {
 } from '../../../src/self-hosted-library/index.js';
 import { InMemoryReplayRegistry } from '../../../src/execution-attestation/index.js';
 import { CORE_SELF_HOSTING_PROHIBITIONS } from '../../../src/architecture-checkpoints/index.js';
+import { createWorkflowIrBuilder, computeWorkflowVersionSemanticDigest } from '../../../src/workflow-ir/index.js';
+import type { WorkflowIrDocument, WorkflowNode } from '../../../src/workflow-ir/index.js';
 import {
   makeDevEnvironment,
   buildDevStatement,
@@ -283,3 +286,267 @@ describe('V2-013 execution packaging — pin drift, boundary, and manifest corre
     expectDeniedCode(result, 'SELF_HOSTING_MANIFEST_MISMATCH');
   });
 });
+
+// =============================================================================
+// The PR #160 Blocker-1 correction — the predecessor binding to the
+// authoritative WorkflowIR predecessor edges.
+//
+// The architect's finding: `packageFirstPartyExecution()` trusted the
+// caller-supplied `declaredParents` without binding them to the WorkflowIR
+// document's authoritative predecessor edges — a valid attestation for an
+// UNRELATED execution could therefore satisfy a proof-required step.
+//
+// Every regression below uses a REAL, fresh, trusted, VERIFIED Ed25519
+// attestation (the exact class of evidence the hole admitted) and proves
+// the binding denies typed.
+// =============================================================================
+
+describe('V2-013 execution packaging — the predecessor binding to the authoritative WorkflowIR edges (PR #160 Blocker-1)', () => {
+  it('a VALID verified attestation for an UNRELATED step of the same workflow → the binding denies (a foreign step never satisfies the predicate)', async () => {
+    const fixture = await makePackagingFixture();
+    // a REAL attestation for `record_evidence` — a step of the SAME workflow
+    // and the SAME run scope, but NOT a WorkflowIR-declared predecessor of
+    // the proof-required step `execute_workflow`
+    const unrelated = signDevStatement(
+      buildDevStatement(fixture.scope, {
+        stepId: 'record_evidence',
+        nodeId: 'node_dev_self_hosted_worker',
+        action: 'Record the dogfooding evidence (a NON-predecessor step of execute_workflow)',
+        nonce: 'challenge-dev-dogfood-unrelated-0002',
+      }),
+    );
+    const verification = verifyDevAttestation(unrelated, fixture.scope);
+    expect(verification.ok).toBe(true); // the evidence itself is valid, fresh, authorized
+    const result = packageFirstPartyExecution({
+      ...baselineInput(fixture),
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [unrelated.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: unrelated.executionDigest.digest, verification },
+          ],
+        },
+      ],
+    });
+    const failure = expectDeniedCode(result, 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED');
+    expect(failure.stepId).toBe('execute_workflow');
+    expect(failure.offending).toBe('record_evidence');
+    expect(failure.detail).toContain('install_workflow');
+  });
+
+  it('a VALID verified attestation for the predecessor step but a FOREIGN workflowId (the version-scope dimensions V2-015 already binds left equal) → the binding denies (fail-closed on the one identity dimension the admission does not check)', async () => {
+    const fixture = await makePackagingFixture();
+    // the right stepId, run, version and semantic digest (everything V2-015's
+    // admission binds) — but the statement claims a FOREIGN workflowId, the
+    // one scope dimension the V2-015 binding check does not cover
+    const foreignScope = {
+      workflowId: 'wfw-foreign-workflow',
+      workflowVersionId: fixture.scope.workflowVersionId,
+      workflowVersionSemanticDigest: fixture.scope.workflowVersionSemanticDigest,
+      runId: fixture.scope.runId,
+    };
+    const foreign = signDevStatement(
+      buildDevStatement(foreignScope, {
+        stepId: 'install_workflow',
+        nodeId: 'node_dev_self_hosted_worker',
+        action: 'Install a foreign workflow through the universal installation authority',
+        nonce: 'challenge-dev-dogfood-foreign-0003',
+      }),
+    );
+    const verification = verifyDevAttestation(foreign, foreignScope);
+    expect(verification.ok).toBe(true); // verified under ITS OWN (foreign) bindings
+    const result = packageFirstPartyExecution({
+      ...baselineInput(fixture),
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [foreign.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: foreign.executionDigest.digest, verification },
+          ],
+        },
+      ],
+    });
+    const failure = expectDeniedCode(result, 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED');
+    expect(failure.stepId).toBe('execute_workflow');
+    expect(failure.offending).toContain('wfw-foreign-workflow');
+  });
+
+  it('an UNCOVERED WorkflowIR-declared predecessor (a 2-predecessor artifact, the supply covers only one) → the binding denies (the declared set may not be narrower than the IR structure)', async () => {
+    // a test-local artifact whose proof-required step has TWO IR-declared
+    // predecessors (install_workflow AND verify_environment), authored
+    // through the SAME V2-003 public builder the module itself uses
+    const artifact = twoPredecessorDogfoodingArtifact();
+    const customManifest: FirstPartyWorkflowManifest = {
+      kind: 'dogfooding',
+      slug: 'wfos-dev-dogfooding',
+      workflowId: 'wfw-custom-two-predecessors',
+      versionId: 'wfwv-custom-two-pred-1',
+      versionNumber: 1,
+      contentDigest: 'digest-custom-two-pred-1',
+      semanticDigest: computeWorkflowVersionSemanticDigest(artifact.document),
+      installationId: 'wfin-custom-two-pred-1',
+    };
+    const customPinFacts: FirstPartyPinFacts = {
+      organizationId: DEV_TENANT,
+      installationId: customManifest.installationId,
+      workflowId: customManifest.workflowId,
+      versionId: customManifest.versionId,
+      versionNumber: customManifest.versionNumber,
+      contentDigest: customManifest.contentDigest,
+    };
+    const customScope = {
+      workflowId: customManifest.workflowId,
+      workflowVersionId: customManifest.versionId,
+      workflowVersionSemanticDigest: customManifest.semanticDigest.digest,
+      runId: DEV_RUN_ID,
+    };
+    // a REAL verified attestation for ONE of the two IR-declared predecessors
+    const partial = signDevStatement(
+      buildDevStatement(customScope, {
+        stepId: 'install_workflow',
+        nodeId: 'node_dev_self_hosted_worker',
+        action: 'Install the first-party workflow through the universal installation authority (version-pinned)',
+        nonce: 'challenge-dev-dogfood-partial-0004',
+      }),
+    );
+    const verification = verifyDevAttestation(partial, customScope);
+    expect(verification.ok).toBe(true);
+    const result = packageFirstPartyExecution({
+      artifact,
+      manifest: customManifest,
+      boundary: realBoundary(),
+      pinFacts: customPinFacts,
+      executionScope: { runId: DEV_RUN_ID },
+      trustPolicy: realTrustPolicy(),
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [partial.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: partial.executionDigest.digest, verification },
+          ],
+        },
+      ],
+    });
+    const failure = expectDeniedCode(result, 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED');
+    expect(failure.stepId).toBe('execute_workflow');
+    expect(failure.offending).toBe('verify_environment');
+  });
+
+  it('a VALID verified attestation for a NON-predecessor step carried in the evidence set (even undeclared) → fail-closed (the whole evidence set must be IR-bound)', async () => {
+    const fixture = await makePackagingFixture();
+    // the legitimate predecessor supply (declared + admitted)…
+    const unrelated = signDevStatement(
+      buildDevStatement(fixture.scope, {
+        stepId: 'record_evidence',
+        nodeId: 'node_dev_self_hosted_worker',
+        action: 'Record the dogfooding evidence (a NON-predecessor step, carried undeclared)',
+        nonce: 'challenge-dev-dogfood-extra-0005',
+      }),
+    );
+    const unrelatedVerification = verifyDevAttestation(unrelated, fixture.scope);
+    expect(unrelatedVerification.ok).toBe(true);
+    // …plus a foreign VERIFIED fact in the evidence set that is NOT declared
+    const result = packageFirstPartyExecution({
+      ...baselineInput(fixture),
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [fixture.predecessor.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: fixture.predecessor.executionDigest.digest, verification: fixture.verification },
+            { executionDigest: unrelated.executionDigest.digest, verification: unrelatedVerification },
+          ],
+        },
+      ],
+    });
+    const failure = expectDeniedCode(result, 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED');
+    expect(failure.offending).toBe('record_evidence');
+  });
+
+  it('a MISSING fact stepId (a statement with no step identity) → the binding denies (fail-closed on the absent binding)', async () => {
+    const fixture = await makePackagingFixture();
+    // a statement whose stepId is absent: the fact attests no step identity,
+    // so it cannot bind ANY WorkflowIR predecessor edge
+    const unstepped = buildDevStatement(fixture.scope, {
+      stepId: 'install_workflow',
+      nodeId: 'node_dev_self_hosted_worker',
+      action: 'Install the first-party workflow (step identity stripped for the fail-closed experiment)',
+      nonce: 'challenge-dev-dogfood-nostep-0006',
+    });
+    const statement = { ...unstepped, stepId: undefined } as typeof unstepped;
+    const attestation = signDevStatement(statement);
+    const verification = verifyDevAttestation(attestation, { ...fixture.scope });
+    expect(verification.ok).toBe(true);
+    const result = packageFirstPartyExecution({
+      ...baselineInput(fixture),
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [attestation.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: attestation.executionDigest.digest, verification },
+          ],
+        },
+      ],
+    });
+    const failure = expectDeniedCode(result, 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED');
+    expect(failure.stepId).toBe('execute_workflow');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The 2-predecessor test artifact (authored through the V2-003 public
+// builder — the same authority the module's own artifacts use)
+// ---------------------------------------------------------------------------
+
+function twoPredecessorDogfoodingArtifact(): FirstPartyWorkflowArtifact {
+  const document: WorkflowIrDocument = createWorkflowIrBuilder()
+    .withStart('install_workflow')
+    .addWorkflowInput({ name: 'procedureKind', type: { kind: 'string' } })
+    .addNode(apiStep('install_workflow'))
+    .addNode(apiStep('verify_environment'))
+    .addNode(executeStep())
+    .addEdge({ from: 'install_workflow', to: 'verify_environment', on: 'success' })
+    .addEdge({ from: 'install_workflow', to: 'execute_workflow', on: 'success' })
+    .addEdge({ from: 'verify_environment', to: 'execute_workflow', on: 'success' })
+    .build();
+  return {
+    kind: 'dogfooding',
+    slug: 'wfos-dev-dogfooding',
+    name: 'WorkflowOS dogfooding procedure (two-predecessor test artifact)',
+    description: 'A test-local dogfooding artifact whose proof-required step declares two WorkflowIR predecessors.',
+    document,
+    executionPolicy: { proofRequiredSteps: ['execute_workflow'] },
+  };
+}
+
+function apiStep(id: string): WorkflowNode {
+  return {
+    id,
+    executionClass: 'deterministic_api',
+    spec: { class: 'deterministic_api', capability: 'workflow.execute' },
+    capabilityRequirements: ['workflow.execute'],
+    placement: 'device_local',
+    inputs: [],
+    outputs: [{ name: 'done', type: { kind: 'boolean' } }],
+    failurePolicy: { strategy: 'fail_workflow' },
+    completionEvidence: 'observation',
+  };
+}
+
+function executeStep(): WorkflowNode {
+  return {
+    id: 'execute_workflow',
+    executionClass: 'agentic_computer_use',
+    spec: { class: 'agentic_computer_use', task: 'Execute the installed workflow end-to-end through the real execution authorities' },
+    capabilityRequirements: ['workflow.execute', 'filesystem.read'],
+    placement: 'device_local',
+    inputs: [],
+    outputs: [{ name: 'done', type: { kind: 'boolean' } }],
+    failurePolicy: { strategy: 'fail_workflow' },
+    completionEvidence: 'observation',
+  };
+}

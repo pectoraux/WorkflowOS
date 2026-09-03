@@ -318,7 +318,16 @@ export interface FirstPartyPinFacts {
 export interface ProofStepEvidenceInput {
   /** The proof-required step id (must exist in the artifact's policy). */
   readonly stepId: string;
-  /** The exact declared parent set for the step's admission predicate. */
+  /**
+   * The exact declared parent set for the step's admission predicate —
+   * VALIDATED against the artifact's authoritative WorkflowIR predecessor
+   * edges (the PR #160 Blocker-1 correction): every VERIFIED evidence fact
+   * must attest a WorkflowIR-declared predecessor step of this step within
+   * the manifest's pinned workflow scope, and every IR-declared predecessor
+   * must be covered by an admitted parent. A valid attestation for an
+   * unrelated execution (foreign step, absent step identity, or foreign
+   * workflow identity) NEVER satisfies the predicate (fail-closed).
+   */
   readonly declaredParents: readonly string[];
   /** The evidence supplied for those parents (V2-015 wrappers). */
   readonly predecessorEvidence: readonly PredecessorEvidence[];
@@ -362,6 +371,15 @@ export const SELF_HOSTING_PACKAGING_FAILURE_CODES = [
   'SELF_HOSTING_PROOF_STEP_UNSUPPLIED',
   /** A proof predicate was REJECTED (the V2-015 admission failure verbatim). */
   'SELF_HOSTING_PROOF_PREDICATE_REJECTED',
+  /**
+   * The predecessor evidence is NOT bound to the WorkflowIR's authoritative
+   * predecessor edges (the PR #160 Blocker-1 correction): a verified fact
+   * attests a non-predecessor step (or a foreign workflow identity / absent
+   * step identity), or an IR-declared predecessor is not covered by an
+   * admitted parent — a valid attestation for an unrelated execution never
+   * satisfies a proof-required step.
+   */
+  'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED',
 ] as const;
 export type SelfHostingPackagingFailureCode = (typeof SELF_HOSTING_PACKAGING_FAILURE_CODES)[number];
 
@@ -376,6 +394,8 @@ export interface SelfHostingPackagingFailure {
   readonly actual?: string;
   /** Only for proof predicate rejections: the V2-015 admission failure (verbatim). */
   readonly admissionFailure?: ProofAdmissionFailure;
+  /** Only for parent-binding violations: the offending step id or workflow identity. */
+  readonly offending?: string;
   /** The proof-required step the failure concerns. */
   readonly stepId?: string;
 }
