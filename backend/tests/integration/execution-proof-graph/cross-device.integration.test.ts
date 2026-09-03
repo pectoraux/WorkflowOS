@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { expectTypeOf } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   generateAttesterKeyPair,
   signExecutionAttestation,
@@ -11,6 +16,7 @@ import {
   type ExecutionAttestation,
   type ExecutionStatement,
   type AttestationVerification,
+  type VerifiedExecutionFact,
 } from '../../../src/execution-attestation/index.js';
 import type { WorkflowRunService, WorkflowRunHistory } from '../../../src/workflow-runs/index.js';
 import type { DependentStepPrecondition, ResumeAfterHumanInput } from '../../../src/computer-agent/index.js';
@@ -517,6 +523,94 @@ describe('V2-015 cross-device continuation — two host contexts over the real r
     if (decision.continuation === 'denied') {
       expect(decision.failure.dimension).toBe('binding');
     }
+  });
+
+  it('verifies the transferred envelope in a SEPARATE PROCESS and feeds only the resulting fact into admission', async () => {
+    const scope = await runningRun();
+    const predecessor = signWith(predecessorStatement(scope), attesterA);
+    await attach(scope.runId, predecessor, 'fetch_issue');
+
+    // the transfer medium: canonical envelope bytes + the out-of-band
+    // verifier context + a runtime-generated verifier script importing ONLY
+    // the merged V2-014 public barrel (zero production context)
+    const transferDir = mkdtempSync(join(tmpdir(), 'v2-015-cd-verify-'));
+    const envelopeFile = join(transferDir, 'attestation-node-a.json');
+    writeFileSync(envelopeFile, serializeAttestation(predecessor), 'utf8');
+    const contextFile = join(transferDir, 'verifier-context.json');
+    writeFileSync(contextFile, JSON.stringify({
+      bindings: {
+        workflowId,
+        workflowVersionId: version1Id,
+        workflowVersionSemanticDigest: scope.versionSemanticDigest,
+        runId: scope.runId,
+        attemptId: 1,
+        stepId: 'fetch_issue',
+      },
+      freshness: { now: NOW, currentEpoch: EPOCH },
+      attesterKeyIds: [attesterA.keyId],
+    }), 'utf8');
+    const factFile = join(transferDir, 'verified-fact.json');
+    const verifierScript = join(transferDir, 'independent-verifier.mts');
+    writeFileSync(verifierScript, [
+      "import { readFileSync, writeFileSync } from 'node:fs';",
+      'async function verify(): Promise<void> {',
+      `  const barrel = await import(${JSON.stringify(pathToFileURL(join(process.cwd(), 'src', 'execution-attestation', 'index.js')).href)});`,
+      "  const bytes = readFileSync(process.argv[2], 'utf8');",
+      "  const context = JSON.parse(readFileSync(process.argv[3], 'utf8'));",
+      '  const parsed = barrel.parseAttestation(bytes);',
+      '  if (!parsed.ok) { console.log(JSON.stringify({ ok: false, code: parsed.failure.code })); return; }',
+      '  const verification = barrel.verifyAttestation(parsed.attestation, {',
+      '    bindings: context.bindings,',
+      '    freshness: { now: context.freshness.now, currentEpoch: context.freshness.currentEpoch, replayRegistry: new barrel.InMemoryReplayRegistry() },',
+      '    attesterKeyIds: context.attesterKeyIds,',
+      '  });',
+      '  if (verification.ok) {',
+      "    writeFileSync(process.argv[4], JSON.stringify(verification.fact), 'utf8');",
+      "    console.log(JSON.stringify({ ok: true }));",
+      '  } else {',
+      '    console.log(JSON.stringify({ ok: false, code: verification.failure.code }));',
+      '  }',
+      '}',
+      'verify().catch((error) => { console.error(String(error)); process.exit(1); });',
+    ].join('\n'), 'utf8');
+
+    const verifier = spawnSync('bunx', ['tsx', verifierScript, envelopeFile, contextFile, factFile], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    });
+    expect(verifier.status).toBe(0);
+    const outcome = JSON.parse((verifier.stdout ?? '').trim()) as { ok: boolean; code?: string };
+    expect(outcome.ok).toBe(true);
+    expect(existsSync(factFile)).toBe(true);
+
+    // the fact crosses the process boundary as DATA and is the ONLY
+    // admissible currency for the continuation
+    const fact = JSON.parse(readFileSync(factFile, 'utf8')) as VerifiedExecutionFact;
+    const graph = reconstructProofGraphFromRunHistory(
+      (await service.getRunHistory(OWNER(), scope.runId)) as WorkflowRunHistory,
+    ).graph;
+    const decision = planCrossDeviceContinuation({
+      graph,
+      dependent: {
+        stepId: 'notify_channel',
+        workflowId,
+        workflowVersionId: version1Id,
+        workflowVersionSemanticDigest: scope.versionSemanticDigest,
+        runId: scope.runId,
+      },
+      declaredParents: [fact.executionDigest.digest],
+      predecessorEvidence: [{ executionDigest: fact.executionDigest.digest, verification: { ok: true, fact } }],
+      trustPolicy: {
+        trustedAttesterKeyIds: [attesterA.keyId],
+        requiredAssurance: 'software_signed',
+        now: NOW,
+        currentEpoch: EPOCH,
+      },
+    });
+    if (decision.continuation !== 'admitted') {
+      throw new Error(`expected admitted, got ${decision.failure.code}: ${decision.failure.detail}`);
+    }
+    expect(decision.precondition.verifiedPredecessor.attestationId).toBe(predecessor.attestationId);
   });
 
   it('the coordination layer composes the multi-parent continuation (two verified predecessors)', async () => {
