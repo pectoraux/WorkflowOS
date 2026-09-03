@@ -28,11 +28,21 @@ import {
  *      dimension Y).
  *
  * Mutated dimensions: Run, WorkflowVersion, semantic digest, predecessor
- * identity (parent digest), verification result, freshness, assurance,
- * trust, capability, authorization, placement.
+ * identity (parent digest), evidence identity binding (wrapper digest
+ * substitution — the wrapper/fact identity binding), verification result,
+ * freshness, assurance, trust, capability, authorization, placement.
  */
 
 const ADMIT_NOW = '2026-09-02T08:00:30.000Z';
+
+/**
+ * A fixed, well-formed sha-256 hex that is NOT any fixture attestation's
+ * execution digest — the substituted WRAPPER key for the identity-binding
+ * (wrapper/fact substitution) experiments. All fixture digests derive from
+ * real sha-256 over fixed canonical statements; this synthetic constant
+ * equals none of them.
+ */
+const SUBSTITUTED_WRAPPER_DIGEST = '5f'.repeat(32);
 
 function verifyBaseline(attestation: ReturnType<typeof buildPredecessorAttestation>): AttestationVerification {
   return verifyAttestation(attestation, {
@@ -265,6 +275,61 @@ describe('V2-015 admission mutation/discrimination battery', () => {
       'ADMISSION_PLACEMENT_INELIGIBLE',
       'placement',
     );
+  });
+
+  it('wrapper/fact identity substitution (the attack shape): the SAME verified fact retained under a SUBSTITUTED wrapper digest, declared parent following the wrapper → evidence identity mismatch', () => {
+    // THE SUBSTITUTION VECTOR (architect review, PR #158 Blocker 1): a
+    // genuinely verified fact for digest B is paired with
+    // PredecessorEvidence.executionDigest = A and the parent set declares A.
+    // The wrapper key satisfies the parent lookup while binding/freshness/
+    // assurance/trust are evaluated from the retained fact — without the
+    // explicit identity binding this ADMITS the dependent with a
+    // satisfiedParents entry that was never the digest of a verified fact.
+    const { input } = baseline();
+    const verification = input.predecessorEvidence[0]!.verification; // the retained verified fact
+    const result = evaluateProofAdmission({
+      ...input,
+      declaredParents: [SUBSTITUTED_WRAPPER_DIGEST],
+      predecessorEvidence: [{ executionDigest: SUBSTITUTED_WRAPPER_DIGEST, verification }],
+    });
+    expectDeniedCode(result, 'ADMISSION_EVIDENCE_IDENTITY_MISMATCH', 'verification');
+    if (!result.admitted) {
+      expect(result.failure.parentDigest).toBe(SUBSTITUTED_WRAPPER_DIGEST);
+    }
+  });
+
+  it('wrapper digest substituted ALONE (declared parents unchanged, same retained fact) → evidence identity mismatch BEFORE the parent lookup', () => {
+    // The purest single-dimension mutation: ONLY the wrapper digest is
+    // substituted, the verified fact is retained, the declared parent set
+    // is unchanged. The denial must carry the identity-mismatch code — NOT
+    // ADMISSION_PARENT_MISSING — proving the binding fires in the
+    // structural phase, before the wrapper-key map lookup is consulted.
+    const { input } = baseline();
+    const verification = input.predecessorEvidence[0]!.verification;
+    const result = evaluateProofAdmission({
+      ...input,
+      predecessorEvidence: [{ executionDigest: SUBSTITUTED_WRAPPER_DIGEST, verification }],
+    });
+    expectDeniedCode(result, 'ADMISSION_EVIDENCE_IDENTITY_MISMATCH', 'verification');
+  });
+
+  it('a malformed fact shape (executionDigest.digest absent) under the matching wrapper key → evidence identity mismatch (fail-closed on malformed)', () => {
+    // The comparison is fail-closed against malformed runtime data: a fact
+    // whose OWN executionDigest.digest is absent never equals the wrapper
+    // key — typed denial, never a crash and never a silent pass.
+    const { input } = baseline();
+    const verification = input.predecessorEvidence[0]!.verification;
+    if (!verification.ok) {
+      throw new Error('baseline verification must be ok for this experiment');
+    }
+    const hollowFact = { ...verification.fact, executionDigest: undefined } as unknown as typeof verification.fact;
+    const result = evaluateProofAdmission({
+      ...input,
+      predecessorEvidence: [
+        { executionDigest: input.predecessorEvidence[0]!.executionDigest, verification: { ok: true, fact: hollowFact } },
+      ],
+    });
+    expectDeniedCode(result, 'ADMISSION_EVIDENCE_IDENTITY_MISMATCH', 'verification');
   });
 
   it('substituting a DIFFERENT verified predecessor (same scope) → missing parent for the declared digest', () => {

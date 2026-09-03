@@ -15,8 +15,10 @@
  *     (V2-004's / the authorization authority's / V2-009's verdicts,
  *     consumed as data) — this layer never evaluates possession, grants
  *     authorization, or computes placement;
- *   - the evaluation order is fixed and deterministic: structural input →
- *     per-parent (evidence → verification → binding → freshness →
+ *   - the evaluation order is fixed and deterministic: structural input
+ *     (including the per-evidence identity binding — each verified wrapper's
+ *     executionDigest MUST equal the verified fact's OWN execution digest)
+ *     → per-parent (evidence → verification → binding → freshness →
  *     assurance → trust, in declared sorted order) → capability →
  *     authorization → placement. The FIRST failed dimension is returned.
  */
@@ -251,6 +253,29 @@ function validateAdmissionInput(input: ProofAdmissionInput): ProofAdmissionFailu
     }
     if (!evidence.verification || typeof evidence.verification.ok !== 'boolean') {
       return invalid('predecessor evidence must carry a typed V2-014 AttestationVerification result', 'verification');
+    }
+    // IDENTITY BINDING (fail-closed BEFORE the fact is used anywhere): the
+    // wrapper's executionDigest is the graph binding/lookup key, but V2-014's
+    // VerifiedExecutionFact carries its OWN executionDigest — the two MUST
+    // coincide. Without this check a caller could pair a verified fact for
+    // digest B with a wrapper keyed under digest A, declare parent A, and
+    // have every dimension evaluated from fact B while the parent lookup is
+    // satisfied by the wrapper key (a wrapper/fact identity substitution).
+    // The comparison is inherently fail-closed on malformed fact shapes: a
+    // missing/malformed fact.executionDigest.digest never equals the wrapper
+    // key, so the mismatch is rejected typed.
+    if (evidence.verification.ok) {
+      const factOwnDigest = (evidence.verification.fact as { executionDigest?: { digest?: unknown } } | undefined)?.executionDigest?.digest;
+      if (factOwnDigest !== evidence.executionDigest) {
+        return {
+          code: 'ADMISSION_EVIDENCE_IDENTITY_MISMATCH',
+          dimension: 'verification',
+          detail: `the evidence supplied under execution digest ${evidence.executionDigest} carries a verified fact whose OWN execution digest is ${
+            typeof factOwnDigest === 'string' ? factOwnDigest : 'absent/malformed'
+          } — the wrapper key must bind the exact verified fact (identity substitution fails closed)`,
+          parentDigest: evidence.executionDigest,
+        };
+      }
     }
   }
   return null;

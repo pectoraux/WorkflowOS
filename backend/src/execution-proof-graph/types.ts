@@ -333,6 +333,16 @@ export type ProofGraphMutationResult =
  * ONE predecessor evidence supply for an admission decision: the typed
  * V2-014 verification RESULT (never raw bytes — a signature-valid envelope
  * that was never verified cannot occupy this slot, structurally).
+ *
+ * IDENTITY BINDING (fail-closed, enforced structurally by admission): the
+ * wrapper's `executionDigest` is the graph binding key under which the
+ * evidence is supplied, and it MUST equal the verified fact's OWN
+ * `executionDigest.digest` (V2-014's `VerifiedExecutionFact` carries its own
+ * execution digest, independent of this wrapper field). A wrapper keyed
+ * under digest A paired with a verified fact for digest B is a typed
+ * `ADMISSION_EVIDENCE_IDENTITY_MISMATCH` — never a lookup-key substitution
+ * vector (admission is bound to the EXACT declared predecessor execution
+ * fact).
  */
 export interface PredecessorEvidence {
   /** The predecessor's execution digest (the graph binding key). */
@@ -461,6 +471,13 @@ export const PROOF_ADMISSION_FAILURE_CODES = [
   'ADMISSION_PARENT_MISSING',
   /** The supplied V2-014 verification FAILED (code carried verbatim). */
   'ADMISSION_PREDECESSOR_UNVERIFIED',
+  /**
+   * The evidence wrapper's `executionDigest` does not bind the verified
+   * fact's OWN execution digest — pairing a verified fact for digest B
+   * under the wrapper key A is an identity substitution, rejected before
+   * the fact is used (fail-closed).
+   */
+  'ADMISSION_EVIDENCE_IDENTITY_MISMATCH',
   /** The fact's bindings do not match the dependent's scope. */
   'ADMISSION_PREDECESSOR_BINDING_MISMATCH',
   /** The fact is stale at admission time (validity/epoch/verification age). */
