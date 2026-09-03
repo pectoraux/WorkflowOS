@@ -130,6 +130,76 @@ describe('V2-015 serialization — byte determinism', () => {
   });
 });
 
+describe('V2-015 serialization — typed fail-closed parse of top-level binding fields', () => {
+  /**
+   * ARCHITECT REVIEW (PR #158 Blocker 2) regression: the PUBLIC contract of
+   * `parseProofGraph` is the typed `ProofGraphParseResult` — a missing or
+   * malformed top-level binding field (workflowId, workflowVersionId,
+   * workflowVersionSemanticDigest, runId) must return `ok: false` with the
+   * typed `GRAPH_SERIALIZATION_INVALID` failure, NEVER escape as an
+   * exception (the throwing field guards sit INSIDE the parse boundary).
+   */
+
+  /** value === undefined means the field is DELETED from the payload. */
+  function rebindTopLevel(field: string, value: unknown): string {
+    const graph = buildFullGraph();
+    const payload = JSON.parse(serializeProofGraph(graph)) as Record<string, unknown>;
+    if (value === undefined) {
+      delete payload[field];
+    } else {
+      payload[field] = value;
+    }
+    return JSON.stringify(payload);
+  }
+
+  function expectTypedParseFailure(serialized: string, fieldName: string) {
+    // the contract: a typed ok:false result, and the call itself never
+    // throws (a throw here fails this assertion path loudly)
+    let result: ReturnType<typeof parseProofGraph> | undefined;
+    expect(() => {
+      result = parseProofGraph(serialized);
+    }).not.toThrow();
+    expect(result).toBeDefined();
+    expect(result!.ok).toBe(false);
+    if (!result!.ok) {
+      expect(result!.failure.code).toBe('GRAPH_SERIALIZATION_INVALID');
+      expect(result!.failure.detail).toContain(fieldName);
+    }
+  }
+
+  it('missing workflowId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowId', undefined), 'workflowId');
+  });
+
+  it('empty workflowId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowId', ''), 'workflowId');
+  });
+
+  it('missing workflowVersionId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowVersionId', undefined), 'workflowVersionId');
+  });
+
+  it('empty workflowVersionId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowVersionId', ''), 'workflowVersionId');
+  });
+
+  it('missing workflowVersionSemanticDigest → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowVersionSemanticDigest', undefined), 'workflowVersionSemanticDigest');
+  });
+
+  it('malformed workflowVersionSemanticDigest (not sha-256) → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('workflowVersionSemanticDigest', 'not-a-sha-256-digest'), 'workflowVersionSemanticDigest');
+  });
+
+  it('missing runId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('runId', undefined), 'runId');
+  });
+
+  it('empty runId → typed GRAPH_SERIALIZATION_INVALID (never a throw)', () => {
+    expectTypedParseFailure(rebindTopLevel('runId', ''), 'runId');
+  });
+});
+
 describe('V2-015 serialization — coordinator mutation detection', () => {
   it('detects a dropped node (parse fails typed: an edge endpoint goes missing)', () => {
     const graph = buildFullGraph();

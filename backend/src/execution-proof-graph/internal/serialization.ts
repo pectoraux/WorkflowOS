@@ -216,17 +216,28 @@ export function parseProofGraph(serialized: string): ProofGraphParseResult {
     edges.push(edge.edge);
   }
 
-  const graph: ExecutionProofGraph = {
-    objectType: EXECUTION_PROOF_GRAPH_OBJECT_TYPE,
-    schemaVersion: EXECUTION_PROOF_GRAPH_SCHEMA_VERSION,
-    graphIdentity,
-    workflowId: asNonEmptyString(raw['workflowId'], 'workflowId'),
-    workflowVersionId: asNonEmptyString(raw['workflowVersionId'], 'workflowVersionId'),
-    workflowVersionSemanticDigest: asSha256(raw['workflowVersionSemanticDigest'], 'workflowVersionSemanticDigest'),
-    runId: asNonEmptyString(raw['runId'], 'runId'),
-    nodes,
-    edges,
-  };
+  // The top-level binding fields are constructed through the same throwing
+  // guards the per-node/per-edge parsers use — but HERE they sit inside the
+  // parse boundary: a missing/malformed workflowId, workflowVersionId,
+  // workflowVersionSemanticDigest or runId is converted to the TYPED
+  // fail-closed `GRAPH_SERIALIZATION_INVALID` result, NEVER an escaped
+  // exception (the public contract is ProofGraphParseResult, ok: false).
+  let graph: ExecutionProofGraph;
+  try {
+    graph = {
+      objectType: EXECUTION_PROOF_GRAPH_OBJECT_TYPE,
+      schemaVersion: EXECUTION_PROOF_GRAPH_SCHEMA_VERSION,
+      graphIdentity,
+      workflowId: asNonEmptyString(raw['workflowId'], 'workflowId'),
+      workflowVersionId: asNonEmptyString(raw['workflowVersionId'], 'workflowVersionId'),
+      workflowVersionSemanticDigest: asSha256(raw['workflowVersionSemanticDigest'], 'workflowVersionSemanticDigest'),
+      runId: asNonEmptyString(raw['runId'], 'runId'),
+      nodes,
+      edges,
+    };
+  } catch (error) {
+    return parseFailure(error instanceof Error ? error.message : 'graph top-level binding fields are malformed');
+  }
 
   // the FULL structural battery (ordering, derivations, scope, endpoints,
   // parent commitments, cycles) runs before acceptance
