@@ -92,29 +92,41 @@ describe('V2-015 module boundary (canonical layout, public-surface-only consumpt
     expect(existsSync(join(MODULE_DIR, 'internal'))).toBe(true);
   });
 
-  it('imports only node builtins, module-internal paths, and the V2-014 public barrel', () => {
+  it('imports only node builtins, module-internal paths, and the consumed PUBLIC barrels', () => {
     const violations: string[] = [];
+    const ALLOWED_BARRELS = /(\.\.\/)+(execution-attestation|workflow-runs|computer-agent|workflow-deployments|node-capability)\/index\.js$/;
     for (const { file, code } of CODE_WITHOUT_COMMENTS) {
       for (const specifier of extractSpecifiers(code)) {
         const isNodeBuiltin = specifier.startsWith('node:');
         const isModuleInternal = specifier.startsWith('./') || specifier.startsWith('../');
-        const isV2014PublicBarrel = specifier === '../execution-attestation/index.js';
-        if (!isNodeBuiltin && !isModuleInternal && !isV2014PublicBarrel) {
+        const isAllowedBarrel = ALLOWED_BARRELS.test(specifier);
+        if (!isNodeBuiltin && !isModuleInternal && !isAllowedBarrel) {
           violations.push(`${file} imports "${specifier}"`);
         }
         // module-internal relative paths may only resolve INSIDE this module
-        // or to the V2-014 public barrel — never another sibling.
+        // or to one of the consumed public barrels — never a sibling's
+        // internals or non-index file.
         if (specifier.startsWith('../')) {
           const resolved = join(dirname(join(MODULE_DIR, file)), specifier);
           const insideProofGraph = resolved.startsWith(MODULE_DIR);
-          const isSiblingBarrel = /(\.\.\/)+execution-attestation\/index\.js$/.test(specifier);
-          if (!insideProofGraph && !isSiblingBarrel) {
+          if (!insideProofGraph && !isAllowedBarrel) {
             violations.push(`${file} imports outside the module: "${specifier}"`);
           }
           if (specifier.includes('/internal/')) {
             violations.push(`${file} imports a sibling internal path: "${specifier}"`);
           }
           void resolved;
+        }
+        // every consumed barrel EXCEPT V2-014's must be consumed TYPE-ONLY
+        // (data shapes; never a runtime dependency on a sibling engine).
+        const isTypeOnlyBarrel = /(\.\.\/)+(workflow-runs|computer-agent|workflow-deployments|node-capability)\/index\.js$/.test(specifier);
+        if (isTypeOnlyBarrel) {
+          const importStatements = code.match(/import\s+[^;]*?from\s*['"][^'"]+['"];?/g) ?? [];
+          for (const statement of importStatements) {
+            if (statement.includes(specifier) && !/^import\s+type\s*\{/m.test(statement)) {
+              violations.push(`${file} must import "${specifier}" TYPE-ONLY (data shapes, never sibling runtime engines)`);
+            }
+          }
         }
       }
     }

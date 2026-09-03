@@ -126,6 +126,13 @@ export {
   type GraphConvergenceResult,
 } from './internal/convergence.js';
 
+// internal/evidence composition: the narrow V2-005 adapter (type-only
+// consumption of the merged run-history data shapes; no persistence)
+export {
+  reconstructProofGraphFromRunHistory,
+  type RunHistoryReconstruction,
+} from './internal/evidence.js';
+
 // internal/canonical serialization: byte-deterministic serialization,
 // fail-closed typed parse, and the graph-level mutation-detection digest
 export {
