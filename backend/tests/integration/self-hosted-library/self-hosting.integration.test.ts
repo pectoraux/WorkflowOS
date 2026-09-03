@@ -269,7 +269,7 @@ describe('V2-013 integration — failed-workflow recovery + evidence over the RE
     }
   });
 
-  it('ADVANCE_VERSION over the REAL authority: a REAL published target version (facts read back through getVersion) mints the plan; a SYNTHETIC target is fail-closed', async () => {
+  it('ADVANCE_VERSION over the REAL authority: a REAL published AND INSTALLED target (facts read back through getVersion + getInstallation) mints the plan; published-but-NOT-installed and SYNTHETIC targets are fail-closed', async () => {
     const outcome = await installLibrary();
     const dogfooding = outcome.manifests.find((m) => m.kind === 'dogfooding')!;
     const runs = support.freshRunService();
@@ -321,7 +321,7 @@ describe('V2-013 integration — failed-workflow recovery + evidence over the RE
     expect(published.created).toBe(true);
     expect(published.versionNumber).toBe(2);
 
-    // the authoritative target facts: READ BACK from the REAL V2-002
+    // the authoritative target version facts: READ BACK from the REAL V2-002
     // authority (getVersion — the authority's own version record)
     const target = await support.repository.getVersion(principal(), dogfooding.workflowId, published.versionId);
     const recoveryInput = {
@@ -331,6 +331,48 @@ describe('V2-013 integration — failed-workflow recovery + evidence over the RE
       boundary: realBoundary,
       artifact: artifactByKind('dogfooding')!,
     };
+    // the residual hole's EXACT real-stack shape (review 5102958519): the
+    // version record EXISTS (authoritative facts supplied), but the target
+    // was NEVER installed through V2-002 in this environment — publication
+    // alone must NOT mint the advance plan
+    const uninstalled = planFailedWorkflowRecovery({
+      ...recoveryInput,
+      request: {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: target.id,
+            workflowId: target.workflowId,
+            versionNumber: target.versionNumber,
+            contentDigest: target.contentDigest,
+          },
+        },
+      } as Parameters<typeof planFailedWorkflowRecovery>[0]['request'],
+    });
+    expect(uninstalled.kind).toBe('blocked');
+    if (uninstalled.kind === 'blocked') {
+      expect(uninstalled.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+      expect(uninstalled.failure.detail).toContain(published.versionId);
+    }
+
+    // install the target pin through the REAL V2-002 installation path (a
+    // DISTINCT installation record pinning v2 — the current installation is
+    // never re-pinned), then READ the installation back through the
+    // authority's own read surface
+    const targetInstalled = await port.installVersion(principal(), {
+      organizationId: devOrgId,
+      workflowId: dogfooding.workflowId,
+      versionId: published.versionId,
+    });
+    expect(targetInstalled.installation.id).not.toBe(dogfooding.installationId);
+    const targetInstallationFacts = await pinFactsOf(targetInstalled.installation.id);
+    expect(targetInstallationFacts.versionId).toBe(published.versionId);
+    expect(targetInstallationFacts.versionNumber).toBe(published.versionNumber);
+    expect(targetInstallationFacts.contentDigest).toBe(published.contentDigest);
+
+    // published AND installed, both facts read back from the REAL authority
+    // → the plan mints
     const plan = planFailedWorkflowRecovery({
       ...recoveryInput,
       request: {
@@ -343,6 +385,7 @@ describe('V2-013 integration — failed-workflow recovery + evidence over the RE
             versionNumber: target.versionNumber,
             contentDigest: target.contentDigest,
           },
+          installation: targetInstallationFacts,
         },
       },
     });

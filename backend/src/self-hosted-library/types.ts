@@ -443,15 +443,27 @@ export interface FailedRunFacts {
 }
 
 /**
- * The authoritative target-version facts for an advance request: the
- * version record READ BACK from the REAL V2-002 repository authority (the
- * narrow structural read-back of V2-002's immutable `WorkflowVersion`
- * identity: id, workflowId, versionNumber, contentDigest). V2-002 versions
- * are immutable published records — the authority read-back IS the
- * existence and publication proof. An advance plan is minted ONLY when
- * these facts prove the requested target; absent, malformed, or
- * non-corresponding facts are fail-closed (a synthetic target is never an
- * advance — the PR #160 Blocker-2 correction).
+ * The authoritative target facts for an advance request — BOTH read back
+ * from the REAL V2-002 authority:
+ *
+ *   - `version`: the narrow structural read-back of V2-002's immutable
+ *     `WorkflowVersion` identity (id, workflowId, versionNumber,
+ *     contentDigest). V2-002 versions are immutable published records —
+ *     the authority read-back IS the existence and publication proof.
+ *   - `installation`: the target's installation read-back (the
+ *     `FirstPartyPinFacts` shape — V2-002's installation record with its
+ *     pinned version resolved, read back through the REAL installation
+ *     path's own read surface). An advance plan is minted ONLY when this
+ *     installation exists in the SAME development environment (tenant) and
+ *     its pinned (workflowId, versionId, versionNumber, contentDigest)
+ *     EXACTLY matches the target version — a published-but-NOT-installed
+ *     target is never an advance (the PR #160 residual Blocker-2
+ *     correction: publication alone does not make a target
+ *     transition-ready).
+ *
+ * Absent, malformed, or non-corresponding facts are fail-closed (a
+ * synthetic or uninstalled target is never an advance — the PR #160
+ * Blocker-2 correction).
  */
 export interface FirstPartyTargetVersionFacts {
   readonly version: {
@@ -464,6 +476,17 @@ export interface FirstPartyTargetVersionFacts {
     /** V2-002's content digest of the target version (immutability proof). */
     readonly contentDigest: string;
   };
+  /**
+   * REQUIRED (the residual Blocker-2 correction): the V2-002 installation
+   * read-back for the target pin — obtained by installing the target
+   * version through the REAL installation path and reading the
+   * installation back (the `FirstPartyPinFacts` shape: the installation
+   * record's own organization/installation/pin identities). The runtime
+   * re-validates fail-closed that this installation belongs to the same
+   * development environment as the manifest's current pin and pins the
+   * EXACT target version identity.
+   */
+  readonly installation: FirstPartyPinFacts;
 }
 
 /** V2-013 recovery failure codes (typed, fail-closed). */
@@ -482,6 +505,16 @@ export const SELF_HOSTING_RECOVERY_FAILURE_CODES = [
    * an advance (fail-closed).
    */
   'SELF_HOSTING_RECOVERY_TARGET_UNPROVEN',
+  /**
+   * The advance target is NOT INSTALLED in the development environment (the
+   * PR #160 residual Blocker-2 correction): no well-formed installation
+   * read-back was supplied, the installation belongs to a different
+   * environment/tenant, or the installation's pinned version identity does
+   * not EXACTLY match the target version facts — a published-but-uninstalled
+   * (or wrongly-pinned) target is never an advance; install the target pin
+   * through the REAL V2-002 installation path first (fail-closed).
+   */
+  'SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED',
   /** The boundary denied the recovery (governance preserved). */
   'SELF_HOSTING_BOUNDARY_DENIED',
 ] as const;
@@ -533,16 +566,23 @@ export interface PlanFailedWorkflowRecoveryInput {
   readonly artifact: FirstPartyWorkflowArtifact;
   /**
    * The requested action: retry the same pin, or advance to an explicit new
-   * version PROVEN by authoritative target-version facts read back from the
-   * REAL V2-002 repository authority (fail-closed when absent/malformed/
-   * non-corresponding — a synthetic target is never an advance).
+   * version PROVEN by authoritative target facts read back from the REAL
+   * V2-002 authority — BOTH the version record (existence/publication/
+   * same-workflow proof) AND the target's installation read-back in this
+   * development environment (fail-closed when absent/malformed/
+   * non-corresponding — a synthetic or published-but-uninstalled target is
+   * never an advance).
    */
   readonly request:
     | { readonly action: 'retry_same_pin' }
     | {
         readonly action: 'advance_version';
         readonly toVersionId: string;
-        /** REQUIRED: the authoritative target-version facts (the read-back proof). */
+        /**
+         * REQUIRED: the authoritative target facts — the version read-back
+         * AND the target installation read-back (the same-environment pin
+         * proof; install the target through the REAL V2-002 path first).
+         */
         readonly targetVersion: FirstPartyTargetVersionFacts;
       };
 }

@@ -192,8 +192,14 @@ export function makeFakePort(): FirstPartyInstallPort & { versionsOf(workflowId:
       };
     },
     async installVersion(principal, input) {
+      // mirrors the REAL V2-002 contract: the installation identity derives
+      // from (organizationId, versionId) — installing a DIFFERENT version of
+      // the same workflow in the same tenant yields a DISTINCT installation
+      // record pinning that version (installations never re-pin; the PR #160
+      // residual Blocker-2 correction's target-installation read-back depends
+      // on exactly this semantics)
       const existing = [...installations.entries()].find(
-        ([, i]) => i.organizationId === input.organizationId && i.workflowId === input.workflowId,
+        ([, i]) => i.organizationId === input.organizationId && i.versionId === input.versionId,
       );
       if (existing) {
         const [installationId, installation] = existing;

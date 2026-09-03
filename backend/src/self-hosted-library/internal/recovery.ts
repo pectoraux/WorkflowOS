@@ -16,12 +16,15 @@
  *     demands an explicit advance);
  *   - `advance_version` is ONLY an explicit governed transition to a
  *     DIFFERENT version of the SAME workflow — PROVEN by authoritative
- *     target-version facts read back from the REAL V2-002 repository
- *     authority (the PR #160 Blocker-2 correction: the facts must be
- *     well-formed, must bind the exact requested target, and must belong
- *     to the manifest's workflow — a synthetic target is NEVER an
- *     advance; publish + install the new pin first; the failed run stays
- *     failed — durable history);
+ *     target facts read back from the REAL V2-002 authority: BOTH the
+ *     version record (the existence/publication/same-workflow proof —
+ *     the PR #160 Blocker-2 correction) AND the target's installation
+ *     read-back in the SAME development environment whose pinned
+ *     (workflowId, versionId, versionNumber, contentDigest) EXACTLY
+ *     matches the target version (the PR #160 residual Blocker-2
+ *     correction: a published-but-NOT-installed target is never an
+ *     advance; publish + install the new pin first; the failed run
+ *     stays failed — durable history);
  *   - the self-hosting permission boundary is re-evaluated at recovery
  *     time (governance preserved: a weakened model or an out-of-boundary
  *     artifact blocks the recovery).
@@ -29,6 +32,7 @@
 
 import type {
   FailedWorkflowRecoveryPlan,
+  FirstPartyPinFacts,
   FirstPartyTargetVersionFacts,
   PlanFailedWorkflowRecoveryInput,
 } from '../types.js';
@@ -147,6 +151,51 @@ export function planFailedWorkflowRecovery(input: PlanFailedWorkflowRecoveryInpu
         },
       };
     }
+    // the PR #160 residual Blocker-2 correction (review 5102958519): the
+    // version facts are necessary but NOT sufficient — the target must
+    // ALSO be proven INSTALLED through the real V2-002 installation path
+    // in the SAME development environment. The typed input requires the
+    // installation read-back (the FirstPartyPinFacts shape — the
+    // installation record's own read surface), and the runtime
+    // re-validates fail-closed: the installation must exist (well-formed
+    // facts), must belong to the manifest's current environment tenant
+    // (the same development environment — the pinFacts carry its
+    // organizationId), and its pinned (workflowId, versionId,
+    // versionNumber, contentDigest) must EXACTLY match the target version
+    // facts. A published-but-uninstalled (or wrongly-pinned) target is
+    // never an advance — install the target pin first.
+    if (!isWellFormedTargetInstallationFacts(target.installation)) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED',
+          detail: `the advance target "${input.request.toVersionId}" carries NO well-formed installation read-back — the target version must be installed through the REAL V2-002 installation path in this development environment and read back before an advance (a published-but-NOT-installed target is never an advance; fail-closed)`,
+        },
+      };
+    }
+    if (target.installation.organizationId !== input.pinFacts.organizationId) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED',
+          detail: `the target installation ${target.installation.installationId} belongs to environment ${target.installation.organizationId}, not the manifest's current environment ${input.pinFacts.organizationId} — an advance is proven installed in the SAME development environment only (fail-closed)`,
+        },
+      };
+    }
+    if (
+      target.installation.workflowId !== target.version.workflowId ||
+      target.installation.versionId !== target.version.id ||
+      target.installation.versionNumber !== target.version.versionNumber ||
+      target.installation.contentDigest !== target.version.contentDigest
+    ) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED',
+          detail: `the installation ${target.installation.installationId} pins ${target.installation.workflowId}@${target.installation.versionId} (v${target.installation.versionNumber}, digest ${target.installation.contentDigest}), which does NOT exactly match the target version ${target.version.workflowId}@${target.version.id} (v${target.version.versionNumber}, digest ${target.version.contentDigest}) — the installation read-back must pin the EXACT target version identity (fail-closed; a wrongly-pinned installation is never an advance proof)`,
+        },
+      };
+    }
     return {
       kind: 'advance_version',
       workflowId: input.manifest.workflowId,
@@ -174,9 +223,10 @@ export function planFailedWorkflowRecovery(input: PlanFailedWorkflowRecoveryInpu
  * The structural shape check for authoritative target-version facts
  * (fail-closed on ANY malformed shape — the typed input carries the facts,
  * but runtime data may be cast/malformed; the recovery never crashes on
- * the advance path, it blocks typed).
+ * the advance path, it blocks typed). The `installation` leg (the residual
+ * Blocker-2 correction) is validated by its own guard below.
  */
-function isWellFormedTargetVersionFacts(value: unknown): value is FirstPartyTargetVersionFacts {
+function isWellFormedTargetVersionFacts(value: unknown): value is { readonly version: FirstPartyTargetVersionFacts['version']; readonly installation?: unknown } {
   if (value === null || typeof value !== 'object') {
     return false;
   }
@@ -195,6 +245,40 @@ function isWellFormedTargetVersionFacts(value: unknown): value is FirstPartyTarg
     id.length > 0 &&
     typeof workflowId === 'string' &&
     workflowId.length > 0 &&
+    typeof versionNumber === 'number' &&
+    Number.isInteger(versionNumber) &&
+    versionNumber >= 1 &&
+    typeof contentDigest === 'string' &&
+    contentDigest.length > 0
+  );
+}
+
+/**
+ * The structural shape check for the target's installation read-back (the
+ * FirstPartyPinFacts shape; fail-closed on ANY malformed shape — the
+ * recovery never crashes on the advance path, it blocks typed).
+ */
+function isWellFormedTargetInstallationFacts(value: unknown): value is FirstPartyPinFacts {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const { organizationId, installationId, workflowId, versionId, versionNumber, contentDigest } = value as {
+    readonly organizationId?: unknown;
+    readonly installationId?: unknown;
+    readonly workflowId?: unknown;
+    readonly versionId?: unknown;
+    readonly versionNumber?: unknown;
+    readonly contentDigest?: unknown;
+  };
+  return (
+    typeof organizationId === 'string' &&
+    organizationId.length > 0 &&
+    typeof installationId === 'string' &&
+    installationId.length > 0 &&
+    typeof workflowId === 'string' &&
+    workflowId.length > 0 &&
+    typeof versionId === 'string' &&
+    versionId.length > 0 &&
     typeof versionNumber === 'number' &&
     Number.isInteger(versionNumber) &&
     versionNumber >= 1 &&

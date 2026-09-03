@@ -13,7 +13,7 @@ import {
 import { CORE_SELF_HOSTING_PROHIBITIONS } from '../../../src/architecture-checkpoints/index.js';
 import { createWorkflowIrBuilder } from '../../../src/workflow-ir/index.js';
 import type { WorkflowIrDocument } from '../../../src/workflow-ir/index.js';
-import { makeDevEnvironment, DEV_RUN_ID, DEV_PRINCIPAL, DEV_PROTOCOL } from './helpers.js';
+import { makeDevEnvironment, DEV_RUN_ID, DEV_PRINCIPAL, DEV_PROTOCOL, DEV_TENANT } from './helpers.js';
 
 /**
  * V2-013 Task 6 — the failed-workflow recovery battery.
@@ -165,7 +165,7 @@ describe('V2-013 failed-workflow recovery — typed plans', () => {
     }
   });
 
-  it('advance_version → an EXPLICIT governed transition to a REAL PUBLISHED target version of the SAME workflow (facts read back from the authority)', async () => {
+  it('advance_version → an EXPLICIT governed transition to a REAL PUBLISHED AND INSTALLED target version of the SAME workflow (both facts read back from the authority)', async () => {
     const { manifests, pinFacts, port } = await fixture();
     const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
     // a REAL new version published through the module's own explicit
@@ -179,8 +179,15 @@ describe('V2-013 failed-workflow recovery — typed plans', () => {
     );
     expect(published.created).toBe(true);
     expect(published.versionNumber).toBe(2);
-    // the authoritative target facts: the version record read back from the
-    // authority (V2-002's WorkflowVersion identity shape)
+    // the target must be INSTALLED through the port's real install path and
+    // READ BACK (a DISTINCT installation record pinning v2 — V2-002 derives
+    // the installation identity from (organizationId, versionId): the
+    // current installation is never re-pinned)
+    const targetInstallation = await installTargetPinFacts(port, manifest.workflowId, published.versionId);
+    expect(targetInstallation.installationId).not.toBe(manifest.installationId);
+    expect(targetInstallation.versionId).toBe(published.versionId);
+    // the authoritative target facts: BOTH the version record AND the
+    // installation read-back
     const targetVersion: FirstPartyTargetVersionFacts = {
       version: {
         id: published.versionId,
@@ -188,6 +195,7 @@ describe('V2-013 failed-workflow recovery — typed plans', () => {
         versionNumber: published.versionNumber,
         contentDigest: published.contentDigest,
       },
+      installation: targetInstallation,
     };
     const plan = planFailedWorkflowRecovery(
       input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
@@ -205,16 +213,17 @@ describe('V2-013 failed-workflow recovery — typed plans', () => {
     }
   });
 
-  it('an advance to the manifest OWN version → typed invalid (not a transition — even with the manifest\'s own version facts supplied)', async () => {
+  it('an advance to the manifest OWN version → typed invalid (not a transition — even with the manifest\'s own version and installation facts supplied)', async () => {
     const { manifests, pinFacts } = await fixture();
     const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
     const plan = planFailedWorkflowRecovery(
       input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
         action: 'advance_version',
         toVersionId: manifest.versionId,
-        // even well-formed facts pointing at the manifest's OWN version are
-        // not a transition: the same-version check fires first (the advance
-        // must target a DIFFERENT version, proven or not)
+        // even well-formed facts (the manifest's own version AND its own
+        // installation read-back) are not a transition: the same-version
+        // check fires first (the advance must target a DIFFERENT version,
+        // proven or not)
         targetVersion: {
           version: {
             id: manifest.versionId,
@@ -222,6 +231,7 @@ describe('V2-013 failed-workflow recovery — typed plans', () => {
             versionNumber: manifest.versionNumber,
             contentDigest: manifest.contentDigest,
           },
+          installation: pinFacts,
         },
       }),
     );
@@ -307,7 +317,8 @@ describe('V2-013 failed-workflow recovery — the advance target is proven by au
     const plan = planFailedWorkflowRecovery(
       input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
         action: 'advance_version',
-        // requests a version the facts do NOT prove
+        // requests a version the facts do NOT prove (the version leg fires
+        // before the installation leg is ever consulted)
         toVersionId: 'wfwv-some-other-version',
         targetVersion: {
           version: {
@@ -316,7 +327,7 @@ describe('V2-013 failed-workflow recovery — the advance target is proven by au
             versionNumber: published.versionNumber,
             contentDigest: published.contentDigest,
           },
-        },
+        } as unknown as FirstPartyTargetVersionFacts,
       }),
     );
     expectPlan(plan, 'blocked');
@@ -342,6 +353,8 @@ describe('V2-013 failed-workflow recovery — the advance target is proven by au
       input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
         action: 'advance_version',
         toVersionId: foreignPublished.versionId,
+        // (the version leg fires on the foreign workflow before the
+        // installation leg is ever consulted)
         targetVersion: {
           version: {
             id: foreignPublished.versionId,
@@ -349,13 +362,212 @@ describe('V2-013 failed-workflow recovery — the advance target is proven by au
             versionNumber: foreignPublished.versionNumber,
             contentDigest: foreignPublished.contentDigest,
           },
-        },
+        } as unknown as FirstPartyTargetVersionFacts,
       }),
     );
     expectPlan(plan, 'blocked');
     if (plan.kind === 'blocked') {
       expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_UNPROVEN');
       expect(plan.failure.detail).toContain('SAME workflow');
+    }
+  });
+});
+
+// =============================================================================
+// The PR #160 RESIDUAL Blocker-2 correction — the advance target is proven
+// INSTALLED in the SAME development environment.
+//
+// The architect's finding (review 5102958519): the corrected recovery
+// accepted an authoritative V2-002 version record WITHOUT the target
+// version being installed through V2-002 in the development environment —
+// publication alone made a target transition-ready. The correction: the
+// advance proof requires BOTH the authoritative version facts AND an
+// authoritative installation read-back showing the exact target pin in
+// the same development environment (the same tenant, the exact pinned
+// (workflowId, versionId, versionNumber, contentDigest)).
+// =============================================================================
+
+describe('V2-013 failed-workflow recovery — the advance target is proven INSTALLED in the same development environment (PR #160 residual Blocker-2)', () => {
+  it('PUBLISHED but NOT INSTALLED → SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED (the residual hole\'s exact shape: well-formed version facts, no installation read-back)', async () => {
+    const { manifests, pinFacts, port } = await fixture();
+    const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
+    // a REAL published version — the version facts are genuine and
+    // well-formed (the version EXISTS and is published) ...
+    const published = await publishFirstPartyVersion(
+      port,
+      DEV_PRINCIPAL,
+      manifest.workflowId,
+      mutatedDogfoodingDocument(),
+      DEV_PROTOCOL,
+    );
+    const plan = planFailedWorkflowRecovery(
+      input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        // ... but NO installation read-back is supplied: the target was
+        // never installed through V2-002 in this environment — publication
+        // alone is NOT transition-readiness (the residual hole)
+        targetVersion: {
+          version: {
+            id: published.versionId,
+            workflowId: manifest.workflowId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+        } as unknown as FirstPartyTargetVersionFacts,
+      }),
+    );
+    expectPlan(plan, 'blocked');
+    if (plan.kind === 'blocked') {
+      expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+      expect(plan.failure.detail).toContain(published.versionId);
+      expect(plan.failure.detail).toContain('NOT-installed');
+    }
+  });
+
+  it('MALFORMED installation facts (missing pin fields) → SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED (fail-closed on the shape)', async () => {
+    const { manifests, pinFacts, port } = await fixture();
+    const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
+    const published = await publishFirstPartyVersion(
+      port,
+      DEV_PRINCIPAL,
+      manifest.workflowId,
+      mutatedDogfoodingDocument(),
+      DEV_PROTOCOL,
+    );
+    const plan = planFailedWorkflowRecovery(
+      input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: published.versionId,
+            workflowId: manifest.workflowId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+          installation: { organizationId: DEV_TENANT } as unknown as FirstPartyTargetVersionFacts['installation'],
+        },
+      }),
+    );
+    expectPlan(plan, 'blocked');
+    if (plan.kind === 'blocked') {
+      expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+    }
+  });
+
+  it('an installation of a FOREIGN environment (organizationId mismatch) → SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED (the same development environment only)', async () => {
+    const { manifests, pinFacts, port } = await fixture();
+    const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
+    const published = await publishFirstPartyVersion(
+      port,
+      DEV_PRINCIPAL,
+      manifest.workflowId,
+      mutatedDogfoodingDocument(),
+      DEV_PROTOCOL,
+    );
+    // the target IS installed — but in a DIFFERENT tenant (an installation
+    // read-back of another environment is not this environment's pin)
+    const foreignTenant = 'org-foreign-environment';
+    const foreignInstall = await port.installVersion(DEV_PRINCIPAL, {
+      organizationId: foreignTenant,
+      workflowId: manifest.workflowId,
+      versionId: published.versionId,
+    });
+    const plan = planFailedWorkflowRecovery(
+      input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: published.versionId,
+            workflowId: manifest.workflowId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+          installation: {
+            organizationId: foreignTenant,
+            installationId: foreignInstall.installation.id,
+            workflowId: manifest.workflowId,
+            versionId: published.versionId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+        },
+      }),
+    );
+    expectPlan(plan, 'blocked');
+    if (plan.kind === 'blocked') {
+      expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+      expect(plan.failure.detail).toContain(foreignTenant);
+    }
+  });
+
+  it('an installation pinning the WRONG version (the manifest\'s own v1 pin presented as the target installation) → SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED', async () => {
+    const { manifests, pinFacts, port } = await fixture();
+    const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
+    const published = await publishFirstPartyVersion(
+      port,
+      DEV_PRINCIPAL,
+      manifest.workflowId,
+      mutatedDogfoodingDocument(),
+      DEV_PROTOCOL,
+    );
+    const plan = planFailedWorkflowRecovery(
+      input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: published.versionId,
+            workflowId: manifest.workflowId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+          // the CURRENT installation (pinning v1) presented as the target
+          // installation — a real installation, but NOT of the target pin
+          installation: pinFacts,
+        },
+      }),
+    );
+    expectPlan(plan, 'blocked');
+    if (plan.kind === 'blocked') {
+      expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+      expect(plan.failure.detail).toContain('EXACT');
+    }
+  });
+
+  it('a TAMPERED installation pin (a real target installation with a mutated contentDigest) → SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED (the facts must cross-validate)', async () => {
+    const { manifests, pinFacts, port } = await fixture();
+    const manifest = manifests.find((m) => m.kind === 'dogfooding')!;
+    const published = await publishFirstPartyVersion(
+      port,
+      DEV_PRINCIPAL,
+      manifest.workflowId,
+      mutatedDogfoodingDocument(),
+      DEV_PROTOCOL,
+    );
+    const targetInstallation = await installTargetPinFacts(port, manifest.workflowId, published.versionId);
+    const plan = planFailedWorkflowRecovery(
+      input(manifest, failedRun({ workflowId: manifest.workflowId, versionId: manifest.versionId }), pinFacts, {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: published.versionId,
+            workflowId: manifest.workflowId,
+            versionNumber: published.versionNumber,
+            contentDigest: published.contentDigest,
+          },
+          // single-dimension tamper: a real read-back with the digest mutated
+          installation: { ...targetInstallation, contentDigest: 'digest-tampered' },
+        },
+      }),
+    );
+    expectPlan(plan, 'blocked');
+    if (plan.kind === 'blocked') {
+      expect(plan.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_NOT_INSTALLED');
+      expect(plan.failure.detail).toContain('digest-tampered');
     }
   });
 });
@@ -373,12 +585,39 @@ async function fixture(): Promise<{ manifests: Awaited<ReturnType<typeof makeDev
     port,
     manifests,
     pinFacts: {
-      organizationId: 'org-dev-environment',
+      organizationId: DEV_TENANT,
       installationId: manifest.installationId,
       workflowId: manifest.workflowId,
       versionId: manifest.versionId,
       versionNumber: manifest.versionNumber,
       contentDigest: manifest.contentDigest,
     },
+  };
+}
+
+/**
+ * Install the published target through the port's real install path and
+ * READ BACK its pin facts (the authoritative installation read-back — a
+ * DISTINCT installation record pinning the target version; V2-002 derives
+ * the installation identity from (organizationId, versionId)).
+ */
+async function installTargetPinFacts(
+  port: FirstPartyInstallPort,
+  workflowId: string,
+  versionId: string,
+): Promise<FirstPartyPinFacts> {
+  const installed = await port.installVersion(DEV_PRINCIPAL, {
+    organizationId: DEV_TENANT,
+    workflowId,
+    versionId,
+  });
+  const detail = await port.getInstallation(DEV_PRINCIPAL, DEV_TENANT, installed.installation.id);
+  return {
+    organizationId: DEV_TENANT,
+    installationId: installed.installation.id,
+    workflowId: detail.pinnedVersion.workflowId,
+    versionId: detail.pinnedVersion.id,
+    versionNumber: detail.pinnedVersion.versionNumber,
+    contentDigest: detail.pinnedVersion.contentDigest,
   };
 }
