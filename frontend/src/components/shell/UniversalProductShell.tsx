@@ -1,4 +1,4 @@
-import { Activity, Code2, Compass, Home, ListChecks, Menu, Plus } from 'lucide-react';
+import { Activity, Code2, Compass, Home, ListChecks, Plus } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 
