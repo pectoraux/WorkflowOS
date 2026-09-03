@@ -374,9 +374,28 @@ export function validateEdgeCandidate(
 // Graph state validation (shape + canonical ordering + scope)
 // ============================================================================
 
+/**
+ * Validate a graph state's CONSISTENCY (identity derivations, scope
+ * binding, endpoint bindings, parent commitments, duplicates) WITHOUT the
+ * canonical-ordering checks — fragment delivery accepts any arrival order
+ * and canonicalizes on merge.
+ */
+export function validateGraphConsistency(graph: ExecutionProofGraph): readonly ProofGraphFailure[] {
+  const issues: ProofGraphFailure[] = [];
+  return validateGraphStateInternal(graph, issues, false);
+}
+
 /** Validate a graph state's shape, canonical ordering, and binding coherence. */
 export function validateGraphState(graph: ExecutionProofGraph): readonly ProofGraphFailure[] {
   const issues: ProofGraphFailure[] = [];
+  return validateGraphStateInternal(graph, issues, true);
+}
+
+function validateGraphStateInternal(
+  graph: ExecutionProofGraph,
+  issues: ProofGraphFailure[],
+  checkOrdering: boolean,
+): readonly ProofGraphFailure[] {
 
   if (graph.objectType !== EXECUTION_PROOF_GRAPH_OBJECT_TYPE) {
     issues.push({
@@ -412,7 +431,7 @@ export function validateGraphState(graph: ExecutionProofGraph): readonly ProofGr
 
   const nodeIds = graph.nodes.map((n) => n.nodeIdentity);
   const sortedNodeIds = [...nodeIds].sort();
-  if (nodeIds.some((id, i) => id !== sortedNodeIds[i])) {
+  if (checkOrdering && nodeIds.some((id, i) => id !== sortedNodeIds[i])) {
     issues.push({
       code: 'GRAPH_SERIALIZATION_INVALID',
       detail: 'nodes are not in canonical nodeIdentity order',
@@ -453,7 +472,7 @@ export function validateGraphState(graph: ExecutionProofGraph): readonly ProofGr
       });
     }
     const declaredSorted = [...node.declaredCausalParents].sort();
-    if (node.declaredCausalParents.some((d, i) => d !== declaredSorted[i])) {
+    if (checkOrdering && node.declaredCausalParents.some((d, i) => d !== declaredSorted[i])) {
       issues.push({
         code: 'GRAPH_SERIALIZATION_INVALID',
         detail: 'declared causal parents are not in canonical sorted order',
@@ -493,7 +512,7 @@ export function validateGraphState(graph: ExecutionProofGraph): readonly ProofGr
 
   const edgeIds = graph.edges.map((e) => e.edgeIdentity);
   const sortedEdgeIds = [...edgeIds].sort();
-  if (edgeIds.some((id, i) => id !== sortedEdgeIds[i])) {
+  if (checkOrdering && edgeIds.some((id, i) => id !== sortedEdgeIds[i])) {
     issues.push({
       code: 'GRAPH_SERIALIZATION_INVALID',
       detail: 'edges are not in canonical edgeIdentity order',

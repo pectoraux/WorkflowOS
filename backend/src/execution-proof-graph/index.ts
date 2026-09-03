@@ -94,6 +94,7 @@ export {
   validateNodeCandidate,
   validateEdgeCandidate,
   validateGraphState,
+  validateGraphConsistency,
   edgeWouldCreateCycle,
   compareNodeForAppend,
   nodesEqual,
@@ -116,6 +117,14 @@ export {
 export {
   evaluateProofAdmission,
 } from './internal/admission.js';
+
+// internal/multi-parent satisfaction + replay/duplicate convergence
+export {
+  evaluateGraphAdmission,
+  deliverGraphFragment,
+  type GraphAdmissionInput,
+  type GraphConvergenceResult,
+} from './internal/convergence.js';
 
 // internal/canonical serialization: byte-deterministic serialization,
 // fail-closed typed parse, and the graph-level mutation-detection digest
