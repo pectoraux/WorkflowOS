@@ -91,9 +91,12 @@ describe('V2-015 replay/duplicate convergence', () => {
     deliverGraphFragment(target, fragment);
 
     // the coordinator mutates one node's outcome and re-delivers
-    const mutated = JSON.parse(JSON.stringify(fragment)) as typeof fragment;
-    const nodeToMutate = mutated.nodes[0]!;
-    nodeToMutate.outcome = nodeToMutate.outcome === 'succeeded' ? 'failed' : 'succeeded';
+    const mutatedView = JSON.parse(JSON.stringify(fragment)) as {
+      nodes: Array<Record<string, unknown>>;
+    };
+    const nodeToMutate = mutatedView.nodes[0]!;
+    nodeToMutate['outcome'] = nodeToMutate['outcome'] === 'succeeded' ? 'failed' : 'succeeded';
+    const mutated = mutatedView as unknown as typeof fragment;
     // keep the parent commitment consistent so the CONFLICT (not the
     // commitment check) is what fires
     const result = deliverGraphFragment(target, mutated);
@@ -117,9 +120,13 @@ describe('V2-015 replay/duplicate convergence', () => {
     deliverGraphFragment(target, nodesOnly);
 
     // a mutated edge whose parent digest no longer matches the parent node
-    const mutatedEdge = JSON.parse(JSON.stringify(fragment)) as typeof fragment;
-    mutatedEdge.nodes = [];
-    mutatedEdge.edges[0]!.parentExecutionDigest = 'e'.repeat(64);
+    const mutatedEdgeView = JSON.parse(JSON.stringify(fragment)) as {
+      nodes: Array<Record<string, unknown>>;
+      edges: Array<Record<string, unknown>>;
+    };
+    mutatedEdgeView.nodes = [];
+    mutatedEdgeView.edges[0]!['parentExecutionDigest'] = 'e'.repeat(64);
+    const mutatedEdge = mutatedEdgeView as unknown as typeof fragment;
     const result = deliverGraphFragment(target, mutatedEdge);
     expect(result.converged).toBe(false);
     // the mutated fragment is rejected WHOLE at pre-merge validation
@@ -130,8 +137,11 @@ describe('V2-015 replay/duplicate convergence', () => {
   it('a fragment scope-substituted node is rejected (cross-run/cross-version fails closed)', () => {
     const { fragment } = buildTwoStepFragment();
     const target = createProofGraphBuilder(PG_SCOPE);
-    const mutated = JSON.parse(JSON.stringify(fragment)) as typeof fragment;
-    mutated.nodes[0]!.runId = 'wfr-a-different-run';
+    const mutatedView = JSON.parse(JSON.stringify(fragment)) as {
+      nodes: Array<Record<string, unknown>>;
+    };
+    mutatedView.nodes[0]!['runId'] = 'wfr-a-different-run';
+    const mutated = mutatedView as unknown as typeof fragment;
     const result = deliverGraphFragment(target, mutated);
     expect(result.converged).toBe(false);
     expect(result.fragmentRejected[0]?.code).toBe('GRAPH_SCOPE_MISMATCH');
