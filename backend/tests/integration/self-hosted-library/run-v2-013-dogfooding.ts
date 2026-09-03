@@ -44,11 +44,15 @@
  *      V2-015 admission over the independent fact → the PACKAGE IS MINTED
  *      (the predicate is satisfied by a valid, fresh, authorized
  *      attestation — never an assertion or replay).
- *   4. REPLAY REJECTION: the same envelope re-verified after nonce
- *      consumption → ATTESTATION_REPLAYED → the packaging over the refused
- *      verification is DENIED typed (no package minted); the run boundary
- *      refuses the DUPLICATE attach (durable single-use nonce —
- *      RUN_ATTESTATION_REJECTED).
+ *   4. REPLAY REJECTION + UNRELATED-STEP REJECTION: the same envelope
+ *      re-verified after nonce consumption → ATTESTATION_REPLAYED → the
+ *      packaging over the refused verification is DENIED typed (no package
+ *      minted); the run boundary refuses the DUPLICATE attach (durable
+ *      single-use nonce — RUN_ATTESTATION_REJECTED); AND (the PR #160
+ *      Blocker-1 correction leg) a VALID, fresh, authorized attestation
+ *      for a NON-predecessor step is REFUSED typed by the predecessor
+ *      binding to the authoritative WorkflowIR edges (a valid fact for an
+ *      unrelated execution never satisfies a proof-required step).
  *   5. EVIDENCE: the run completes; reconstructSelfHostingEvidence over
  *      the REAL run history converges with the manifest; the evidence doc
  *      records the facts + corrective observations.
@@ -563,6 +567,50 @@ async function runExperiment(label: string): Promise<ExperimentResult> {
       duplicateAttachRefused === true && duplicateAttachCode === 'RUN_ATTESTATION_REJECTED',
       'the run boundary refuses the DUPLICATE attach (durable single-use nonce — RUN_ATTESTATION_REJECTED): no duplicate side effects at the integration boundary',
     );
+    // (c) the UNRELATED-STEP attestation (the PR #160 Blocker-1 correction
+    //     leg): a REAL, fresh, authorized, VERIFIED attestation for a step
+    //     that is NOT a WorkflowIR-declared predecessor of the
+    //     proof-required step — valid evidence for an unrelated execution
+    //     must NEVER satisfy the predicate
+    const unrelatedStatement: ExecutionStatement = {
+      ...statement,
+      stepId: 'record_evidence',
+      action: 'Record the dogfooding evidence (a NON-predecessor step of execute_workflow)',
+      nonce: `challenge-v2013-dog-${runId}-unrelated`,
+      evidenceReferences: ['wfev-v2013-unrelated-0001'],
+    } as ExecutionStatement;
+    const unrelatedAttestation = signExecutionAttestation({
+      statement: unrelatedStatement,
+      attesterPrivateKey: workerAttester.privateKey,
+      attesterPublicKeyDer: workerAttester.publicKeyDer,
+      assurance: 'software_signed',
+      issuedAt: ISSUED_AT,
+    });
+    const unrelatedVerify = verifyAttestation(unrelatedAttestation, {
+      bindings: {},
+      freshness: { now: VERIFY_NOW, currentEpoch: RUN_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
+      attesterKeyIds: [workerAttester.keyId],
+    });
+    const unrelatedPackaging = packageFirstPartyExecution({
+      ...packagingInput,
+      proofSteps: [
+        {
+          stepId: 'execute_workflow',
+          declaredParents: [unrelatedAttestation.executionDigest.digest],
+          predecessorEvidence: [
+            { executionDigest: unrelatedAttestation.executionDigest.digest, verification: unrelatedVerify },
+          ],
+        },
+      ],
+    });
+    const unrelatedCode = unrelatedPackaging.packaged ? 'PACKAGED' : unrelatedPackaging.failure.code;
+    localCheck(
+      'unrelated-step-attestation-refused',
+      unrelatedVerify.ok === true &&
+        unrelatedPackaging.packaged === false &&
+        (!unrelatedPackaging.packaged && unrelatedPackaging.failure.code === 'SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED'),
+      `a VALID, fresh, authorized attestation for a NON-predecessor step (record_evidence) is REFUSED TYPED by the predecessor binding to the authoritative WorkflowIR edges (${unrelatedCode}) — the exact PR #160 Blocker-1 attack shape, closed fail-closed`,
+    );
 
     // 5. EVIDENCE: the reconstruction over the REAL run history
     localSection(`${label} — 5. EVIDENCE (the reconstruction converges with the manifest)`);
@@ -630,7 +678,7 @@ async function main(): Promise<void> {
   transcript.push('\n---\n');
   transcript.push(
     allOk
-      ? 'DOGFOODING RESULT: PASS (WorkflowOS installed and executed its own dogfooding development workflow end-to-end on the REAL stack: the six first-party workflows installed through the REAL V2-002 authority; the run executed through the REAL V2-005 command surface; the proof-required step satisfied by a valid, fresh, authorized Ed25519 attestation verified by an independent process and admitted through V2-015/V2-013; the replay refused typed at BOTH the verifier and the run boundary; the evidence reconstruction converged with the manifest; two fresh-stack runs deterministic)'
+      ? 'DOGFOODING RESULT: PASS (WorkflowOS installed and executed its own dogfooding development workflow end-to-end on the REAL stack: the six first-party workflows installed through the REAL V2-002 authority; the run executed through the REAL V2-005 command surface; the proof-required step satisfied by a valid, fresh, authorized Ed25519 attestation verified by an independent process and admitted through V2-015/V2-013; the replay refused typed at BOTH the verifier and the run boundary; the unrelated-step attestation refused typed by the WorkflowIR predecessor binding; the evidence reconstruction converged with the manifest; two fresh-stack runs deterministic)'
       : `DOGFOODING RESULT: FAIL (${failures} failed checks)`,
   );
 
@@ -657,6 +705,8 @@ async function main(): Promise<void> {
     '2. **Epoch alignment is a composition responsibility.** The run service\'s injected `currentEpoch` (RUN_TEST_EPOCH 7) must be ≤ the attestation statement\'s epoch for BOTH the run-boundary attach and the V2-015 admission; the dogfood pinned the statement epoch to the service epoch. A production self-hosted worker must derive its statement epoch from the run\'s epoch context (the V2-008 runtime path does this internally; a hand-driven worker must not invent one).',
     '3. **The proof predicate\'s trust policy is the caller\'s duty.** The independent verifier verifies cryptographic authenticity; WHO to trust (attesterKeyIds) is supplied out-of-band in the verifier context, and the V2-013 packaging\'s trust policy independently restates it. The dogfood kept the two consistent; a corrective note for production: the trust set should derive from the node/capability authority (V2-004) rather than runner constants.',
     '4. **Version convergence is load-bearing.** Re-publishing an identical first-party document converges on the existing version (V2-002 semantics); the manifest is only advanced by a genuinely mutated document through an explicit `publishFirstPartyVersion` transition. The dogfood\'s manifest stayed pinned to v1 throughout — the frozen pinning regression held end-to-end.',
+    '5. **The architect-review correction (PR #160, 2026-09-03): the predecessor binding is structural, not caller-declared.** The original packaging trusted the caller-supplied `declaredParents` without binding them to the WorkflowIR predecessor edges — a valid attestation for an unrelated execution could satisfy a proof-required step, and the recovery accepted synthetic advance targets. The correction round added: the typed `SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED` binding (every VERIFIED evidence fact must attest a WorkflowIR-declared predecessor step of the proof-required step within the manifest\'s workflow scope, and every IR-declared predecessor must be covered by an admitted parent — proven RED pre-fix with the exact attack shapes) and the typed `SELF_HOSTING_RECOVERY_TARGET_UNPROVEN` advance-target validation (the plan mints only on authoritative version facts read back from the real V2-002 authority). The dogfood\'s unrelated-step leg records the corrected negative experiment on the REAL stack.',
+    '6. **The recovery advance target is authority-proven data.** `advance_version` now requires the target version\'s facts read back through the repository authority (V2-002\'s `getVersion`); the plan is data and its executor still publishes and installs the new pin through the real authorities. A rollback-shaped advance (a lower versionNumber) is NOT blocked by the number alone — the governed transition discipline (explicit publish + install) is the actual gate, and the facts must prove the exact requested target within the SAME workflow.',
     '',
     '## Determinism',
     '',

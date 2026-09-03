@@ -442,6 +442,30 @@ export interface FailedRunFacts {
   readonly state: WorkflowRunState;
 }
 
+/**
+ * The authoritative target-version facts for an advance request: the
+ * version record READ BACK from the REAL V2-002 repository authority (the
+ * narrow structural read-back of V2-002's immutable `WorkflowVersion`
+ * identity: id, workflowId, versionNumber, contentDigest). V2-002 versions
+ * are immutable published records — the authority read-back IS the
+ * existence and publication proof. An advance plan is minted ONLY when
+ * these facts prove the requested target; absent, malformed, or
+ * non-corresponding facts are fail-closed (a synthetic target is never an
+ * advance — the PR #160 Blocker-2 correction).
+ */
+export interface FirstPartyTargetVersionFacts {
+  readonly version: {
+    /** The target version's repository identity (MUST equal the requested toVersionId). */
+    readonly id: string;
+    /** The workflow the target version belongs to (MUST equal the manifest's workflowId). */
+    readonly workflowId: string;
+    /** The per-workflow sequence number of the target version. */
+    readonly versionNumber: number;
+    /** V2-002's content digest of the target version (immutability proof). */
+    readonly contentDigest: string;
+  };
+}
+
 /** V2-013 recovery failure codes (typed, fail-closed). */
 export const SELF_HOSTING_RECOVERY_FAILURE_CODES = [
   /** Only a terminal FAILED run is recoverable (never in-progress). */
@@ -450,6 +474,14 @@ export const SELF_HOSTING_RECOVERY_FAILURE_CODES = [
   'SELF_HOSTING_RUN_SCOPE_MISMATCH',
   /** The recovery advance is not an explicit, governance-legal transition. */
   'SELF_HOSTING_RECOVERY_ADVANCE_INVALID',
+  /**
+   * The advance target is NOT proven by authoritative version facts (the
+   * PR #160 Blocker-2 correction): no well-formed version facts were
+   * supplied, the facts do not bind the exact requested target, or the
+   * target belongs to a different workflow — a synthetic target is never
+   * an advance (fail-closed).
+   */
+  'SELF_HOSTING_RECOVERY_TARGET_UNPROVEN',
   /** The boundary denied the recovery (governance preserved). */
   'SELF_HOSTING_BOUNDARY_DENIED',
 ] as const;
@@ -499,10 +531,20 @@ export interface PlanFailedWorkflowRecoveryInput {
   readonly boundary: SelfHostingBoundaryPolicyInput;
   /** The artifact (boundary re-evaluated at recovery time). */
   readonly artifact: FirstPartyWorkflowArtifact;
-  /** The requested action: retry the same pin, or advance to an explicit new version. */
+  /**
+   * The requested action: retry the same pin, or advance to an explicit new
+   * version PROVEN by authoritative target-version facts read back from the
+   * REAL V2-002 repository authority (fail-closed when absent/malformed/
+   * non-corresponding — a synthetic target is never an advance).
+   */
   readonly request:
     | { readonly action: 'retry_same_pin' }
-    | { readonly action: 'advance_version'; readonly toVersionId: string };
+    | {
+        readonly action: 'advance_version';
+        readonly toVersionId: string;
+        /** REQUIRED: the authoritative target-version facts (the read-back proof). */
+        readonly targetVersion: FirstPartyTargetVersionFacts;
+      };
 }
 
 // ============================================================================

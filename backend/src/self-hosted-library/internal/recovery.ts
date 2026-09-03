@@ -15,8 +15,13 @@
  *     moves silently (a drifted installation pin blocks the retry and
  *     demands an explicit advance);
  *   - `advance_version` is ONLY an explicit governed transition to a
- *     different version of the SAME workflow (publish + install the new
- *     pin first; the failed run stays failed — durable history);
+ *     DIFFERENT version of the SAME workflow — PROVEN by authoritative
+ *     target-version facts read back from the REAL V2-002 repository
+ *     authority (the PR #160 Blocker-2 correction: the facts must be
+ *     well-formed, must bind the exact requested target, and must belong
+ *     to the manifest's workflow — a synthetic target is NEVER an
+ *     advance; publish + install the new pin first; the failed run stays
+ *     failed — durable history);
  *   - the self-hosting permission boundary is re-evaluated at recovery
  *     time (governance preserved: a weakened model or an out-of-boundary
  *     artifact blocks the recovery).
@@ -24,6 +29,7 @@
 
 import type {
   FailedWorkflowRecoveryPlan,
+  FirstPartyTargetVersionFacts,
   PlanFailedWorkflowRecoveryInput,
 } from '../types.js';
 import { evaluateSelfHostingBoundary } from './boundary.js';
@@ -93,22 +99,106 @@ export function planFailedWorkflowRecovery(input: PlanFailedWorkflowRecoveryInpu
     };
   }
 
-  // advance_version: an EXPLICIT governed transition to a DIFFERENT
-  // version of the SAME workflow (never a redirect in place)
-  if (input.request.toVersionId === input.manifest.versionId) {
+  // advance_version: an EXPLICIT governed transition to a DIFFERENT version
+  // of the SAME workflow — PROVEN by authoritative version facts (never a
+  // redirect in place; never a synthetic target)
+  if (input.request.action === 'advance_version') {
+    if (input.request.toVersionId === input.manifest.versionId) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_ADVANCE_INVALID',
+          detail: `the recovery advance targets the manifest's own version ${input.request.toVersionId} — an advance must be a DIFFERENT version (an explicit governed transition)`,
+        },
+      };
+    }
+    // the PR #160 Blocker-2 correction: the advance target must be PROVEN
+    // by authoritative version facts read back from the REAL V2-002
+    // repository authority — the typed input requires the facts (the
+    // structural read-back of V2-002's immutable WorkflowVersion), and the
+    // runtime re-validates them fail-closed (absent/malformed facts, facts
+    // proving a different version, or facts of a foreign workflow all
+    // block the plan; a synthetic target is never an advance)
+    const target = (input.request as { readonly targetVersion?: unknown }).targetVersion;
+    if (!isWellFormedTargetVersionFacts(target)) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_UNPROVEN',
+          detail: `the advance target "${input.request.toVersionId}" carries NO well-formed authoritative version facts — the target must be read back from the REAL V2-002 repository authority (a synthetic/unproven target is never an advance; fail-closed)`,
+        },
+      };
+    }
+    if (target.version.id !== input.request.toVersionId) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_UNPROVEN',
+          detail: `the supplied version facts prove "${target.version.id}", not the requested advance target "${input.request.toVersionId}" — the facts must bind the exact requested version (fail-closed)`,
+        },
+      };
+    }
+    if (target.version.workflowId !== input.manifest.workflowId) {
+      return {
+        kind: 'blocked',
+        failure: {
+          code: 'SELF_HOSTING_RECOVERY_TARGET_UNPROVEN',
+          detail: `the advance target "${target.version.id}" belongs to workflow ${target.version.workflowId}, not the manifest's ${input.manifest.workflowId} — an advance is a governed transition within the SAME workflow, never across workflows (fail-closed)`,
+        },
+      };
+    }
     return {
-      kind: 'blocked',
-      failure: {
-        code: 'SELF_HOSTING_RECOVERY_ADVANCE_INVALID',
-        detail: `the recovery advance targets the manifest's own version ${input.request.toVersionId} — an advance must be a DIFFERENT version (an explicit governed transition)`,
-      },
+      kind: 'advance_version',
+      workflowId: input.manifest.workflowId,
+      fromVersionId: input.manifest.versionId,
+      toVersionId: input.request.toVersionId,
+      failedRunId: input.failedRun.runId,
     };
   }
+
+  // unreachable by the input type; kept fail-closed for malformed runtime data
   return {
-    kind: 'advance_version',
-    workflowId: input.manifest.workflowId,
-    fromVersionId: input.manifest.versionId,
-    toVersionId: input.request.toVersionId,
-    failedRunId: input.failedRun.runId,
+    kind: 'blocked',
+    failure: {
+      code: 'SELF_HOSTING_RECOVERY_ADVANCE_INVALID',
+      detail: `the recovery request action "${String((input.request as { readonly action?: unknown }).action)}" is not a governed recovery action (fail-closed)`,
+    },
   };
+}
+
+// ============================================================================
+// The advance-target validation (the PR #160 Blocker-2 correction)
+// ============================================================================
+
+/**
+ * The structural shape check for authoritative target-version facts
+ * (fail-closed on ANY malformed shape — the typed input carries the facts,
+ * but runtime data may be cast/malformed; the recovery never crashes on
+ * the advance path, it blocks typed).
+ */
+function isWellFormedTargetVersionFacts(value: unknown): value is FirstPartyTargetVersionFacts {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const version = (value as { readonly version?: unknown }).version;
+  if (version === null || typeof version !== 'object') {
+    return false;
+  }
+  const { id, workflowId, versionNumber, contentDigest } = version as {
+    readonly id?: unknown;
+    readonly workflowId?: unknown;
+    readonly versionNumber?: unknown;
+    readonly contentDigest?: unknown;
+  };
+  return (
+    typeof id === 'string' &&
+    id.length > 0 &&
+    typeof workflowId === 'string' &&
+    workflowId.length > 0 &&
+    typeof versionNumber === 'number' &&
+    Number.isInteger(versionNumber) &&
+    versionNumber >= 1 &&
+    typeof contentDigest === 'string' &&
+    contentDigest.length > 0
+  );
 }

@@ -269,6 +269,106 @@ describe('V2-013 integration — failed-workflow recovery + evidence over the RE
     }
   });
 
+  it('ADVANCE_VERSION over the REAL authority: a REAL published target version (facts read back through getVersion) mints the plan; a SYNTHETIC target is fail-closed', async () => {
+    const outcome = await installLibrary();
+    const dogfooding = outcome.manifests.find((m) => m.kind === 'dogfooding')!;
+    const runs = support.freshRunService();
+    // a REAL failed run pinned to the manifest's exact version
+    const requested = await runs.requestRun(principal(), {
+      commandId: 'cmd-v2013-advance-0001',
+      correlationId: 'v2013-advance-flow',
+      causationId: 'v2013-advance-root',
+    }, {
+      organizationId: devOrgId,
+      workflowId: dogfooding.workflowId,
+      versionId: dogfooding.versionId,
+      installationId: dogfooding.installationId,
+      trigger: { type: 'manual', id: 'v2013-advance-trigger' },
+      inputCommitments: [commitmentOf('v2-013-advance-input')],
+    });
+    const runId = requested.result.run.id;
+    await runs.startRun(principal(), {
+      commandId: 'cmd-v2013-advance-0002',
+      correlationId: 'v2013-advance-flow',
+      causationId: runId,
+    }, { runId });
+    await runs.failRun(principal(), {
+      commandId: 'cmd-v2013-advance-0003',
+      correlationId: 'v2013-advance-flow',
+      causationId: runId,
+    }, { runId, reason: 'the dev worker lost the sandbox before the advance' });
+
+    // publish a REAL new version of the SAME workflow through the module's
+    // own explicit transition over the REAL authority (mutated content —
+    // V2-002 converges on identical content)
+    const { serializeWorkflowIrDocument, parseWorkflowIrDocument } = await import('../../../src/workflow-ir/index.js');
+    const mutatedRoundTrip = JSON.parse(serializeWorkflowIrDocument(artifactByKind('dogfooding')!.document)) as Record<string, unknown>;
+    const ir = mutatedRoundTrip['ir'] as Record<string, unknown>;
+    const nodes = ir['nodes'] as Record<string, unknown>[];
+    const spec = nodes[nodes.length - 1]!['spec'] as Record<string, unknown>;
+    spec['task'] = 'Record the dogfooding evidence and corrective observations (v2 maintenance update)';
+    const mutatedDocument = parseWorkflowIrDocument(JSON.stringify(mutatedRoundTrip));
+    if (!mutatedDocument.ok) {
+      throw new Error('the mutated document must still parse clean');
+    }
+    const published = await publishFirstPartyVersion(
+      port,
+      principal(),
+      dogfooding.workflowId,
+      mutatedDocument.document,
+      { irSchemaVersion: 'wfos-ir-1' },
+    );
+    expect(published.created).toBe(true);
+    expect(published.versionNumber).toBe(2);
+
+    // the authoritative target facts: READ BACK from the REAL V2-002
+    // authority (getVersion — the authority's own version record)
+    const target = await support.repository.getVersion(principal(), dogfooding.workflowId, published.versionId);
+    const recoveryInput = {
+      manifest: dogfooding,
+      failedRun: { runId, workflowId: dogfooding.workflowId, versionId: dogfooding.versionId, state: 'failed' as const },
+      pinFacts: await pinFactsOf(dogfooding.installationId),
+      boundary: realBoundary,
+      artifact: artifactByKind('dogfooding')!,
+    };
+    const plan = planFailedWorkflowRecovery({
+      ...recoveryInput,
+      request: {
+        action: 'advance_version',
+        toVersionId: published.versionId,
+        targetVersion: {
+          version: {
+            id: target.id,
+            workflowId: target.workflowId,
+            versionNumber: target.versionNumber,
+            contentDigest: target.contentDigest,
+          },
+        },
+      },
+    });
+    expect(plan.kind).toBe('advance_version');
+    if (plan.kind === 'advance_version') {
+      expect(plan.workflowId).toBe(dogfooding.workflowId);
+      expect(plan.fromVersionId).toBe(dogfooding.versionId);
+      expect(plan.toVersionId).toBe(published.versionId);
+      expect(plan.failedRunId).toBe(runId);
+      // the failed run STAYS failed (the advance is a NEW pin, never a redirect)
+      expect((await runs.getRunHistory(principal(), runId)).run.state).toBe('failed');
+    }
+
+    // the OLD hole's exact shape over the REAL stack: a bare synthetic
+    // toVersionId with NO authority facts is fail-closed typed
+    const synthetic = planFailedWorkflowRecovery({
+      ...recoveryInput,
+      request: { action: 'advance_version', toVersionId: 'wfwv-synthetic-target' } as Parameters<typeof planFailedWorkflowRecovery>[0]['request'],
+    });
+    expect(synthetic.kind).toBe('blocked');
+    if (synthetic.kind === 'blocked') {
+      expect(synthetic.failure.code).toBe('SELF_HOSTING_RECOVERY_TARGET_UNPROVEN');
+      expect(synthetic.failure.detail).toContain('wfwv-synthetic-target');
+    }
+  });
+
   it('EVIDENCE RECONSTRUCTION from the REAL run history: pins match, runs attributed to the exact pinned version', async () => {
     const outcome = await installLibrary();
     const dogfooding = outcome.manifests.find((m) => m.kind === 'dogfooding')!;

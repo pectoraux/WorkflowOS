@@ -16,12 +16,12 @@ The dogfooding procedure was chosen as the executed workflow (the most self-refe
 
 ## run-1 — 1. INSTALL (the self-hosting installation)
 
-[PASS] install-six-kinds: all six first-party workflows installed through the REAL authority (the dogfooding manifest pins wfw_0a59ca7742dea1649583b16296e2be80@wfwv_93d4bff7a1ecdac18c35db44395a95fb)
+[PASS] install-six-kinds: all six first-party workflows installed through the REAL authority (the dogfooding manifest pins wfw_d8cd0c087d252d26807592ce987ab8b9@wfwv_116def6c016f27925a30baacc37087e4)
 
 ## run-1 — 2. EXECUTE (the real run through the real V2-005 command surface)
 
 [PASS] run-pinned-to-manifest: the REAL run pins the manifest exact (workflow, version, installation) — and the run carries the SAME semantic digest as the manifest
-[PASS] predecessor-attached-through-boundary: the predecessor attestation (a REAL Ed25519 envelope bound to the real run) is durably ATTACHED through the REAL V2-005 boundary (the run-derived binding policy verified it — execution digest 35c246a422a5…)
+[PASS] predecessor-attached-through-boundary: the predecessor attestation (a REAL Ed25519 envelope bound to the real run) is durably ATTACHED through the REAL V2-005 boundary (the run-derived binding policy verified it — execution digest 1778f477bae2…)
 
 ## run-1 — 3. THE PROOF PREDICATE (independent verification → V2-013 packaging)
 
@@ -33,6 +33,7 @@ The dogfooding procedure was chosen as the executed workflow (the most self-refe
 
 [PASS] replay-refused-no-package: the REPLAYED predecessor (the same single-use nonce re-presented after consumption) is refused TYPED (ATTESTATION_REPLAYED) and the V2-013 packaging over the refused verification mints NOTHING (SELF_HOSTING_PROOF_PREDICATE_REJECTED)
 [PASS] run-boundary-duplicate-refused: the run boundary refuses the DUPLICATE attach (durable single-use nonce — RUN_ATTESTATION_REJECTED): no duplicate side effects at the integration boundary
+[PASS] unrelated-step-attestation-refused: a VALID, fresh, authorized attestation for a NON-predecessor step (record_evidence) is REFUSED TYPED by the predecessor binding to the authoritative WorkflowIR edges (SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED) — the exact PR #160 Blocker-1 attack shape, closed fail-closed
 
 ## run-1 — 5. EVIDENCE (the reconstruction converges with the manifest)
 
@@ -44,6 +45,8 @@ The dogfooding procedure was chosen as the executed workflow (the most self-refe
 2. **Epoch alignment is a composition responsibility.** The run service's injected `currentEpoch` (RUN_TEST_EPOCH 7) must be ≤ the attestation statement's epoch for BOTH the run-boundary attach and the V2-015 admission; the dogfood pinned the statement epoch to the service epoch. A production self-hosted worker must derive its statement epoch from the run's epoch context (the V2-008 runtime path does this internally; a hand-driven worker must not invent one).
 3. **The proof predicate's trust policy is the caller's duty.** The independent verifier verifies cryptographic authenticity; WHO to trust (attesterKeyIds) is supplied out-of-band in the verifier context, and the V2-013 packaging's trust policy independently restates it. The dogfood kept the two consistent; a corrective note for production: the trust set should derive from the node/capability authority (V2-004) rather than runner constants.
 4. **Version convergence is load-bearing.** Re-publishing an identical first-party document converges on the existing version (V2-002 semantics); the manifest is only advanced by a genuinely mutated document through an explicit `publishFirstPartyVersion` transition. The dogfood's manifest stayed pinned to v1 throughout — the frozen pinning regression held end-to-end.
+5. **The architect-review correction (PR #160, 2026-09-03): the predecessor binding is structural, not caller-declared.** The original packaging trusted the caller-supplied `declaredParents` without binding them to the WorkflowIR predecessor edges — a valid attestation for an unrelated execution could satisfy a proof-required step, and the recovery accepted synthetic advance targets. The correction round added: the typed `SELF_HOSTING_PROOF_PARENT_BINDING_VIOLATED` binding (every VERIFIED evidence fact must attest a WorkflowIR-declared predecessor step of the proof-required step within the manifest's workflow scope, and every IR-declared predecessor must be covered by an admitted parent — proven RED pre-fix with the exact attack shapes) and the typed `SELF_HOSTING_RECOVERY_TARGET_UNPROVEN` advance-target validation (the plan mints only on authoritative version facts read back from the real V2-002 authority). The dogfood's unrelated-step leg records the corrected negative experiment on the REAL stack.
+6. **The recovery advance target is authority-proven data.** `advance_version` now requires the target version's facts read back through the repository authority (V2-002's `getVersion`); the plan is data and its executor still publishes and installs the new pin through the real authorities. A rollback-shaped advance (a lower versionNumber) is NOT blocked by the number alone — the governed transition discipline (explicit publish + install) is the actual gate, and the facts must prove the exact requested target within the SAME workflow.
 
 ## Determinism
 
