@@ -16,7 +16,6 @@
 
 import { FIRST_PARTY_PROCEDURE_KINDS } from '../types.js';
 import type {
-  FirstPartyWorkflowManifest,
   ReconstructSelfHostingEvidenceInput,
   SelfHostingEvidenceRecord,
   SelfHostingEvidenceReconstruction,

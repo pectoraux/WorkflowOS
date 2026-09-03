@@ -33,7 +33,6 @@ import type { FirstPartyWorkflowArtifact } from '../types.js';
 function devApiStep(
   id: string,
   capability: 'filesystem.read' | 'filesystem.write' | 'github.repository.read' | 'github.pull_request.create' | 'workflow.execute' | 'workflow.observe',
-  task: string,
 ): WorkflowNode {
   return {
     id,
@@ -96,7 +95,8 @@ function implementationDocument(): WorkflowIrDocument {
     .addNode(agenticStep('prepare_branch', 'Create the implementation branch rooted at the activated work order base', ['filesystem.read', 'filesystem.write']))
     .addNode(agenticStep('implement_red', 'Write the failing tests that pin the work order contract', ['filesystem.write']))
     .addNode(agenticStep('implement_green', 'Implement the minimal honest change that turns the battery green', ['filesystem.write']))
-    .addNode(devApiStep('commit_and_open_pr', 'github.pull_request.create', 'Commit the change and open the pull request for architect review'))
+    // commit + open the PR for architect review (the merge gate stays external)
+    .addNode(devApiStep('commit_and_open_pr', 'github.pull_request.create'))
     .addEdge({ from: 'prepare_branch', to: 'implement_red', on: 'success' })
     .addEdge({ from: 'implement_red', to: 'implement_green', on: 'success' })
     .addEdge({ from: 'implement_green', to: 'commit_and_open_pr', on: 'success' })
@@ -115,7 +115,7 @@ function reviewDocument(): WorkflowIrDocument {
     .addNode(agenticStep('inspect_diff', 'Read the pull request diff and the repository state it claims', ['github.repository.read', 'filesystem.read']))
     .addNode(agenticStep('verify_contract', 'Re-verify the change against the frozen work order contract and the delivered regressions', ['github.repository.read']))
     .addNode(humanApprovalStep('architect_review', 'The architect reviews and decides: the merge gate (a self-hosted worker never merges its own governing PR)'))
-    .addNode(devApiStep('record_findings', 'filesystem.write', 'Record the typed review findings as evidence for the architect decision'))
+    .addNode(devApiStep('record_findings', 'filesystem.write'))
     .addEdge({ from: 'inspect_diff', to: 'verify_contract', on: 'success' })
     .addEdge({ from: 'verify_contract', to: 'architect_review', on: 'success' })
     .addEdge({ from: 'architect_review', to: 'record_findings', on: { outcome: 'approved' } })
@@ -133,7 +133,7 @@ function testingDocument(): WorkflowIrDocument {
     .withStart('run_battery')
     .addWorkflowInput({ name: 'pullRequestRef', type: { kind: 'string' } })
     .addNode(agenticStep('run_battery', 'Run the affected test batteries on the exact change revision', ['filesystem.read']))
-    .addNode(devApiStep('ingest_ci_evidence', 'github.repository.read', 'Ingest the CI evidence runs for the exact revision'))
+    .addNode(devApiStep('ingest_ci_evidence', 'github.repository.read'))
     .addNode(agenticStep('record_evidence', 'Record the typed verification evidence bound to the exact revision', ['filesystem.write']))
     .addEdge({ from: 'run_battery', to: 'ingest_ci_evidence', on: 'success' })
     .addEdge({ from: 'ingest_ci_evidence', to: 'record_evidence', on: 'success' })
@@ -149,9 +149,9 @@ function releaseDocument(): WorkflowIrDocument {
   return createWorkflowIrBuilder()
     .withStart('observe_merge')
     .addWorkflowInput({ name: 'pullRequestRef', type: { kind: 'string' } })
-    .addNode(devApiStep('observe_merge', 'github.repository.read', 'Observe the architect merge that completes the work order'))
+    .addNode(devApiStep('observe_merge', 'github.repository.read'))
     .addNode(agenticStep('converge_main', 'Converge the local development environment to the merged canonical main', ['filesystem.read', 'filesystem.write']))
-    .addNode(devApiStep('verify_deployable', 'workflow.observe', 'Verify the deployable runtime state after the merge'))
+    .addNode(devApiStep('verify_deployable', 'workflow.observe'))
     .addEdge({ from: 'observe_merge', to: 'converge_main', on: 'success' })
     .addEdge({ from: 'converge_main', to: 'verify_deployable', on: 'success' })
     .build();
@@ -168,7 +168,7 @@ function maintenanceDocument(): WorkflowIrDocument {
     .addNode(agenticStep('observe_signals', 'Observe the engineering maintenance signals since the given bound', ['filesystem.read']))
     .addNode(agenticStep('prepare_work_item_inputs', 'Prepare the typed maintenance-signal summary for governed Work Item creation', ['filesystem.write']))
     .addNode(humanApprovalStep('architect_triage', 'The architect triages the signals and decides which governed Work Items to open'))
-    .addNode(devApiStep('record_triage', 'filesystem.write', 'Record the architect triage outcome as the governed Work Item decision trail'))
+    .addNode(devApiStep('record_triage', 'filesystem.write'))
     .addEdge({ from: 'observe_signals', to: 'prepare_work_item_inputs', on: 'success' })
     .addEdge({ from: 'prepare_work_item_inputs', to: 'architect_triage', on: 'success' })
     .addEdge({ from: 'architect_triage', to: 'record_triage', on: { outcome: 'approved' } })
@@ -186,7 +186,7 @@ function dogfoodingDocument(): WorkflowIrDocument {
   return createWorkflowIrBuilder()
     .withStart('install_workflow')
     .addWorkflowInput({ name: 'procedureKind', type: { kind: 'string' } })
-    .addNode(devApiStep('install_workflow', 'workflow.execute', 'Install the first-party workflow through the universal installation authority (version-pinned)'))
+    .addNode(devApiStep('install_workflow', 'workflow.execute'))
     .addNode(agenticStep('execute_workflow', 'Execute the installed workflow end-to-end through the real execution authorities', ['workflow.execute', 'filesystem.read']))
     .addNode(agenticStep('record_evidence', 'Record the dogfooding evidence and corrective observations', ['filesystem.write']))
     .addEdge({ from: 'install_workflow', to: 'execute_workflow', on: 'success' })

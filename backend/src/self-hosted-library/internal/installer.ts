@@ -24,7 +24,7 @@
  */
 
 import { computeWorkflowVersionSemanticDigest, serializeWorkflowIrDocument } from '../../workflow-ir/index.js';
-import type { WorkflowIrDocument } from '../../workflow-ir/index.js';
+import type { WorkflowIrDocument, WorkflowVersionSemanticDigest } from '../../workflow-ir/index.js';
 import { FIRST_PARTY_PROCEDURE_KINDS } from '../types.js';
 import type {
   FirstPartyInstallOutcome,
@@ -74,7 +74,7 @@ export async function publishFirstPartyVersion(
   workflowId: string,
   document: WorkflowIrDocument,
   protocol: FirstPartyProtocolDescriptor,
-): Promise<{ versionId: string; versionNumber: number; contentDigest: string; semanticDigest: string; created: boolean }> {
+): Promise<{ versionId: string; versionNumber: number; contentDigest: string; semanticDigest: WorkflowVersionSemanticDigest; created: boolean }> {
   const result = await port.createVersion(principal, workflowId, {
     content: versionContentOf(document),
     protocol: { irSchemaVersion: protocol.irSchemaVersion },

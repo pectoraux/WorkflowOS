@@ -26,11 +26,8 @@ import { computeWorkflowVersionSemanticDigest } from '../../workflow-ir/index.js
 import { evaluateProofAdmission } from '../../execution-proof-graph/index.js';
 import type { ProofAdmissionInput } from '../../execution-proof-graph/index.js';
 import type {
-  FirstPartyWorkflowArtifact,
-  FirstPartyWorkflowManifest,
   PackageFirstPartyExecutionInput,
   ProofStepEvidenceInput,
-  SelfHostingPackagingFailure,
   SelfHostingPackagingResult,
 } from '../types.js';
 import { evaluateSelfHostingBoundary } from './boundary.js';

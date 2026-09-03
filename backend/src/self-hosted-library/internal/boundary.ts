@@ -56,6 +56,9 @@ export function evaluateSelfHostingBoundary(
   if (modelFailure) {
     return { allowed: false, failure: modelFailure };
   }
+  // validateBoundaryModel returned null: the boundary is present and
+  // well-formed (the cast is the validated narrowing).
+  const model = boundary as SelfHostingBoundaryPolicyInput;
 
   // ------------------------------------------------------------------
   // 2. per node, in canonical document order: capabilities, then the
@@ -108,7 +111,7 @@ export function evaluateSelfHostingBoundary(
 
   return {
     allowed: true,
-    coreProhibitions: [...boundary.coreProhibitions],
+    coreProhibitions: [...model.coreProhibitions],
     declaredCapabilities: [...new Set(declared)].sort(),
   };
 }

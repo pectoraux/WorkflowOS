@@ -84,11 +84,9 @@ import type {
 } from '../workflow-repository/index.js';
 import type { WorkflowRunHistory, WorkflowRunState } from '../workflow-runs/index.js';
 import type {
-  AttestationVerification,
   PredecessorEvidence,
-  ProofAdmissionFailure,
-  ProofAdmissionResult,
   ProofCompositionTrustPolicy,
+  ProofAdmissionFailure,
 } from '../execution-proof-graph/index.js';
 
 // ============================================================================
