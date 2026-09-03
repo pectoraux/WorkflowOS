@@ -524,21 +524,22 @@ export function validateGraphState(graph: ExecutionProofGraph): readonly ProofGr
 
 /**
  * Would adding the directed edge (parent → child) introduce a cycle in the
- * graph's combined edge set? Pure reachability check from the child over
- * existing edges: if the parent is reachable FROM the child, the new edge
- * closes a cycle. Deterministic traversal in canonical nodeIdentity order.
+ * graph's combined edge set? A cycle exists iff the PARENT is already
+ * reachable FROM THE CHILD by following existing edges forward
+ * (child ⊢* parent): the new edge parent→child would then close the loop
+ * child ⊢* parent → child. Deterministic traversal in canonical order.
  */
 export function edgeWouldCreateCycle(
   graph: ExecutionProofGraph,
   parent: string,
   child: string,
 ): boolean {
-  // adjacency: child → parents (edges point parent→child; walk upstream)
-  const upstream = new Map<string, string[]>();
+  // downstream adjacency: parent → children (edges flow parent → child)
+  const downstream = new Map<string, string[]>();
   for (const edge of graph.edges) {
-    const list = upstream.get(edge.childNode) ?? [];
-    list.push(edge.parentNode);
-    upstream.set(edge.childNode, list);
+    const list = downstream.get(edge.parentNode) ?? [];
+    list.push(edge.childNode);
+    downstream.set(edge.parentNode, list);
   }
   const visited = new Set<string>();
   let frontier: string[] = [child];
@@ -552,9 +553,9 @@ export function edgeWouldCreateCycle(
         continue;
       }
       visited.add(node);
-      for (const p of (upstream.get(node) ?? []).slice().sort()) {
-        if (!visited.has(p)) {
-          next.push(p);
+      for (const c of (downstream.get(node) ?? []).slice().sort()) {
+        if (!visited.has(c)) {
+          next.push(c);
         }
       }
     }

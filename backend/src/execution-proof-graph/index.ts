@@ -103,3 +103,20 @@ export {
   compareUtcTimestamps,
   utcTimestampToEpochMs,
 } from './internal/validation.js';
+
+// internal/pure graph construction: the deterministic, append-only builder
+export {
+  createProofGraphBuilder,
+  type ProofGraphBuilder,
+  type ProofGraphScope,
+  type EdgeInput,
+} from './internal/graph.js';
+
+// internal/canonical serialization: byte-deterministic serialization,
+// fail-closed typed parse, and the graph-level mutation-detection digest
+export {
+  serializeProofGraph,
+  parseProofGraph,
+  computeGraphDigest,
+  type ProofGraphParseResult,
+} from './internal/serialization.js';
