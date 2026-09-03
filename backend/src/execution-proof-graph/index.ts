@@ -112,6 +112,11 @@ export {
   type EdgeInput,
 } from './internal/graph.js';
 
+// internal/pure verification-derived admission predicates
+export {
+  evaluateProofAdmission,
+} from './internal/admission.js';
+
 // internal/canonical serialization: byte-deterministic serialization,
 // fail-closed typed parse, and the graph-level mutation-detection digest
 export {
