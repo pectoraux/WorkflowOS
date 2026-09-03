@@ -152,6 +152,17 @@ describe('V2-017 Task 1 — universal product navigation', () => {
   });
 
   describe('auth gate semantics preserved', () => {
+    it('renders the session sign-out affordance on the product shell', async () => {
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <App />
+        </MemoryRouter>,
+      );
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Sign Out' })).toBeInTheDocument(),
+      );
+    });
+
     it('renders the LoginPage for a product route when unauthenticated', async () => {
       vi.stubGlobal('fetch', mockSessionResponse(401, { error: 'unauthenticated' }));
       render(

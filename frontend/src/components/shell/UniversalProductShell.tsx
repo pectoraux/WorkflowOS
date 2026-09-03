@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Activity, Code2, Compass, Home, ListChecks, Plus } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useAuth } from '@/hooks/useAuth';
+import { Button } from '@/components/ui/button';
 
 /**
  * UniversalProductShell — the human-facing product frame (V2-017 Task 1).
@@ -38,6 +40,11 @@ interface UniversalProductShellProps {
 
 export function UniversalProductShell({ children }: UniversalProductShellProps) {
   const location = useLocation();
+  // V2-017: the session surface stays on the human-facing frame (the
+  // WORK-074 journey signs out from the product root). Sign-out goes
+  // through the canonical auth client — the backend remains the session
+  // authority and the App gate re-renders without a reload.
+  const { user, logout } = useAuth();
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
@@ -76,13 +83,24 @@ export function UniversalProductShell({ children }: UniversalProductShellProps) 
             })}
           </nav>
 
-          <Link
-            to="/create"
-            className="flex shrink-0 items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Create</span>
-          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              to="/create"
+              className="flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Create</span>
+            </Link>
+            <span
+              className="hidden max-w-[12rem] truncate text-xs text-muted-foreground lg:inline"
+              title={user?.email ?? user?.displayName ?? undefined}
+            >
+              {user?.email ?? user?.displayName ?? 'Session user'}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => void logout()}>
+              Sign Out
+            </Button>
+          </div>
         </div>
       </header>
 
