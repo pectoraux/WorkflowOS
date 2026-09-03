@@ -28,7 +28,6 @@ import ExplorePage from './pages/ExplorePage';
 import ProductActivityPage from './pages/ProductActivityPage';
 import CreatePage from './pages/CreatePage';
 import ExpertPage from './pages/ExpertPage';
-import UniversalProductShell from './components/shell/UniversalProductShell';
 
 export default function App() {
   const { status, refreshSession } = useAuth();
