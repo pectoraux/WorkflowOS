@@ -36,13 +36,24 @@
  *       the web step completes through the real runtime with the
  *       produce→independently-verify→attach gate and ONE software_signed
  *       binding durably attached;
- *   P3. Node B independently verifies the attestation before admitting a
- *       dependent action — the transferred envelope (canonical bytes →
- *       parse) verifies through the merged V2-014 verifier under Node B's
- *       OWN verifier context (fresh replay registry, run-derived binding
- *       expectations, Node B's trusted-attester list) BEFORE the dependent
- *       step executes; a verifier that does not trust Node A's key refuses
- *       admission typed (zero side effects on Node B);
+ *   P3. SPLIT (the architect's PR #152 blocking finding #1): the merged
+ *       surfaces prove the VERIFIER leg but NOT the admission coupling —
+ *       P3a (PROVEN, verifier domain): the transferred envelope (canonical
+ *       bytes → parse) verifies through the merged V2-014 verifier under
+ *       Node B's OWN verifier context (fresh replay registry, run-derived
+ *       binding expectations, Node B's trusted-attester list); a verifier
+ *       that does not trust Node A's key refuses typed;
+ *       P3b (UNSATISFIED DEPENDENCY, machine-checked in the dedicated gap
+ *       test below): NO merged public surface couples that verification
+ *       outcome to the dependent action's admission — the V2-008
+ *       ResumeAfterHumanInput carries NO attestation/verification/admission
+ *       field (its full key set is pinned below), the V2-005 resume command
+ *       carries none either, and the runtime walk never consults prior-step
+ *       attestation bindings. The dependent side effect therefore executes
+ *       with ZERO admission decision derived from the independently verified
+ *       Node-A attestation — the dedicated test proves this gap exists
+ *       deterministically (it will FAIL the moment an owning module adds a
+ *       real admission coupling, forcing this gate to be revisited);
  *   P4. freshness/replay protection works across reconnect/retry — the
  *       re-presented handoff is rejected ATTESTATION_REPLAYED (single-use
  *       nonce), a verifier-epoch advance rejects ATTESTATION_EPOCH_STALE,
@@ -50,12 +61,22 @@
  *       boundary's DURABLE replay registry rejects a re-attach typed
  *       (RUN_ATTESTATION_REJECTED / ATTESTATION_REPLAYED, route-level 422,
  *       persisted rejection row);
- *   P5. causal parent binding is enforced — the merged V2-014 verifier
- *       binds the causalParents dimension: a dependent statement carrying
- *       Node A's execution digest verifies, an un-parented one (the merged
- *       runtime's shape) and a wrong-parented one are both rejected typed
- *       with dimension "causalParents" (the runtime-produced chain gap is
- *       surfaced precisely, never forced);
+ *   P5. SPLIT (the architect's PR #152 blocking finding #2): the merged
+ *       surfaces prove the VERIFIER dimension but NOT the runtime causal
+ *       chain —
+ *       P5a (PROVEN, verifier domain): the merged V2-014 verifier binds the
+ *       causalParents dimension: a dependent statement carrying Node A's
+ *       execution digest verifies, an un-parented one and a wrong-parented
+ *       one are both rejected typed with dimension "causalParents";
+ *       P5b (UNSATISFIED DEPENDENCY, machine-checked in the main path):
+ *       the merged V2-008 public production surface cannot emit a parented
+ *       dependent attestation — StepAttestationMaterial has NO causal-parent
+ *       field (its full key set is pinned below) and the runtime-produced
+ *       dependent statement is causalParents: [] (asserted against the REAL
+ *       durable binding of the real dependent step). The actual dependent
+ *       execution therefore does not carry/enforce the causal predecessor
+ *       binding; resolution requires a causal-parent input on the owning
+ *       module's production surface (architect's disposition);
  *   P6. duplicate handoff/event delivery converges without duplicate side
  *       effects — the duplicate event (V2-009 inbox), the duplicate
  *       attestation delivery (V2-014 ingestion ledger + Node B's replay
@@ -82,7 +103,19 @@
  *       evidenceReferences ALL resolve to real evidence records of this
  *       run, the exact protocol timeline, and the exactly-once command log.
  *
- * Dedicated negative/observation tests below the main path:
+ * GATE VERDICT: FAIL — 2 UNSATISFIED DEPENDENCIES (P3b admission coupling,
+ * P5b runtime causal chain). Per the architect's PR #152 REQUEST-CHANGES
+ * directive the gate surfaces the missing admission/causal coupling as
+ * unsatisfied dependencies instead of claiming IG-006 PASS. The correction
+ * does NOT modify V2-005/V2-008/V2-009/V2-014 (frozen scope); the two gaps
+ * are pinned machine-checkably so this gate fails loudly the moment an
+ * owning module adds the real coupling.
+ *
+ * Dedicated negative/observation/gap tests below the main path:
+ *   - the P3b ADMISSION-COUPLING GAP probe (unsatisfied dependency, on a
+ *     fresh tenant: the dependent action executes although Node B never
+ *     verified Node A's attestation and its runtime policy does not even
+ *     trust Node A's attester key);
  *   - the trust/assurance pair (P8) on fresh tenants;
  *   - the capability-vs-authorization separation (P7) on a fresh tenant;
  *   - a SURFACED COMPOSITION OBSERVATION (not a frozen-proof failure): the
@@ -93,7 +126,7 @@
  *     the architect; the frozen proofs above never depend on value-level
  *     cross-drive dataflow.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { buildServer } from '../../../src/api/server.js';
 import { ApiKeyAuthProvider } from '../../../src/modules/auth/internal/api-key-auth-provider.js';
@@ -127,6 +160,8 @@ import {
   type AgentDecider,
   type AttestingComputerHost,
   type ComputerHostAdapter,
+  type ResumeAfterHumanInput,
+  type StepAttestationMaterial,
 } from '../../../src/computer-agent/index.js';
 import {
   generateAttesterKeyPair,
@@ -593,7 +628,7 @@ async function createCrossDeviceWorkflow(
 // ============================================================================
 
 describe('IG-006 — cross-device execution attestation composition over the merged V2-005/V2-008/V2-009/V2-014 contracts', () => {
-  it('the full cross-device gate path: one run, two nodes, attested handoff, verified admission, dependent action (P1–P9)', async () => {
+  it('the full cross-device gate path: one run, two nodes, attested handoff, independent verification, dependent action (P1, P2, P3a, P4, P5a+P5b-gap, P6, P7, P8, P9)', async () => {
     const t = await freshGateTenant('main');
     const keyA = generateAttesterKeyPair();
     const keyB = generateAttesterKeyPair();
@@ -762,9 +797,13 @@ describe('IG-006 — cross-device execution attestation composition over the mer
     expect(hostA.attestations).toHaveLength(1);
     const attestationA = hostA.attestations[0]!;
 
-    // --- P3. the TRANSFER + Node B's INDEPENDENT verification --------------
+    // --- P3a. the TRANSFER + Node B's INDEPENDENT verification (verifier domain)
     // The handoff medium is the V2-014 canonical envelope bytes: serialize on
     // Node A, parse on Node B, verify with Node B's OWN verifier context.
+    // HONEST SCOPE (the PR #152 correction): this proves the merged V2-014
+    // verifier leg ONLY — the verification result below is NOT consumed by
+    // the resumeAfterHuman path that executes the dependent action (see the
+    // comment at the dependent action, and the dedicated P3b gap test).
     const transferred = parseAttestation(serializeAttestation(attestationA));
     expect(transferred.ok, JSON.stringify(transferred)).toBe(true);
     if (!transferred.ok) throw new Error('unreachable');
@@ -808,9 +847,12 @@ describe('IG-006 — cross-device execution attestation composition over the mer
     ]);
     expect(fact.nonAuthorityNote).toContain('never authorization');
 
-    // P3 negative: a Node B verifier that does NOT trust Node A's key refuses
-    // admission typed — and Node B's side effects remain ZERO (the dependent
-    // step has not executed: no ack file exists yet).
+    // P3 negative (verifier domain): a Node B verifier that does NOT trust
+    // Node A's key refuses the verification typed. NOTE (honest scope): this
+    // typed refusal is ALSO not consumed downstream — nothing in the merged
+    // resume path consults it (the admission coupling gap is the dedicated
+    // P3b test; the dependent step has not executed YET here only because
+    // the resume has not been called yet).
     const untrusted = verifyAttestation(transferred.attestation, {
       bindings: { runId },
       freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
@@ -851,7 +893,10 @@ describe('IG-006 — cross-device execution attestation composition over the mer
     expect(stale.ok).toBe(false);
     expect(stale.ok ? null : stale.failure.code).toBe('ATTESTATION_EXPIRED');
 
-    // --- the DEPENDENT ACTION on Node B (admission granted → execute) ------
+    // --- the DEPENDENT ACTION on Node B (executes; NOT structurally gated on
+    // the P3a verification — the admission coupling gap, see the dedicated
+    // P3b test: ResumeAfterHumanInput carries no admission/verification
+    // material, so this call succeeds regardless of the verification above) --
     const runtimeB = nodeRuntime(support.nodes, {
       required: true,
       trustedAttesterKeyIds: [keyA.keyId, keyB.keyId],
@@ -911,14 +956,17 @@ describe('IG-006 — cross-device execution attestation composition over the mer
     expect(durableB.attesterKeyId).toBe(keyB.keyId);
     expect(durableA.executionDigest).not.toBe(durableB.executionDigest);
 
-    // --- P5. causal parent binding is enforced -----------------------------
+    // --- P5a. the V2-014 verifier ENFORCES the causalParents dimension ------
+    // (verifier-domain proof — the PR #152 correction splits P5: this section
+    //  proves the ENFORCEMENT DIMENSION exists in the merged verifier; the
+    //  runtime production-path gap is the P5b unsatisfied dependency below)
     const digestA = durableA.executionDigest;
-    // (a) POSITIVE: a dependent statement carrying Node A's execution digest
-    //     as its causal parent verifies under the causalParents expectation.
-    //     (Protocol-conformance probe: constructed through the merged
-    //     V2-014 barrel, signed with Node B's REAL host key — the merged
-    //     V2-008 runtime always emits causalParents: [], so the causal chain
-    //     is proven at the V2-014 verification layer and the gap surfaced.)
+    // (a) POSITIVE (verifier domain): a dependent statement carrying Node A's
+    //     execution digest as its causal parent verifies under the
+    //     causalParents expectation. (Protocol-conformance probe: constructed
+    //     through the merged V2-014 barrel, signed with Node B's REAL host key
+    //     — the merged V2-008 runtime CANNOT produce this shape, which is
+    //     exactly the P5b gap proven right after this block.)
     const probeStatement: ExecutionStatement = {
       objectType: EXECUTION_STATEMENT_OBJECT_TYPE,
       statementSchemaVersion: EXECUTION_STATEMENT_SCHEMA_VERSION,
@@ -959,9 +1007,10 @@ describe('IG-006 — cross-device execution attestation composition over the mer
       attesterKeyIds: [keyB.keyId],
     });
     expect(causalOk.ok, JSON.stringify(causalOk)).toBe(true);
-    // (b) NEGATIVE: the runtime-produced dependent attestation (causalParents
-    //     [], the merged V2-008 statement shape) is REFUSED under the same
-    //     causal expectation — the binding dimension is enforced.
+    // (b) NEGATIVE (verifier domain): the runtime-produced dependent
+    //     attestation (causalParents [], the merged V2-008 statement shape)
+    //     is REFUSED under the same causal expectation — the binding
+    //     dimension is enforced.
     const causalUnparented = verifyAttestation(attestationB, {
       bindings: { runId, attemptId: 1, stepId: 'record_ack', causalParents: [digestA] },
       freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
@@ -982,6 +1031,35 @@ describe('IG-006 — cross-device execution attestation composition over the mer
       expect(causalWrong.failure.code).toBe('ATTESTATION_BINDING_MISMATCH');
       expect(causalWrong.failure.dimension).toBe('causalParents');
     }
+
+    // --- P5b. UNSATISFIED DEPENDENCY (runtime causal chain) — machine-checked
+    // The REAL runtime-produced dependent attestation (the durable binding of
+    // the real record_ack step, produced by the real resumeAfterHuman walk on
+    // Node B) carries NO causal parent: the merged V2-008 public production
+    // surface (StepAttestationMaterial) has NO causal-parent field, so the
+    // actual dependent execution does not carry/enforce the causal
+    // predecessor binding. The type-level pin below FAILS the typecheck (part
+    // of the verification battery) the moment the owning module adds a
+    // causal-parent input to the production surface — this gate is
+    // self-invalidating by design. Surfaced per the architect's PR #152
+    // directive (frozen scope: no sibling modifications inside IG-006).
+    expectTypeOf<keyof StepAttestationMaterial>().toEqualTypeOf<
+      | 'workflowId'
+      | 'workflowVersionId'
+      | 'workflowVersionSemanticDigest'
+      | 'deploymentId'
+      | 'runId'
+      | 'attemptNumber'
+      | 'stepId'
+      | 'executionClass'
+      | 'capability'
+      | 'action'
+      | 'inputCommitments'
+      | 'outputCommitments'
+      | 'observationCommitments'
+      | 'evidenceReferences'
+    >();
+    expect(durableB.statement.causalParents).toEqual([]);
 
     // --- P9 (pre-duplicate snapshot). the execution history ----------------
     const timelineBeforeDuplicates = history.timeline.map((entry) => entry.eventName);
@@ -1155,6 +1233,121 @@ describe('IG-006 — cross-device execution attestation composition over the mer
     expect(new Set(routeHistory.attestations.map((binding) => binding.attesterKeyId))).toEqual(
       new Set([keyA.keyId, keyB.keyId]),
     );
+  });
+
+  it('P3b (UNSATISFIED DEPENDENCY — admission coupling): the dependent action executes with NO admission decision derived from the Node-A attestation', async () => {
+    // The PR #152 correction (blocking finding #1), machine-checked. The
+    // merged public surfaces provide NO admission coupling between Node B's
+    // independent verification of the Node-A handoff attestation and the
+    // dependent action's execution:
+    //   - the V2-008 ResumeAfterHumanInput (the public resume surface) has
+    //     NO attestation/verification/admission field — its complete key set
+    //     is pinned below at the type level (enforced by `bun run
+    //     typecheck`, part of the verification battery; it FAILS the moment
+    //     the owning module adds a real admission input);
+    //   - the V2-005 ResumeRunInput is { runId, nodeId } — no precondition;
+    //   - the runtime walk loads run history ONLY for step routing and never
+    //     consults prior-step attestation bindings.
+    // The probe below proves the gap deterministically on the real stack: a
+    // fresh cross-device run where Node B NEVER verifies Node A's attestation
+    // (and Node B's runtime policy does not even TRUST Node A's attester key)
+    // still executes the dependent step and produces its real side effect.
+    expectTypeOf<keyof ResumeAfterHumanInput>().toEqualTypeOf<
+      | 'runId'
+      | 'hosts'
+      | 'humanOutcome'
+      | 'providedValue'
+      | 'humanUserId'
+      | 'decider'
+      | 'workflowInputs'
+    >();
+
+    const t = await freshGateTenant('admission-gap');
+    // an ISOLATED node directory (this test registers its own host pair)
+    const nodes = support.freshNodes();
+    const keyA = generateAttesterKeyPair();
+    const keyB = generateAttesterKeyPair();
+    const browserEnvironment = new ScriptedBrowserEnvironment([{
+      url: FORM_URL,
+      elements: [
+        { elementId: 'btn-submit', kind: 'button', label: 'Submit', state: 'enabled' },
+        { elementId: 'input-notes', kind: 'input', label: 'Notes', state: '' },
+      ],
+    }]);
+    const desktopEnvironment = new ScriptedDesktopEnvironment({ directories: ['reports'] });
+    const hostA = attachWebHost(keyA, browserEnvironment, nodes);
+    const hostB = attachDesktopHost(keyB, desktopEnvironment, nodes);
+
+    const pinned = await createCrossDeviceWorkflow(t, 'ig6-admission-gap', authorCrossDeviceDocument());
+    const requested = await support.runs.requestRun(
+      t.principal,
+      { commandId: 'cmd-ig006-admission-gap', correlationId: 'corr-ig006-admission-gap' },
+      {
+        organizationId: t.organizationId,
+        workflowId: pinned.workflowId,
+        versionId: pinned.versionId,
+        trigger: { type: 'manual', id: 'ig006-admission-gap' },
+        inputCommitments: [sha256Of('ig006-admission-gap')],
+      },
+    );
+    const runId = requested.result.run.id;
+
+    // Node A executes the first step: its OWN produce→verify→attach gates run
+    // (attestation A is produced and durably attached by Node A's runtime).
+    const runtimeA = nodeRuntime(nodes, { required: true, trustedAttesterKeyIds: [keyA.keyId], validityMs: 300_000 });
+    const reportA = await runtimeA.executeRun(t.principal, {
+      runId,
+      hosts: [hostA as ComputerHostAdapter],
+      decider: createBrowserSubmitDecider(),
+      workflowInputs: { formUrl: FORM_URL },
+    });
+    expect(reportA.state).toBe('paused');
+    expect(reportA.pausedAtStepId).toBe('approve');
+    expect(reportA.steps[0]!.attestationsAttached).toBe(1);
+
+    // NO TRANSFER and NO VERIFICATION at Node B: nothing between the pause
+    // and the resume — exactly the architect's blocking scenario ("the
+    // dependent side effect can execute without an admission decision
+    // derived from the independently verified Node-A attestation"). Node B's
+    // runtime policy deliberately does NOT trust Node A's attester key: if
+    // the merged runtime consulted the handoff attestation, this policy
+    // would refuse it.
+    const runtimeB = nodeRuntime(nodes, { required: true, trustedAttesterKeyIds: [keyB.keyId], validityMs: 3_600_000 });
+    const reportB = await runtimeB.resumeAfterHuman(t.principal, {
+      runId,
+      hosts: [hostB as ComputerHostAdapter],
+      humanOutcome: 'approved',
+      humanUserId: operatorUserId,
+      decider: createAckWriteDecider(),
+    });
+
+    // THE GAP, machine-checked: the dependent action EXECUTED — the run
+    // completed, the real acknowledgment file was written on Node B — with
+    // ZERO admission decision derived from the Node-A attestation. The
+    // resume input above carries no verification material (the type pin at
+    // the top of this test proves there is none to carry), so the merged
+    // composition cannot have consumed any. This assertion — and therefore
+    // this whole test — FAILS the moment an owning module adds a real
+    // admission coupling, forcing this gate to be revisited and P3 to be
+    // re-proven on the runtime path. Until then this is an UNSATISFIED
+    // DEPENDENCY surfaced for the architect (frozen scope: no sibling
+    // modifications inside IG-006).
+    expect(reportB.state).toBe('completed');
+    expect(reportB.failure).toBeNull();
+    const ackStep = reportB.steps.find((step) => step.stepId === 'record_ack');
+    expect(ackStep?.outcome).toBe('completed');
+    expect(ackStep?.attestationsAttached).toBe(1);
+    expect(desktopEnvironment.readFile(ACK_PATH)).toBe(ACK_CONTENT);
+    // Node B's only attestation is its OWN self-attestation of the dependent
+    // step (produced by its own gates) — never an admission of Node A's.
+    expect(hostB.attestations).toHaveLength(1);
+    expect(hostB.attestations[0]!.statement.stepId).toBe('record_ack');
+    const gapHistory = await support.runs.getRunHistory(t.principal, runId);
+    expect(gapHistory.run.state).toBe('completed');
+    expect(gapHistory.attestations).toHaveLength(2);
+    // order-independent (the history projection orders bindings by
+    // (attached_at, attestation_id) — select by the durable step binding):
+    expect([...gapHistory.attestations.map((binding) => binding.stepId)].sort()).toEqual(['collect', 'record_ack']);
   });
 
   it('P8: insufficient node trust produces the explicit typed ineligible result (no execution on the untrusted node)', async () => {

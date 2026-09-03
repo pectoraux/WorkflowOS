@@ -60,28 +60,37 @@
  *      out-of-band verifier-context.json (trusted attester key ids +
  *      run-derived binding expectations + freshness) — real Ed25519
  *      verification with zero production context.
- *   5. VERIFY on HOST B (independent verifier context, BEFORE admitting
- *      the dependent action): Node B's own verifier context (its own
+ *   5. VERIFY on HOST B (the independent V2-014 verifier domain — P3a;
+ *      the PR #152 correction): Node B's own verifier context (its own
  *      single-use replay registry, its own trusted-attester list, the
- *      run-derived binding expectations) admits the attestation; the
- *      verified fact attests statement_authenticity ONLY and explicitly
- *      never asserts authorization / capability possession / correctness /
- *      observed effect / sufficiency; negatives ALL typed and side-effect
- *      free: an attester list that does not trust Node A's key refuses
- *      admission (ATTESTATION_ATTESTER_UNEXPECTED, the acknowledgment
- *      file still absent), the re-presented handoff is a REPLAY
- *      (ATTESTATION_REPLAYED), an advanced protocol epoch is stale
+ *      run-derived binding expectations) verifies the transferred
+ *      attestation; the verified fact attests statement_authenticity ONLY
+ *      and explicitly never asserts authorization / capability possession /
+ *      correctness / observed effect / sufficiency; negatives ALL typed
+ *      and side-effect free: an attester list that does not trust Node A's
+ *      key refuses the verification (ATTESTATION_ATTESTER_UNEXPECTED, the
+ *      acknowledgment file still absent), the re-presented handoff is a
+ *      REPLAY (ATTESTATION_REPLAYED), an advanced protocol epoch is stale
  *      (ATTESTATION_EPOCH_STALE), an aged envelope is expired
- *      (ATTESTATION_EXPIRED).
- *   6. EXECUTE the dependent step on HOST B (admission granted):
- *      resumeAfterHuman(approved) → the acknowledgment is REALLY written
- *      (real node:fs bytes asserted) EXACTLY ONCE; Node B produces its own
- *      attestation, verified + durably attached through the same boundary;
- *      the causal-parent proof-graph leg is checked (a dependent statement
- *      carrying Node A's execution digest verifies under the causalParents
- *      expectation; the merged runtime's un-parented shape is refused
- *      typed on the causalParents dimension — the gap surfaced, never
- *      forced).
+ *      (ATTESTATION_EXPIRED). HONEST SCOPE: this verification result is NOT
+ *      consumed by the dependent action's admission — the admission
+ *      coupling gap is the P3b unsatisfied dependency machine-checked in
+ *      section 9 (and pinned in the gate test).
+ *   6. EXECUTE the dependent step on HOST B: resumeAfterHuman(approved) →
+ *      the acknowledgment is REALLY written (real node:fs bytes asserted)
+ *      EXACTLY ONCE; Node B produces its own attestation, verified +
+ *      durably attached through the same boundary. NOTE (P3b): this
+ *      execution is NOT structurally gated on the section-5 verification —
+ *      the merged resume surface accepts no admission material (the gap
+ *      is machine-checked in section 9). The causal legs are SPLIT (P5):
+ *      P5a — the merged V2-014 verifier ENFORCES the causalParents
+ *      dimension (a dependent statement carrying Node A's execution digest
+ *      verifies under the causalParents expectation; the runtime's
+ *      un-parented shape is refused typed on the causalParents dimension);
+ *      P5b — UNSATISFIED DEPENDENCY: the runtime-produced dependent
+ *      attestation carries causalParents: [] (the merged V2-008 production
+ *      surface has no causal-parent input), so the actual dependent
+ *      execution does not carry/enforce the causal predecessor binding.
  *   7. DISCONNECT/RECONNECT + REPLAY: the re-presented handoff (the
  *      reconnecting re-delivery of the admission message) is refused
  *      ATTESTATION_REPLAYED; the duplicate handoff delivery converges in
@@ -103,6 +112,25 @@
  *      new events from every duplicate), the typed rejection row, and the
  *      exactly-once command log — with exactly ONE run, ONE write effect
  *      per host, and the immutable version byte-identical.
+ *   9. THE P3b GAP PROBE (unsatisfied dependency, machine-checked on the
+ *      same stack): a SECOND run of the SAME pinned immutable version —
+ *      Node A executes its step (its own gates attach its attestation),
+ *      then Node B resumes with NO verification leg in between and with a
+ *      runtime policy that does NOT even trust Node A's attester key. The
+ *      dependent action still executes (the probe acknowledgment file is
+ *      really written): the dependent side effect occurs with ZERO
+ *      admission decision derived from the independently verified Node-A
+ *      attestation — the missing admission coupling, surfaced for the
+ *      architect (frozen scope: no sibling modifications).
+ *
+ * GATE VERDICT: FAIL — 2 UNSATISFIED DEPENDENCIES (P3b admission coupling,
+ * P5b runtime causal chain), per the architect's PR #152 REQUEST-CHANGES
+ * directive. Exit codes: 3 = the fail-closed verdict (all machine-checkable
+ * checks green and deterministic, both gaps machine-confirmed present);
+ * 1 = an experiment check failed or determinism broke; 0 = unreachable
+ * while the gaps are present (the gap checks fail loudly the moment an
+ * owning module adds the real coupling, forcing this gate to be
+ * revisited — the runner is self-invalidating by design).
  *
  * Determinism: fixed injected clocks (the shared trigger clock, epoch 7),
  * fixed node key seeds (node ids derive deterministically), fixed inputs.
@@ -112,8 +140,8 @@
  * dep_/sub_/evt_/dlv_/wfr_… ids, key-derived material — Ed25519 cannot be
  * seeded — sandbox suffixes, run labels), and the deterministic structured
  * facts (version digests, timeline, invocation/evidence sequences, typed
- * outcomes, node identities) are compared byte-for-byte. Exits non-zero
- * when any experiment check fails (fail-closed runner).
+ * outcomes, node identities, the two gap probes) are compared
+ * byte-for-byte.
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -175,6 +203,9 @@ const OPERATOR_EXTERNAL_ID = 'ig-006-dogfooding-operator';
 const FORM_URL = 'https://dogfooding.example/intake';
 const ACK_PATH = 'reports/ack.md';
 const ACK_CONTENT = 'ACK: intake form submitted and attested across devices';
+/** The P3b gap-probe run's DISTINCT side effect (never conflated with the main run's). */
+const PROBE_ACK_PATH = 'reports/probe-ack.md';
+const PROBE_ACK_CONTENT = 'PROBE ACK: dependent action executed with NO admission decision (the P3b gap, machine-checked)';
 const INTAKE_FORM_PATH = 'inbox/intake-form.txt';
 const INTAKE_FORM_CONTENT = [
   'INTAKE FORM — cross-device execution attestation dogfooding',
@@ -319,6 +350,13 @@ interface RunFacts {
     readonly expired: string;
   };
   readonly causalParentBinding: { readonly parentedVerifies: boolean; readonly unparentedRefused: string; readonly unparentedDimension: string };
+  readonly p3bAdmissionGapProbe: {
+    readonly probeRunCompleted: boolean;
+    readonly probeAckWritten: boolean;
+    /** false by probe design: Node B's runtime policy excludes Node A's key. */
+    readonly nodeBPolicyTrustsNodeA: boolean;
+  };
+  readonly p5bCausalGap: { readonly runtimeDependentCausalParentCount: number };
   readonly replayConvergence: {
     readonly ledgerFirstDelivery: string;
     readonly ledgerSecondDelivery: string;
@@ -338,7 +376,10 @@ interface RunFacts {
 // The workflow (authored through the merged V2-003 builder) + the deciders
 // ============================================================================
 
-function authorCrossDeviceDocument(): WorkflowIrDocument {
+function authorCrossDeviceDocument(
+  ackPath: string = ACK_PATH,
+  ackContent: string = ACK_CONTENT,
+): WorkflowIrDocument {
   const collect: WorkflowNode = {
     id: 'collect',
     executionClass: 'agentic_computer_use',
@@ -368,8 +409,8 @@ function authorCrossDeviceDocument(): WorkflowIrDocument {
     capabilityRequirements: ['filesystem.read', 'filesystem.write'],
     placement: 'device_local',
     inputs: [
-      { name: 'ackPath', type: { kind: 'string' }, binding: { kind: 'literal', value: ACK_PATH } },
-      { name: 'ackContent', type: { kind: 'string' }, binding: { kind: 'literal', value: ACK_CONTENT } },
+      { name: 'ackPath', type: { kind: 'string' }, binding: { kind: 'literal', value: ackPath } },
+      { name: 'ackContent', type: { kind: 'string' }, binding: { kind: 'literal', value: ackContent } },
     ],
     outputs: [{ name: 'written', type: { kind: 'boolean' } }],
     failurePolicy: { strategy: 'fail_workflow' },
@@ -385,6 +426,16 @@ function authorCrossDeviceDocument(): WorkflowIrDocument {
     .addEdge({ from: 'approve', to: 'record_ack', on: { outcome: 'approved' } })
     .addEdge({ from: 'approve', to: 'record_ack', on: { outcome: 'rejected' } })
     .build();
+}
+
+/**
+ * The P3b gap-probe document: IDENTICAL shape with DISTINCT output-path
+ * literals — the probe run's side effect is a separate real file, so the
+ * gap proof (the dependent action executing without admission) can never
+ * be conflated with the main run's acknowledgment.
+ */
+function authorGapProbeDocument(): WorkflowIrDocument {
+  return authorCrossDeviceDocument(PROBE_ACK_PATH, PROBE_ACK_CONTENT);
 }
 
 /** The Node A decider: observe the page → grounded click → verify. */
@@ -954,9 +1005,13 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       `the INDEPENDENT VERIFIER PROCESS (imports ONLY the merged public barrel; raw envelope bytes + out-of-band verifier-context.json) verified the transferred attestation with real Ed25519: ok, attests ${JSON.stringify(independent?.attests ?? null)}, neverAsserts ${JSON.stringify(independent?.neverAsserts ?? null)}`,
     );
 
-    section(`${runLabel} — 4. VERIFY on HOST B (independent verifier context, BEFORE admitting the dependent action)`);
+    section(`${runLabel} — 4. VERIFY on HOST B (the independent V2-014 verifier domain — P3a; NOT consumed by the dependent action's admission)`);
     // Node B's own verifier: its OWN single-use replay registry, its own
     // trusted-attester list, the run-derived binding expectations.
+    // HONEST SCOPE (the PR #152 correction): verifier-domain proof only —
+    // the result below is NOT consumed by the resumeAfterHuman path (the
+    // admission coupling gap is the P3b unsatisfied dependency, machine-
+    // checked in section 9 below and pinned in the gate test).
     const nodeBReplayRegistry = new InMemoryReplayRegistry();
     const admission = verifyAttestation(transferred.ok ? transferred.attestation : attestationA, {
       bindings: {
@@ -973,9 +1028,9 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     });
     const admissionFact = admission.ok ? admission.fact : null;
     check(
-      '4.admission-granted',
+      '4.independent-verification-p3a',
       admission.ok && admissionFact !== null && admissionFact.attests === 'statement_authenticity' && admissionFact.attesterKeyId === keyA.keyId && admissionFact.verifiedAt === support.clock.utc(),
-      `Node B's verifier context (fresh single-use replay registry, Node B's trusted-attester list, run-derived binding expectations) ADMITS the transferred attestation BEFORE the dependent action: the verified fact attests statement_authenticity only`,
+      `Node B's verifier context (fresh single-use replay registry, Node B's trusted-attester list, run-derived binding expectations) verifies the transferred attestation (P3a, the V2-014 verifier domain): the verified fact attests statement_authenticity only — NOTE: this verification result is NOT consumed by the dependent action's admission (the admission coupling is the P3b unsatisfied dependency, machine-checked in section 9)`,
     );
     check(
       '4.signature-never-authorizes',
@@ -996,7 +1051,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     check(
       '4.untrusted-attester-refused',
       untrusted.ok === false && (untrusted.ok ? null : untrusted.failure.code) === 'ATTESTATION_ATTESTER_UNEXPECTED' && !existsSync(ackFile),
-      `a verifier that does not trust Node A's key refuses admission TYPED (ATTESTATION_ATTESTER_UNEXPECTED) and the dependent step has NOT executed (the acknowledgment file does not exist — zero side effects on Node B)`,
+      `a verifier that does not trust Node A's key refuses the verification TYPED (ATTESTATION_ATTESTER_UNEXPECTED; the dependent step has not executed yet — but NOTE: this typed refusal is not consumed downstream either; the admission coupling gap is section 9)`,
     );
 
     // Freshness/replay negatives (all typed, all side-effect free).
@@ -1008,7 +1063,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     check(
       '4.replayed-handoff-refused',
       retry.ok === false && (retry.ok ? null : retry.failure.code) === 'ATTESTATION_REPLAYED',
-      'the REPLAYED handoff (the same admission message re-presented to Node B) is refused TYPED (ATTESTATION_REPLAYED — the single-use nonce was consumed at admission)',
+      'the REPLAYED handoff (the same verification message re-presented to Node B) is refused TYPED (ATTESTATION_REPLAYED — the single-use nonce was consumed at verification; P4 verifier-domain freshness)',
     );
     const epochAdvanced = verifyAttestation(transferred.ok ? transferred.attestation : attestationA, {
       bindings: { runId },
@@ -1033,7 +1088,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       'an aged envelope (verifier clock past issuedAt + validity) is expired TYPED (ATTESTATION_EXPIRED)',
     );
 
-    section(`${runLabel} — 5. EXECUTE the dependent step on HOST B (Node B, the desktop device)`);
+    section(`${runLabel} — 5. EXECUTE the dependent step on HOST B (Node B, the desktop device — NOT structurally gated on the section-4 verification)`);
     const runtimeB = nodeRuntime(support.nodes, {
       required: true,
       trustedAttesterKeyIds: [keyA.keyId, keyB.keyId],
@@ -1056,17 +1111,22 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
         ackStep?.attestationsAttached === 1 &&
         existsSync(ackFile) &&
         readFileSync(ackFile, 'utf8') === ACK_CONTENT,
-      `admission granted → Node B executes the dependent step (resumeAfterHuman over the DURABLE run: the human approved the handoff): the acknowledgment file is REALLY written (real node:fs bytes asserted) with the exact expected content`,
+      `Node B executes the dependent step (resumeAfterHuman over the DURABLE run: the human approved the handoff): the acknowledgment file is REALLY written (real node:fs bytes asserted) with the exact expected content — NOTE (P3b honest scope): this execution is NOT structurally gated on the section-4 verification (the merged resume surface accepts no admission material; the gap is machine-checked in section 9)`,
     );
     const attestationB = hostB.attestations[0]!;
 
-    // The causal-parent proof-graph leg: a dependent statement carrying Node
-    // A's execution digest verifies under the causalParents expectation; the
-    // merged runtime's un-parented shape is refused typed (surfaced, never forced).
+    // The causal legs, SPLIT per the PR #152 correction:
+    //   P5a (verifier domain) — the merged V2-014 verifier ENFORCES the
+    //     causalParents dimension: a dependent statement carrying Node A's
+    //     execution digest verifies under the causalParents expectation;
+    //     the runtime's un-parented shape is refused typed on the dimension.
+    //   P5b (unsatisfied dependency, machine-checked right below) — the
+    //     RUNTIME-produced dependent attestation carries causalParents: [].
     const historyMid = await support.runs.getRunHistory(principal, runId);
     const durableA = historyMid.attestations.find((binding) => binding.stepId === 'collect')!;
     const durableB = historyMid.attestations.find((binding) => binding.stepId === 'record_ack')!;
     const digestA = durableA.executionDigest;
+    const runtimeCausalParents = (durableB.statement as { causalParents: readonly string[] }).causalParents;
     const probeStatement: ExecutionStatement = {
       objectType: EXECUTION_STATEMENT_OBJECT_TYPE,
       statementSchemaVersion: EXECUTION_STATEMENT_SCHEMA_VERSION,
@@ -1111,13 +1171,18 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
     });
     check(
-      '5.causal-parent-binding',
+      '5.causal-verifier-p5a',
       probeValid === true &&
         causalOk.ok === true &&
         causalUnparented.ok === false &&
         (causalUnparented.ok ? null : causalUnparented.failure.code) === 'ATTESTATION_BINDING_MISMATCH' &&
         (causalUnparented.ok ? null : causalUnparented.failure.dimension) === 'causalParents',
-      `causal parent binding is enforced: a dependent statement carrying Node A's execution digest verifies under the causalParents expectation, while the merged runtime's un-parented statement shape is refused TYPED on dimension causalParents (the causal-chain gap is surfaced precisely, never forced)`,
+      `P5a (the V2-014 verifier domain): the causalParents dimension is ENFORCED — a dependent statement carrying Node A's execution digest verifies under the causalParents expectation, while the runtime's un-parented statement shape is refused TYPED on dimension causalParents`,
+    );
+    check(
+      '5.causal-gap-p5b',
+      runtimeCausalParents.length === 0,
+      `P5b UNSATISFIED DEPENDENCY (machine-checked): the RUNTIME-produced dependent attestation (the real durable record_ack binding) carries causalParents: [] — the merged V2-008 public production surface (StepAttestationMaterial) has NO causal-parent input, so the actual dependent execution does not carry/enforce the causal predecessor binding. Surfaced for the architect (frozen scope: no sibling modifications inside IG-006); this check FAILS loudly the moment the owning module adds a real causal-parent input, forcing this gate to be revisited`,
     );
 
     section(`${runLabel} — 6. DISCONNECT/RECONNECT + REPLAY: every duplicate converges side-effect-safely`);
@@ -1257,7 +1322,75 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
         readFileSync(ackFile, 'utf8') === ACK_CONTENT &&
         finalVersionRead.status === 200 &&
         finalVersionRead.raw === versionBodyBefore,
-      `FINAL ACCOUNTING: exactly ONE run, ONE durable rejection row (the typed replay), ONE write effect per host (the acknowledgment bytes EXACT), and the immutable version byte-identical after the whole experiment`,
+      `FINAL ACCOUNTING (the main run): exactly ONE run, ONE durable rejection row (the typed replay), ONE write effect per host (the acknowledgment bytes EXACT), and the immutable version byte-identical after the whole experiment`,
+    );
+
+    section(`${runLabel} — 9. THE P3b GAP PROBE (unsatisfied dependency — machine-checked)`);
+    // A second safe cross-device workflow (identical shape, DISTINCT output
+    // literals, authored + run through the same real surfaces). Node A
+    // executes its step (its own produce→verify→attach gates attach its
+    // attestation); then Node B resumes with NO verification leg in between
+    // AND a runtime policy that does NOT even trust Node A's attester key.
+    // The dependent action still executes — the missing admission coupling,
+    // machine-checked (this check FAILS loudly the moment an owning module
+    // adds a real admission coupling, forcing this gate to be revisited).
+    const probeCreate = await inject('POST', `/organizations/${orgId}/workflow-repository/workflows`, {
+      slug: 'ig6-cross-device-intake-ack-p3b-probe',
+      name: 'Cross-Device Intake Acknowledgment (P3b Gap Probe)',
+      description: 'Browser step on the web device, human handoff approval, device-local acknowledgment write — the admission-coupling gap probe',
+      visibility: 'private',
+      content: versionContentOf(authorGapProbeDocument()),
+      protocol: { irSchemaVersion: 'workflowos-workflow-ir-v1' },
+    });
+    const probeCreated = probeCreate.body as unknown as {
+      workflow: { id: string };
+      initialVersion: { id: string; versionNumber: number; contentDigest: string };
+    };
+    const probeWorkflowId = probeCreated.workflow.id;
+    const probeVersionId = probeCreated.initialVersion.id;
+    const probeRequested = await support.runs.requestRun(
+      principal,
+      { commandId: 'cmd-ig006-dogfooding-p3b-gap-probe', correlationId: 'corr-ig006-dogfooding-p3b-gap-probe' },
+      {
+        organizationId: orgId,
+        workflowId: probeWorkflowId,
+        versionId: probeVersionId,
+        trigger: { type: 'manual', id: 'ig006-dogfooding-p3b-gap-probe' },
+        inputCommitments: [sha256Of('ig006-dogfooding-p3b-gap-probe')],
+      },
+    );
+    const probeRunId = probeRequested.result.run.id;
+    const probeRuntimeA = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyA.keyId], validityMs: 300_000 });
+    const probeReportA = await probeRuntimeA.executeRun(principal, {
+      runId: probeRunId,
+      hosts: [hostA as ComputerHostAdapter],
+      decider: createBrowserSubmitDecider(),
+      workflowInputs: { formUrl: FORM_URL },
+    });
+    // NO TRANSFER, NO VERIFICATION between the pause and the resume — and
+    // Node B's runtime policy deliberately does NOT trust Node A's key.
+    const probeRuntimeB = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyB.keyId], validityMs: 3_600_000 });
+    const probeReportB = await probeRuntimeB.resumeAfterHuman(principal, {
+      runId: probeRunId,
+      hosts: [hostB as ComputerHostAdapter],
+      humanOutcome: 'approved',
+      humanUserId: operator.id,
+      decider: createAckWriteDecider(),
+    });
+    const probeAckFile = join(sandboxDir, PROBE_ACK_PATH);
+    const probeAckWritten = existsSync(probeAckFile) && readFileSync(probeAckFile, 'utf8') === PROBE_ACK_CONTENT;
+    const probeHistory = await support.runs.getRunHistory(principal, probeRunId);
+    check(
+      '9.p3b-admission-coupling-gap',
+      probeCreate.status === 201 &&
+        probeCreated.initialVersion.versionNumber === 1 &&
+        probeReportA.state === 'paused' &&
+        probeReportA.pausedAtStepId === 'approve' &&
+        probeReportB.state === 'completed' &&
+        probeAckWritten &&
+        probeHistory.run.state === 'completed' &&
+        probeHistory.attestations.length === 2,
+      `P3b UNSATISFIED DEPENDENCY (machine-checked): the dependent action EXECUTED on Node B (the probe acknowledgment file REALLY written, real node:fs bytes asserted) although NO verification of Node A's handoff attestation ever happened at Node B and Node B's runtime policy does not even trust Node A's attester key — the merged public resume surface (V2-008 ResumeAfterHumanInput / V2-005 resume) accepts NO admission/verification material, so the dependent side effect is possible without any admission decision derived from the independently verified Node-A attestation. Surfaced for the architect (frozen scope: no sibling modifications inside IG-006)`,
     );
 
     const facts: RunFacts = {
@@ -1323,6 +1456,14 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
         unparentedRefused: causalUnparented.ok ? 'ok' : causalUnparented.failure.code,
         unparentedDimension: causalUnparented.ok ? '—' : causalUnparented.failure.dimension ?? '—',
       },
+      p3bAdmissionGapProbe: {
+        probeRunCompleted: probeReportB.state === 'completed',
+        probeAckWritten,
+        nodeBPolicyTrustsNodeA: false,
+      },
+      p5bCausalGap: {
+        runtimeDependentCausalParentCount: runtimeCausalParents.length,
+      },
       replayConvergence: {
         ledgerFirstDelivery: firstDelivery.kind,
         ledgerSecondDelivery: secondDelivery.kind,
@@ -1384,14 +1525,54 @@ async function main(): Promise<void> {
     }
   }
   transcript.push('');
+  // The PR #152 correction verdict: the gate FAILS CLOSED on the two
+  // unsatisfied dependencies (surfaced, machine-confirmed) instead of
+  // claiming IG-006 PASS. Exit 3 = fail-closed verdict (all machine-checkable
+  // checks green + deterministic, gaps present); exit 1 = experiment failure;
+  // exit 0 = only reachable after the gaps are resolved AND this runner is
+  // revisited (the gap checks fail loudly the moment the coupling exists).
+  const p3bGapPresent =
+    one.facts.p3bAdmissionGapProbe.probeRunCompleted === true &&
+    one.facts.p3bAdmissionGapProbe.probeAckWritten === true &&
+    one.facts.p3bAdmissionGapProbe.nodeBPolicyTrustsNodeA === false &&
+    two.facts.p3bAdmissionGapProbe.probeRunCompleted === true &&
+    two.facts.p3bAdmissionGapProbe.probeAckWritten === true;
+  const p5bGapPresent =
+    one.facts.p5bCausalGap.runtimeDependentCausalParentCount === 0 &&
+    two.facts.p5bCausalGap.runtimeDependentCausalParentCount === 0;
+  const experimentOk = failuresOne === 0 && failuresTwo === 0 && factsEqual && deterministic;
+  const gatePass = experimentOk && !p3bGapPresent && !p5bGapPresent;
+  transcript.push('GATE VERDICT: FAIL — UNSATISFIED DEPENDENCIES');
+  if (p3bGapPresent) {
+    transcript.push('  - P3b admission coupling: Node B\'s independent verification of the Node-A attestation is NOT');
+    transcript.push('    consumed by the dependent action\'s admission — the merged V2-008 ResumeAfterHumanInput and');
+    transcript.push('    the V2-005 resume command accept no admission/verification material, and the runtime walk');
+    transcript.push('    never consults prior-step attestation bindings (machine-confirmed by the section-9 probe on');
+    transcript.push('    both fresh-stack runs; the full key set of the public resume surface is pinned in the gate test).');
+  }
+  if (p5bGapPresent) {
+    transcript.push('  - P5b runtime causal chain: the runtime-produced dependent attestation carries causalParents: []');
+    transcript.push('    — the merged V2-008 public production surface (StepAttestationMaterial) has no causal-parent');
+    transcript.push('    input, so the actual dependent execution does not carry/enforce the causal predecessor');
+    transcript.push('    binding (machine-confirmed on both fresh-stack runs; the surface key set is pinned in the gate');
+    transcript.push('    test).');
+  }
+  transcript.push('  (surfaced per the architect\'s PR #152 REQUEST-CHANGES directive; resolution requires a public');
+  transcript.push('   admission/causal coupling surface in the owning module — the architect\'s disposition. V2-015');
+  transcript.push('   remains blocked exactly as the frozen roadmap requires.)');
+  transcript.push('');
   transcript.push(
-    `DOGFOODING RESULT: ${failuresOne === 0 && failuresTwo === 0 && factsEqual && deterministic ? 'PASS (deterministic across two fresh runs)' : 'FAIL'}`,
+    `DOGFOODING RESULT: ${gatePass
+      ? 'PASS (the gaps are resolved — every proof on the runtime composition path)'
+      : experimentOk
+        ? 'FAIL (fail-closed: 2 unsatisfied dependencies; every machine-checkable check PASSES and is deterministic across the two fresh runs)'
+        : 'FAIL (experiment failure — see the checks above)'}`,
   );
   const output = transcript.join('\n');
   // eslint-disable-next-line no-console
   console.log(output);
   console.error(`normalized-transcript-sha256: ${sha256Of(normalizedTwo)}`);
-  process.exit(failuresOne === 0 && failuresTwo === 0 && factsEqual && deterministic ? 0 : 1);
+  process.exit(experimentOk ? (gatePass ? 0 : 3) : 1);
 }
 
 /**
