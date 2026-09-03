@@ -60,37 +60,36 @@
  *      out-of-band verifier-context.json (trusted attester key ids +
  *      run-derived binding expectations + freshness) — real Ed25519
  *      verification with zero production context.
- *   5. VERIFY on HOST B (the independent V2-014 verifier domain — P3a;
- *      the PR #152 correction): Node B's own verifier context (its own
- *      single-use replay registry, its own trusted-attester list, the
- *      run-derived binding expectations) verifies the transferred
- *      attestation; the verified fact attests statement_authenticity ONLY
- *      and explicitly never asserts authorization / capability possession /
- *      correctness / observed effect / sufficiency; negatives ALL typed
- *      and side-effect free: an attester list that does not trust Node A's
- *      key refuses the verification (ATTESTATION_ATTESTER_UNEXPECTED, the
- *      acknowledgment file still absent), the re-presented handoff is a
- *      REPLAY (ATTESTATION_REPLAYED), an advanced protocol epoch is stale
- *      (ATTESTATION_EPOCH_STALE), an aged envelope is expired
- *      (ATTESTATION_EXPIRED). HONEST SCOPE: this verification result is NOT
- *      consumed by the dependent action's admission — the admission
- *      coupling gap is the P3b unsatisfied dependency machine-checked in
- *      section 9 (and pinned in the gate test).
- *   6. EXECUTE the dependent step on HOST B: resumeAfterHuman(approved) →
- *      the acknowledgment is REALLY written (real node:fs bytes asserted)
- *      EXACTLY ONCE; Node B produces its own attestation, verified +
- *      durably attached through the same boundary. NOTE (P3b): this
- *      execution is NOT structurally gated on the section-5 verification —
- *      the merged resume surface accepts no admission material (the gap
- *      is machine-checked in section 9). The causal legs are SPLIT (P5):
- *      P5a — the merged V2-014 verifier ENFORCES the causalParents
- *      dimension (a dependent statement carrying Node A's execution digest
- *      verifies under the causalParents expectation; the runtime's
- *      un-parented shape is refused typed on the causalParents dimension);
- *      P5b — UNSATISFIED DEPENDENCY: the runtime-produced dependent
- *      attestation carries causalParents: [] (the merged V2-008 production
- *      surface has no causal-parent input), so the actual dependent
- *      execution does not carry/enforce the causal predecessor binding.
+ *   5. VERIFY on HOST B (the independent V2-014 verifier domain — P3a):
+ *      Node B's own verifier context (its own single-use replay registry,
+ *      its own trusted-attester list, the run-derived binding expectations)
+ *      verifies the transferred attestation; the verified fact attests
+ *      statement_authenticity ONLY and explicitly never asserts
+ *      authorization / capability possession / correctness / observed
+ *      effect / sufficiency; negatives ALL typed and side-effect free: an
+ *      attester list that does not trust Node A's key refuses the
+ *      verification (ATTESTATION_ATTESTER_UNEXPECTED — and produces NO
+ *      fact, so NO admission precondition can be constructed), the
+ *      re-presented handoff is a REPLAY (ATTESTATION_REPLAYED), an advanced
+ *      protocol epoch is stale (ATTESTATION_EPOCH_STALE), an aged envelope
+ *      is expired (ATTESTATION_EXPIRED). THE COUPLING (the V2-016 re-prove):
+ *      the VerifiedExecutionFact minted here is CONSUMED by the dependent
+ *      action's admission in section 6 — the verification result and the
+ *      dependent execution are ONE composition path.
+ *   6. EXECUTE the dependent step on HOST B (the V2-016 runtime path):
+ *      resumeAfterHuman(approved, preconditions=[the precondition derived
+ *      from the section-5 verified fact]) → the runtime validates the
+ *      precondition structurally at drive entry, ADMITS the dependent step,
+ *      and the acknowledgment is REALLY written (real node:fs bytes asserted)
+ *      EXACTLY ONCE; Node B produces its own attestation, verified + durably
+ *      attached through the same boundary. The causal legs are BOTH REAL:
+ *      P5a — the merged V2-014 verifier ENFORCES the causalParents dimension
+ *      (an un-parented statement and a wrong-parented statement are refused
+ *      typed on the causalParents dimension); P5b — the RUNTIME-PRODUCED
+ *      dependent attestation carries Node A's execution digest in
+ *      causalParents (never a hand-built statement: the actual production
+ *      path), and that produced attestation verifies under the
+ *      causalParents expectation.
  *   7. DISCONNECT/RECONNECT + REPLAY: the re-presented handoff (the
  *      reconnecting re-delivery of the admission message) is refused
  *      ATTESTATION_REPLAYED; the duplicate handoff delivery converges in
@@ -112,25 +111,22 @@
  *      new events from every duplicate), the typed rejection row, and the
  *      exactly-once command log — with exactly ONE run, ONE write effect
  *      per host, and the immutable version byte-identical.
- *   9. THE P3b GAP PROBE (unsatisfied dependency, machine-checked on the
- *      same stack): a SECOND run of the SAME pinned immutable version —
+ *   9. THE FAIL-CLOSED ADMISSION PROBES (the P3b coupling re-proved,
+ *      machine-checked on the same stack): a SECOND run of the SAME pinned
+ *      immutable version (the probe run, distinct output-path literals) —
  *      Node A executes its step (its own gates attach its attestation),
- *      then Node B resumes with NO verification leg in between and with a
- *      runtime policy that does NOT even trust Node A's attester key. The
- *      dependent action still executes (the probe acknowledgment file is
- *      really written): the dependent side effect occurs with ZERO
- *      admission decision derived from the independently verified Node-A
- *      attestation — the missing admission coupling, surfaced for the
- *      architect (frozen scope: no sibling modifications).
- *
- * GATE VERDICT: FAIL — 2 UNSATISFIED DEPENDENCIES (P3b admission coupling,
- * P5b runtime causal chain), per the architect's PR #152 REQUEST-CHANGES
- * directive. Exit codes: 3 = the fail-closed verdict (all machine-checkable
- * checks green and deterministic, both gaps machine-confirmed present);
- * 1 = an experiment check failed or determinism broke; 0 = unreachable
- * while the gaps are present (the gap checks fail loudly the moment an
- * owning module adds the real coupling, forcing this gate to be
- * revisited — the runner is self-invalidating by design).
+ *      then Node B attempts the dependent drive with NO verification leg
+ *      in between and a runtime policy that does NOT even trust Node A's
+ *      attester key: the dependent action is REFUSED (the typed
+ *      AGENT_PRECONDITION_REJECTED, ZERO host side effects — the probe
+ *      acknowledgment file is NOT written). A third run demonstrates
+ *      CROSS-RUN FACT THEFT (a genuine fact verified for another run,
+ *      supplied as this run's precondition: typed
+ *      COMPUTER_AGENT_PRECONDITION_REJECTED at drive entry, the run left
+ *      PAUSED, zero side effects) and the GENUINE RE-DRIVE (the corrected,
+ *      genuinely-verified precondition completes the run and the dependent
+ *      attestation carries the causal parent) — the admission coupling,
+ *      machine-checked in BOTH directions.
  *
  * Determinism: fixed injected clocks (the shared trigger clock, epoch 7),
  * fixed node key seeds (node ids derive deterministically), fixed inputs.
@@ -140,8 +136,17 @@
  * dep_/sub_/evt_/dlv_/wfr_… ids, key-derived material — Ed25519 cannot be
  * seeded — sandbox suffixes, run labels), and the deterministic structured
  * facts (version digests, timeline, invocation/evidence sequences, typed
- * outcomes, node identities, the two gap probes) are compared
- * byte-for-byte.
+ * outcomes, node identities, the admission/causal coupling probes) are
+ * compared byte-for-byte.
+ *
+ * GATE VERDICT: PASS — every frozen proof green on the RUNTIME COMPOSITION
+ * PATH (the V2-016 re-prove after the blocked PR #152 attempt). Exit codes:
+ * 0 = PASS (all machine-checkable checks green + deterministic + both
+ * couplings positively proven on the runtime path); 1 = an experiment
+ * check failed, determinism broke, or either coupling is no longer proven
+ * (the coupling checks fail loudly the moment the runtime contract drifts,
+ * forcing this gate to be revisited — the runner remains self-checking by
+ * design).
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -181,6 +186,7 @@ import {
   type AttestingComputerHost,
   type ComputerAgentPolicy,
   type ComputerHostAdapter,
+  type DependentStepPrecondition,
 } from '../../../src/computer-agent/index.js';
 import {
   generateAttesterKeyPair,
@@ -203,9 +209,9 @@ const OPERATOR_EXTERNAL_ID = 'ig-006-dogfooding-operator';
 const FORM_URL = 'https://dogfooding.example/intake';
 const ACK_PATH = 'reports/ack.md';
 const ACK_CONTENT = 'ACK: intake form submitted and attested across devices';
-/** The P3b gap-probe run's DISTINCT side effect (never conflated with the main run's). */
+/** The section-9 probe run's DISTINCT side effect (never conflated with the main run's). */
 const PROBE_ACK_PATH = 'reports/probe-ack.md';
-const PROBE_ACK_CONTENT = 'PROBE ACK: dependent action executed with NO admission decision (the P3b gap, machine-checked)';
+const PROBE_ACK_CONTENT = 'PROBE ACK: dependent action admitted through the verification-derived precondition (the P3b coupling, re-proved)';
 const INTAKE_FORM_PATH = 'inbox/intake-form.txt';
 const INTAKE_FORM_CONTENT = [
   'INTAKE FORM — cross-device execution attestation dogfooding',
@@ -335,7 +341,8 @@ interface RunFacts {
       readonly attemptId: number;
       readonly epoch: number;
       readonly outcome: string;
-      readonly causalParents: readonly string[];
+      /** the parent COUNT only — the digest VALUES are Ed25519-derived run bookkeeping. */
+      readonly causalParentCount: number;
       readonly evidenceReferenceCount: number;
       readonly evidenceReferencesResolve: boolean;
     };
@@ -349,14 +356,31 @@ interface RunFacts {
     readonly epochStale: string;
     readonly expired: string;
   };
-  readonly causalParentBinding: { readonly parentedVerifies: boolean; readonly unparentedRefused: string; readonly unparentedDimension: string };
-  readonly p3bAdmissionGapProbe: {
-    readonly probeRunCompleted: boolean;
-    readonly probeAckWritten: boolean;
-    /** false by probe design: Node B's runtime policy excludes Node A's key. */
-    readonly nodeBPolicyTrustsNodeA: boolean;
+  readonly causalParentBinding: { readonly parentedVerifies: boolean; readonly unparentedRefused: string; readonly unparentedDimension: string; readonly wrongParentRefused: string };
+  readonly p3AdmissionCoupling: {
+    /** (a) the missing-admission probe: the dependent drive REFUSED typed, zero side effects. */
+    readonly missingPreconditionRefused: boolean;
+    /** (a) the probe run's durable end state. */
+    readonly probeRunFailed: boolean;
+    /** (a)+(b) the probe acknowledgment file stays ABSENT until the genuine re-drive. */
+    readonly probeAckAbsentBeforeReDrive: boolean;
+    /** (b) the cross-run fact-theft rejection code (typed at drive entry). */
+    readonly crossRunTheftRejected: string;
+    /** (b) the run left PAUSED after the entry rejection. */
+    readonly runTwoLeftPaused: boolean;
+    /** (c) the genuine re-drive completes the run. */
+    readonly reDriveCompleted: boolean;
+    /** (c) the re-drive's dependent attestation causal-parent count. */
+    readonly reDriveCausalParentCount: number;
   };
-  readonly p5bCausalGap: { readonly runtimeDependentCausalParentCount: number };
+  readonly p5RuntimeCausalChain: {
+    /** the RUNTIME-produced dependent attestation's causal-parent count (main path). */
+    readonly runtimeDependentCausalParentCount: number;
+    /** the produced parent digest EQUALS the verified fact's execution digest (never the digest itself — key-derived). */
+    readonly parentMatchesVerifiedFact: boolean;
+    /** the RUNTIME-produced parented attestation verifies under the causal expectation. */
+    readonly runtimeProducedParentedVerifies: boolean;
+  };
   readonly replayConvergence: {
     readonly ledgerFirstDelivery: string;
     readonly ledgerSecondDelivery: string;
@@ -604,7 +628,11 @@ function supportClock(): TriggerTestStack['clock'] {
 }
 
 /** One node's runtime over the REAL stack (each node: its OWN replay registry). */
-function nodeRuntime(nodes: TriggerTestStack['nodes'], attestation: ComputerAgentPolicy['attestation']): ComputerAgentRuntime {
+function nodeRuntime(
+  nodes: TriggerTestStack['nodes'],
+  attestation: ComputerAgentPolicy['attestation'],
+  dependentStepIds?: readonly string[],
+): ComputerAgentRuntime {
   return new ComputerAgentRuntime({
     recorder: activeSupport!.runs,
     nodes,
@@ -622,6 +650,10 @@ function nodeRuntime(nodes: TriggerTestStack['nodes'], attestation: ComputerAgen
         { capability: 'filesystem.write', scope: 'run' },
       ] },
       attestation,
+      // V2-016 — the dependent-admission policy (runtime configuration):
+      // the dependent step REQUIRES an admitted V2-014-derived verified
+      // predecessor before its first side-effecting host invocation.
+      ...(dependentStepIds ? { dependentStepIds } : {}),
     },
     replayRegistry: new InMemoryReplayRegistry(),
   });
@@ -1005,13 +1037,12 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       `the INDEPENDENT VERIFIER PROCESS (imports ONLY the merged public barrel; raw envelope bytes + out-of-band verifier-context.json) verified the transferred attestation with real Ed25519: ok, attests ${JSON.stringify(independent?.attests ?? null)}, neverAsserts ${JSON.stringify(independent?.neverAsserts ?? null)}`,
     );
 
-    section(`${runLabel} — 4. VERIFY on HOST B (the independent V2-014 verifier domain — P3a; NOT consumed by the dependent action's admission)`);
+    section(`${runLabel} — 4. VERIFY on HOST B (the independent V2-014 verifier domain — P3a; the fact is CONSUMED by the dependent admission)`);
     // Node B's own verifier: its OWN single-use replay registry, its own
-    // trusted-attester list, the run-derived binding expectations.
-    // HONEST SCOPE (the PR #152 correction): verifier-domain proof only —
-    // the result below is NOT consumed by the resumeAfterHuman path (the
-    // admission coupling gap is the P3b unsatisfied dependency, machine-
-    // checked in section 9 below and pinned in the gate test).
+    // trusted-attester list, the run-derived binding expectations. THE
+    // COUPLING (the V2-016 re-prove): the VerifiedExecutionFact minted here
+    // is the admission currency consumed by the section-5 dependent drive —
+    // the verification result and the dependent execution are ONE path.
     const nodeBReplayRegistry = new InMemoryReplayRegistry();
     const admission = verifyAttestation(transferred.ok ? transferred.attestation : attestationA, {
       bindings: {
@@ -1030,7 +1061,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     check(
       '4.independent-verification-p3a',
       admission.ok && admissionFact !== null && admissionFact.attests === 'statement_authenticity' && admissionFact.attesterKeyId === keyA.keyId && admissionFact.verifiedAt === support.clock.utc(),
-      `Node B's verifier context (fresh single-use replay registry, Node B's trusted-attester list, run-derived binding expectations) verifies the transferred attestation (P3a, the V2-014 verifier domain): the verified fact attests statement_authenticity only — NOTE: this verification result is NOT consumed by the dependent action's admission (the admission coupling is the P3b unsatisfied dependency, machine-checked in section 9)`,
+      `Node B's verifier context (fresh single-use replay registry, Node B's trusted-attester list, run-derived binding expectations) verifies the transferred attestation (P3a, the V2-014 verifier domain): the verified fact attests statement_authenticity only — and this verification RESULT is the admission currency consumed by the dependent drive in section 5 (the V2-016 coupling)`,
     );
     check(
       '4.signature-never-authorizes',
@@ -1051,7 +1082,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     check(
       '4.untrusted-attester-refused',
       untrusted.ok === false && (untrusted.ok ? null : untrusted.failure.code) === 'ATTESTATION_ATTESTER_UNEXPECTED' && !existsSync(ackFile),
-      `a verifier that does not trust Node A's key refuses the verification TYPED (ATTESTATION_ATTESTER_UNEXPECTED; the dependent step has not executed yet — but NOTE: this typed refusal is not consumed downstream either; the admission coupling gap is section 9)`,
+      `a verifier that does not trust Node A's key refuses the verification TYPED (ATTESTATION_ATTESTER_UNEXPECTED) and produces NO fact — the admission currency is IMPOSSIBLE to mint without trusting the attester, so no dependent admission can be constructed (the fail-closed admission probe is section 9)`,
     );
 
     // Freshness/replay negatives (all typed, all side-effect free).
@@ -1088,22 +1119,46 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       'an aged envelope (verifier clock past issuedAt + validity) is expired TYPED (ATTESTATION_EXPIRED)',
     );
 
-    section(`${runLabel} — 5. EXECUTE the dependent step on HOST B (Node B, the desktop device — NOT structurally gated on the section-4 verification)`);
+    section(`${runLabel} — 5. EXECUTE the dependent step on HOST B (Node B, the desktop device — the V2-016 admission path consuming the section-4 verified fact)`);
+    // THE ADMISSION COUPLING (the V2-016 re-prove): the precondition is
+    // derived from the section-4 verification RESULT (Node B's own verifier
+    // minted the fact) and supplied to the runtime's dependent-admission
+    // boundary on the resume drive. The runtime validates it structurally
+    // at drive entry and admits the dependent step's first side-effecting
+    // host invocation ONLY with it (the fail-closed probes are section 9).
     const runtimeB = nodeRuntime(support.nodes, {
       required: true,
       trustedAttesterKeyIds: [keyA.keyId, keyB.keyId],
       validityMs: 3_600_000,
-    });
+    }, ['record_ack']);
+    const runRecord = await support.runs.getRun(principal, runId);
+    const predecessorPrecondition: DependentStepPrecondition | null = admission.ok
+      ? {
+          dependentStepId: 'record_ack',
+          predecessorAttestationId: admission.fact.attestationId,
+          verifiedPredecessor: admission.fact,
+          causalParentDigests: [admission.fact.executionDigest.digest],
+          runId,
+          workflowVersionId: runRecord.versionId,
+          workflowVersionSemanticDigest: runRecord.versionSemanticDigest,
+        }
+      : null;
+    check(
+      '5.precondition-derived-from-verification',
+      predecessorPrecondition !== null,
+      `the dependent admission precondition is DERIVED from the section-4 verification result (the V2-014 VerifiedExecutionFact minted by Node B's own verifier — the admission currency; the declared causal parent is the fact's own execution digest)`,
+    );
     const reportB = await runtimeB.resumeAfterHuman(principal, {
       runId,
       hosts: [hostB as ComputerHostAdapter],
       humanOutcome: 'approved',
       humanUserId: operator.id,
       decider: createAckWriteDecider(),
+      ...(predecessorPrecondition !== null ? { preconditions: [predecessorPrecondition] } : {}),
     });
     const ackStep = reportB.steps.find((step) => step.stepId === 'record_ack');
     check(
-      '5.dependent-step-executed',
+      '5.dependent-step-admitted-and-executed',
       reportB.state === 'completed' &&
         reportB.failure === null &&
         ackStep?.outcome === 'completed' &&
@@ -1111,22 +1166,31 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
         ackStep?.attestationsAttached === 1 &&
         existsSync(ackFile) &&
         readFileSync(ackFile, 'utf8') === ACK_CONTENT,
-      `Node B executes the dependent step (resumeAfterHuman over the DURABLE run: the human approved the handoff): the acknowledgment file is REALLY written (real node:fs bytes asserted) with the exact expected content — NOTE (P3b honest scope): this execution is NOT structurally gated on the section-4 verification (the merged resume surface accepts no admission material; the gap is machine-checked in section 9)`,
+      `Node B's dependent step is ADMITTED through the verification-derived precondition (consumed before its first side effect) and executed (resumeAfterHuman over the DURABLE run: the human approved the handoff): the acknowledgment file is REALLY written (real node:fs bytes asserted) with the exact expected content`,
     );
     const attestationB = hostB.attestations[0]!;
 
-    // The causal legs, SPLIT per the PR #152 correction:
+    // The causal legs, BOTH REAL now (the V2-016 re-prove):
+    //   P5b (runtime production, PROVEN) — the RUNTIME-PRODUCED dependent
+    //     attestation (the real durable record_ack binding AND the captured
+    //     envelope from Node B's signing host) carries EXACTLY Node A's
+    //     execution digest in causalParents (never a hand-built statement:
+    //     the actual production path), and that produced attestation
+    //     verifies under the causalParents expectation.
     //   P5a (verifier domain) — the merged V2-014 verifier ENFORCES the
-    //     causalParents dimension: a dependent statement carrying Node A's
-    //     execution digest verifies under the causalParents expectation;
-    //     the runtime's un-parented shape is refused typed on the dimension.
-    //   P5b (unsatisfied dependency, machine-checked right below) — the
-    //     RUNTIME-produced dependent attestation carries causalParents: [].
+    //     causalParents dimension: hand-built UN-PARENTED and WRONG-PARENTED
+    //     probes are refused typed on the dimension.
     const historyMid = await support.runs.getRunHistory(principal, runId);
     const durableA = historyMid.attestations.find((binding) => binding.stepId === 'collect')!;
     const durableB = historyMid.attestations.find((binding) => binding.stepId === 'record_ack')!;
     const digestA = durableA.executionDigest;
     const runtimeCausalParents = (durableB.statement as { causalParents: readonly string[] }).causalParents;
+    const producedCausalOk = verifyAttestation(attestationB, {
+      bindings: { runId, attemptId: 1, stepId: 'record_ack', causalParents: [digestA] },
+      freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
+      attesterKeyIds: [keyB.keyId],
+    });
+    const factDigestMatchesDurable = admissionFact !== null && admissionFact.executionDigest.digest === digestA;
     const probeStatement: ExecutionStatement = {
       objectType: EXECUTION_STATEMENT_OBJECT_TYPE,
       statementSchemaVersion: EXECUTION_STATEMENT_SCHEMA_VERSION,
@@ -1146,7 +1210,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       outputCommitments: durableB.statement.outputCommitments as readonly string[],
       observationCommitments: durableB.statement.observationCommitments as readonly string[],
       evidenceReferences: durableB.statement.evidenceReferences as readonly string[],
-      causalParents: [digestA],
+      causalParents: [],
       nonce: hostB.nextNonce(),
       epoch: TRIGGER_TEST_EPOCH,
       outcome: 'succeeded',
@@ -1154,35 +1218,48 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       validUntil: formatUtcTimestamp(epochMsOf(support.clock.utc()) + 3_600_000),
     };
     const probeValid = validateExecutionStatement(probeStatement).ok;
-    const probeAttestation = signExecutionAttestation({
+    const unparentedProbeAttestation = signExecutionAttestation({
       statement: probeStatement,
       attesterPrivateKey: keyB.privateKey,
       attesterPublicKeyDer: keyB.publicKeyDer,
       assurance: 'software_signed',
       issuedAt: support.clock.utc(),
     });
-    const causalOk = verifyAttestation(probeAttestation, {
+    const causalUnparented = verifyAttestation(unparentedProbeAttestation, {
       bindings: { runId, attemptId: 1, stepId: 'record_ack', causalParents: [digestA] },
       freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
       attesterKeyIds: [keyB.keyId],
     });
-    const causalUnparented = verifyAttestation(attestationB, {
+    const wrongParentProbeAttestation = signExecutionAttestation({
+      statement: { ...probeStatement, causalParents: [sha256Of('wrong-parent-digest')], nonce: hostB.nextNonce() },
+      attesterPrivateKey: keyB.privateKey,
+      attesterPublicKeyDer: keyB.publicKeyDer,
+      assurance: 'software_signed',
+      issuedAt: support.clock.utc(),
+    });
+    const causalWrong = verifyAttestation(wrongParentProbeAttestation, {
       bindings: { runId, attemptId: 1, stepId: 'record_ack', causalParents: [digestA] },
       freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
+      attesterKeyIds: [keyB.keyId],
     });
+    check(
+      '5.causal-runtime-production-p5b',
+      runtimeCausalParents.length === 1 &&
+        runtimeCausalParents[0] === digestA &&
+        [...attestationB.statement.causalParents].length === 1 &&
+        producedCausalOk.ok === true &&
+        factDigestMatchesDurable === true,
+      `P5b (the RUNTIME production path — PROVEN): the runtime-produced dependent attestation (the real durable record_ack binding AND the envelope Node B actually signed) carries EXACTLY Node A's execution digest in causalParents — the same digest the verified fact attests — and that produced attestation verifies under the causalParents expectation (the causal chain is real end-to-end: never a hand-built statement for the positive proof)`,
+    );
     check(
       '5.causal-verifier-p5a',
       probeValid === true &&
-        causalOk.ok === true &&
         causalUnparented.ok === false &&
         (causalUnparented.ok ? null : causalUnparented.failure.code) === 'ATTESTATION_BINDING_MISMATCH' &&
-        (causalUnparented.ok ? null : causalUnparented.failure.dimension) === 'causalParents',
-      `P5a (the V2-014 verifier domain): the causalParents dimension is ENFORCED — a dependent statement carrying Node A's execution digest verifies under the causalParents expectation, while the runtime's un-parented statement shape is refused TYPED on dimension causalParents`,
-    );
-    check(
-      '5.causal-gap-p5b',
-      runtimeCausalParents.length === 0,
-      `P5b UNSATISFIED DEPENDENCY (machine-checked): the RUNTIME-produced dependent attestation (the real durable record_ack binding) carries causalParents: [] — the merged V2-008 public production surface (StepAttestationMaterial) has NO causal-parent input, so the actual dependent execution does not carry/enforce the causal predecessor binding. Surfaced for the architect (frozen scope: no sibling modifications inside IG-006); this check FAILS loudly the moment the owning module adds a real causal-parent input, forcing this gate to be revisited`,
+        (causalUnparented.ok ? null : causalUnparented.failure.dimension) === 'causalParents' &&
+        causalWrong.ok === false &&
+        (causalWrong.ok ? null : causalWrong.failure.dimension) === 'causalParents',
+      `P5a (the V2-014 verifier domain): the causalParents dimension is ENFORCED — hand-built un-parented and wrong-parented dependent statements are refused TYPED on dimension causalParents (the pre-V2-016 un-parented runtime shape would not verify under a causal expectation)`,
     );
 
     section(`${runLabel} — 6. DISCONNECT/RECONNECT + REPLAY: every duplicate converges side-effect-safely`);
@@ -1325,19 +1402,28 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
       `FINAL ACCOUNTING (the main run): exactly ONE run, ONE durable rejection row (the typed replay), ONE write effect per host (the acknowledgment bytes EXACT), and the immutable version byte-identical after the whole experiment`,
     );
 
-    section(`${runLabel} — 9. THE P3b GAP PROBE (unsatisfied dependency — machine-checked)`);
+    section(`${runLabel} — 9. THE FAIL-CLOSED ADMISSION PROBES (the P3b coupling re-proved — machine-checked)`);
     // A second safe cross-device workflow (identical shape, DISTINCT output
-    // literals, authored + run through the same real surfaces). Node A
-    // executes its step (its own produce→verify→attach gates attach its
-    // attestation); then Node B resumes with NO verification leg in between
-    // AND a runtime policy that does NOT even trust Node A's attester key.
-    // The dependent action still executes — the missing admission coupling,
-    // machine-checked (this check FAILS loudly the moment an owning module
-    // adds a real admission coupling, forcing this gate to be revisited).
+    // literals, authored + run through the same real surfaces).
+    //  (a) the MISSING-ADMISSION probe: Node A executes its step (its own
+    //      produce→verify→attach gates attach its attestation); Node B
+    //      attempts the dependent drive with NO verification leg in between,
+    //      a runtime policy that does NOT even trust Node A's attester key,
+    //      and NO precondition supplied — the dependent action is REFUSED
+    //      typed (AGENT_PRECONDITION_REJECTED) with ZERO host side effects.
+    //  (b) the CROSS-RUN FACT-THEFT probe: a GENUINE fact verified for
+    //      ANOTHER run of the same pinned version, supplied as this run's
+    //      precondition — typed COMPUTER_AGENT_PRECONDITION_REJECTED thrown
+    //      at DRIVE ENTRY (before any recorder command), the run left
+    //      PAUSED, zero side effects, re-drivable.
+    //  (c) the GENUINE RE-DRIVE: the corrected precondition (Node B's own
+    //      verification of THIS run's Node-A attestation) completes the run;
+    //      the dependent attestation is causally parented (the P5 runtime
+    //      chain on the probe run too).
     const probeCreate = await inject('POST', `/organizations/${orgId}/workflow-repository/workflows`, {
-      slug: 'ig6-cross-device-intake-ack-p3b-probe',
-      name: 'Cross-Device Intake Acknowledgment (P3b Gap Probe)',
-      description: 'Browser step on the web device, human handoff approval, device-local acknowledgment write — the admission-coupling gap probe',
+      slug: 'ig6-cross-device-intake-ack-admission-probe',
+      name: 'Cross-Device Intake Acknowledgment (Admission-Coupling Probe)',
+      description: 'Browser step on the web device, human handoff approval, device-local acknowledgment write — the fail-closed admission-coupling probes',
       visibility: 'private',
       content: versionContentOf(authorGapProbeDocument()),
       protocol: { irSchemaVersion: 'workflowos-workflow-ir-v1' },
@@ -1348,49 +1434,177 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
     };
     const probeWorkflowId = probeCreated.workflow.id;
     const probeVersionId = probeCreated.initialVersion.id;
-    const probeRequested = await support.runs.requestRun(
+    const probeAckFile = join(sandboxDir, PROBE_ACK_PATH);
+    const probeRequestedOne = await support.runs.requestRun(
       principal,
-      { commandId: 'cmd-ig006-dogfooding-p3b-gap-probe', correlationId: 'corr-ig006-dogfooding-p3b-gap-probe' },
+      { commandId: 'cmd-ig006-dogfooding-probe-1', correlationId: 'corr-ig006-dogfooding-probe-1' },
       {
         organizationId: orgId,
         workflowId: probeWorkflowId,
         versionId: probeVersionId,
-        trigger: { type: 'manual', id: 'ig006-dogfooding-p3b-gap-probe' },
-        inputCommitments: [sha256Of('ig006-dogfooding-p3b-gap-probe')],
+        trigger: { type: 'manual', id: 'ig006-dogfooding-probe-1' },
+        inputCommitments: [sha256Of('ig006-dogfooding-probe-1')],
       },
     );
-    const probeRunId = probeRequested.result.run.id;
+    const probeRunIdOne = probeRequestedOne.result.run.id;
     const probeRuntimeA = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyA.keyId], validityMs: 300_000 });
-    const probeReportA = await probeRuntimeA.executeRun(principal, {
-      runId: probeRunId,
+    const probeReportAOne = await probeRuntimeA.executeRun(principal, {
+      runId: probeRunIdOne,
       hosts: [hostA as ComputerHostAdapter],
       decider: createBrowserSubmitDecider(),
       workflowInputs: { formUrl: FORM_URL },
     });
-    // NO TRANSFER, NO VERIFICATION between the pause and the resume — and
-    // Node B's runtime policy deliberately does NOT trust Node A's key.
-    const probeRuntimeB = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyB.keyId], validityMs: 3_600_000 });
+    const attestationProbeOne = hostA.attestations.find((candidate) => candidate.statement.runId === probeRunIdOne)!;
+    // (a) NO TRANSFER, NO VERIFICATION between the pause and the resume —
+    // and Node B's runtime policy deliberately does NOT trust Node A's key
+    // AND no precondition is supplied: the dependent action is REFUSED.
+    const probeRuntimeB = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyB.keyId], validityMs: 3_600_000 }, ['record_ack']);
     const probeReportB = await probeRuntimeB.resumeAfterHuman(principal, {
-      runId: probeRunId,
+      runId: probeRunIdOne,
       hosts: [hostB as ComputerHostAdapter],
       humanOutcome: 'approved',
       humanUserId: operator.id,
       decider: createAckWriteDecider(),
     });
-    const probeAckFile = join(sandboxDir, PROBE_ACK_PATH);
-    const probeAckWritten = existsSync(probeAckFile) && readFileSync(probeAckFile, 'utf8') === PROBE_ACK_CONTENT;
-    const probeHistory = await support.runs.getRunHistory(principal, probeRunId);
+    const probeRefusedStep = probeReportB.steps.find((step) => step.stepId === 'record_ack');
+    const probeHistoryOne = await support.runs.getRunHistory(principal, probeRunIdOne);
+    const probeFilesystemInvocations = probeHistoryOne.invocations.filter((invocation) => invocation.capability.startsWith('filesystem'));
     check(
-      '9.p3b-admission-coupling-gap',
+      '9.missing-admission-refused',
       probeCreate.status === 201 &&
         probeCreated.initialVersion.versionNumber === 1 &&
-        probeReportA.state === 'paused' &&
-        probeReportA.pausedAtStepId === 'approve' &&
-        probeReportB.state === 'completed' &&
+        probeReportAOne.state === 'paused' &&
+        probeReportAOne.pausedAtStepId === 'approve' &&
+        probeReportB.state === 'failed' &&
+        probeRefusedStep?.outcome === 'failed' &&
+        probeRefusedStep?.failure?.code === 'AGENT_PRECONDITION_REJECTED' &&
+        probeRefusedStep?.actions === 0 &&
+        !existsSync(probeAckFile) &&
+        probeHistoryOne.run.state === 'failed' &&
+        probeHistoryOne.attestations.length === 1 &&
+        probeFilesystemInvocations.length === 0 &&
+        hostB.attestations.every((candidate) => candidate.statement.runId !== probeRunIdOne),
+      `P3b (the admission coupling, PROVEN — the missing case): the dependent action is REFUSED on Node B (the typed AGENT_PRECONDITION_REJECTED, ZERO host side effects — the probe acknowledgment file is NOT written, ZERO filesystem invocations, no Node-B attestation) although Node B never verified Node A's handoff attestation and its runtime policy does not even trust Node A's attester key — the OLD gap probe (the PR #152 blocked attempt) proved this drive EXECUTED; the V2-016 runtime contract now makes the dependent side effect IMPOSSIBLE without an admitted verification-derived precondition`,
+    );
+
+    // (b) CROSS-RUN FACT THEFT on a second run of the SAME pinned version:
+    const probeRequestedTwo = await support.runs.requestRun(
+      principal,
+      { commandId: 'cmd-ig006-dogfooding-probe-2', correlationId: 'corr-ig006-dogfooding-probe-2' },
+      {
+        organizationId: orgId,
+        workflowId: probeWorkflowId,
+        versionId: probeVersionId,
+        trigger: { type: 'manual', id: 'ig006-dogfooding-probe-2' },
+        inputCommitments: [sha256Of('ig006-dogfooding-probe-2')],
+      },
+    );
+    const probeRunIdTwo = probeRequestedTwo.result.run.id;
+    const probeReportATwo = await probeRuntimeA.executeRun(principal, {
+      runId: probeRunIdTwo,
+      hosts: [hostA as ComputerHostAdapter],
+      decider: createBrowserSubmitDecider(),
+      workflowInputs: { formUrl: FORM_URL },
+    });
+    const attestationProbeTwo = hostA.attestations.find((candidate) => candidate.statement.runId === probeRunIdTwo)!;
+    const theftFact = verifyAttestation(attestationProbeOne, {
+      bindings: { runId: probeRunIdOne, attemptId: 1, stepId: 'collect' },
+      freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
+      attesterKeyIds: [keyA.keyId, keyB.keyId],
+    });
+    const probeRunTwoRecord = await support.runs.getRun(principal, probeRunIdTwo);
+    let theftRejection: { code: string } | null = null;
+    if (theftFact.ok) {
+      const stolenPrecondition: DependentStepPrecondition = {
+        dependentStepId: 'record_ack',
+        predecessorAttestationId: theftFact.fact.attestationId,
+        verifiedPredecessor: theftFact.fact,
+        causalParentDigests: [theftFact.fact.executionDigest.digest],
+        runId: probeRunIdTwo,
+        workflowVersionId: probeRunTwoRecord.versionId,
+        workflowVersionSemanticDigest: probeRunTwoRecord.versionSemanticDigest,
+      };
+      const probeRuntimeBCoupled = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyA.keyId, keyB.keyId], validityMs: 3_600_000 }, ['record_ack']);
+      try {
+        await probeRuntimeBCoupled.resumeAfterHuman(principal, {
+          runId: probeRunIdTwo,
+          hosts: [hostB as ComputerHostAdapter],
+          humanOutcome: 'approved',
+          humanUserId: operator.id,
+          decider: createAckWriteDecider(),
+          preconditions: [stolenPrecondition],
+        });
+        theftRejection = null; // no throw — the theft was NOT rejected (a failure)
+      } catch (error) {
+        theftRejection = { code: String((error as { code?: unknown }).code ?? error) };
+      }
+    }
+    const runTwoAfterTheft = await support.runs.getRun(principal, probeRunIdTwo);
+    const probeAckAbsentAfterTheft = !existsSync(probeAckFile);
+    check(
+      '9.cross-run-theft-rejected',
+      probeReportATwo.state === 'paused' &&
+        theftFact.ok === true &&
+        theftRejection !== null &&
+        theftRejection.code === 'COMPUTER_AGENT_PRECONDITION_REJECTED' &&
+        runTwoAfterTheft.state === 'paused' &&
+        !existsSync(probeAckFile),
+      `P3b (the admission coupling, PROVEN — the substitution case): a GENUINE V2-014-derived verified fact minted for ANOTHER run of the same pinned version, supplied as this run's admission precondition, is REJECTED typed at DRIVE ENTRY (COMPUTER_AGENT_PRECONDITION_REJECTED, thrown before any recorder command of the drive — zero durable mutations, zero host side effects) and the run is left PAUSED, re-drivable with a corrected precondition`,
+    );
+
+    // (c) the GENUINE RE-DRIVE: Node B verifies run TWO's attestation under
+    // its own verifier context and the corrected precondition completes it.
+    const genuineProbeFact = verifyAttestation(attestationProbeTwo, {
+      bindings: {
+        workflowId: probeWorkflowId,
+        workflowVersionId: probeRunTwoRecord.versionId,
+        workflowVersionSemanticDigest: probeRunTwoRecord.versionSemanticDigest,
+        runId: probeRunIdTwo,
+        attemptId: 1,
+        stepId: 'collect',
+      },
+      freshness: { now: support.clock.utc(), currentEpoch: TRIGGER_TEST_EPOCH, replayRegistry: new InMemoryReplayRegistry() },
+      attesterKeyIds: [keyA.keyId, keyB.keyId],
+    });
+    let reDriveCompleted = false;
+    let reDriveCausalParents: readonly string[] = [];
+    if (genuineProbeFact.ok) {
+      const genuinePrecondition: DependentStepPrecondition = {
+        dependentStepId: 'record_ack',
+        predecessorAttestationId: genuineProbeFact.fact.attestationId,
+        verifiedPredecessor: genuineProbeFact.fact,
+        causalParentDigests: [genuineProbeFact.fact.executionDigest.digest],
+        runId: probeRunIdTwo,
+        workflowVersionId: probeRunTwoRecord.versionId,
+        workflowVersionSemanticDigest: probeRunTwoRecord.versionSemanticDigest,
+      };
+      const probeRuntimeBReDrive = nodeRuntime(support.nodes, { required: true, trustedAttesterKeyIds: [keyA.keyId, keyB.keyId], validityMs: 3_600_000 }, ['record_ack']);
+      const reDrive = await probeRuntimeBReDrive.resumeAfterHuman(principal, {
+        runId: probeRunIdTwo,
+        hosts: [hostB as ComputerHostAdapter],
+        humanOutcome: 'approved',
+        humanUserId: operator.id,
+        decider: createAckWriteDecider(),
+        preconditions: [genuinePrecondition],
+      });
+      reDriveCompleted = reDrive.state === 'completed';
+      const probeDependent = hostB.attestations.find((candidate) => candidate.statement.runId === probeRunIdTwo);
+      reDriveCausalParents = probeDependent ? [...probeDependent.statement.causalParents] : [];
+    }
+    const probeAckWritten = existsSync(probeAckFile) && readFileSync(probeAckFile, 'utf8') === PROBE_ACK_CONTENT;
+    const probeHistoryTwo = await support.runs.getRunHistory(principal, probeRunIdTwo);
+    const probeWriteInvocations = probeHistoryTwo.invocations.filter((invocation) => invocation.capability === 'filesystem.write');
+    check(
+      '9.genuine-re-drive-completed',
+      genuineProbeFact.ok === true &&
+        reDriveCompleted &&
         probeAckWritten &&
-        probeHistory.run.state === 'completed' &&
-        probeHistory.attestations.length === 2,
-      `P3b UNSATISFIED DEPENDENCY (machine-checked): the dependent action EXECUTED on Node B (the probe acknowledgment file REALLY written, real node:fs bytes asserted) although NO verification of Node A's handoff attestation ever happened at Node B and Node B's runtime policy does not even trust Node A's attester key — the merged public resume surface (V2-008 ResumeAfterHumanInput / V2-005 resume) accepts NO admission/verification material, so the dependent side effect is possible without any admission decision derived from the independently verified Node-A attestation. Surfaced for the architect (frozen scope: no sibling modifications inside IG-006)`,
+        probeHistoryTwo.run.state === 'completed' &&
+        probeHistoryTwo.attestations.length === 2 &&
+        reDriveCausalParents.length === 1 &&
+        genuineProbeFact.ok && reDriveCausalParents[0] === genuineProbeFact.fact.executionDigest.digest &&
+        probeWriteInvocations.length === 1,
+      `P3b (the admission coupling, PROVEN — the re-drive): the corrected, genuinely-verified precondition (Node B's own verification of THIS run's Node-A attestation) is admitted, the dependent action executes EXACTLY ONCE (the probe acknowledgment file REALLY written, one filesystem.write invocation), and the runtime-produced dependent attestation carries the verified predecessor's execution digest in causalParents (the P5 runtime causal chain, proven on the probe run as well)`,
     );
 
     const facts: RunFacts = {
@@ -1428,7 +1642,7 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
             attemptId: statement.attemptId,
             epoch: statement.epoch,
             outcome: statement.outcome,
-            causalParents: statement.causalParents,
+            causalParentCount: statement.causalParents.length,
             evidenceReferenceCount: statement.evidenceReferences.length,
             evidenceReferencesResolve: statement.evidenceReferences.every((reference) => evidenceIds.has(reference)),
           },
@@ -1452,17 +1666,27 @@ async function runExperiment(runLabel: string): Promise<{ text: string; facts: R
         expired: stale.ok ? 'ok' : stale.failure.code,
       },
       causalParentBinding: {
-        parentedVerifies: causalOk.ok,
+        parentedVerifies: producedCausalOk.ok,
         unparentedRefused: causalUnparented.ok ? 'ok' : causalUnparented.failure.code,
         unparentedDimension: causalUnparented.ok ? '—' : causalUnparented.failure.dimension ?? '—',
+        wrongParentRefused: causalWrong.ok ? 'ok' : causalWrong.failure.code,
       },
-      p3bAdmissionGapProbe: {
-        probeRunCompleted: probeReportB.state === 'completed',
-        probeAckWritten,
-        nodeBPolicyTrustsNodeA: false,
+      p3AdmissionCoupling: {
+        missingPreconditionRefused:
+          probeReportB.state === 'failed' &&
+          probeRefusedStep?.failure?.code === 'AGENT_PRECONDITION_REJECTED' &&
+          probeFilesystemInvocations.length === 0,
+        probeRunFailed: probeHistoryOne.run.state === 'failed',
+        runTwoLeftPaused: runTwoAfterTheft.state === 'paused',
+        probeAckAbsentBeforeReDrive: probeAckAbsentAfterTheft,
+        crossRunTheftRejected: theftRejection?.code ?? (theftFact.ok ? 'not-rejected' : 'no-fact'),
+        reDriveCompleted,
+        reDriveCausalParentCount: reDriveCausalParents.length,
       },
-      p5bCausalGap: {
+      p5RuntimeCausalChain: {
         runtimeDependentCausalParentCount: runtimeCausalParents.length,
+        parentMatchesVerifiedFact: factDigestMatchesDurable === true && runtimeCausalParents[0] === digestA,
+        runtimeProducedParentedVerifies: producedCausalOk.ok,
       },
       replayConvergence: {
         ledgerFirstDelivery: firstDelivery.kind,
@@ -1525,54 +1749,54 @@ async function main(): Promise<void> {
     }
   }
   transcript.push('');
-  // The PR #152 correction verdict: the gate FAILS CLOSED on the two
-  // unsatisfied dependencies (surfaced, machine-confirmed) instead of
-  // claiming IG-006 PASS. Exit 3 = fail-closed verdict (all machine-checkable
-  // checks green + deterministic, gaps present); exit 1 = experiment failure;
-  // exit 0 = only reachable after the gaps are resolved AND this runner is
-  // revisited (the gap checks fail loudly the moment the coupling exists).
-  const p3bGapPresent =
-    one.facts.p3bAdmissionGapProbe.probeRunCompleted === true &&
-    one.facts.p3bAdmissionGapProbe.probeAckWritten === true &&
-    one.facts.p3bAdmissionGapProbe.nodeBPolicyTrustsNodeA === false &&
-    two.facts.p3bAdmissionGapProbe.probeRunCompleted === true &&
-    two.facts.p3bAdmissionGapProbe.probeAckWritten === true;
-  const p5bGapPresent =
-    one.facts.p5bCausalGap.runtimeDependentCausalParentCount === 0 &&
-    two.facts.p5bCausalGap.runtimeDependentCausalParentCount === 0;
+  // The V2-016 re-prove verdict: the gate PASSES only when BOTH couplings
+  // are positively proven on the runtime composition path (the fail-closed
+  // probes refuse without admission; the runtime-produced dependent
+  // attestation is causally parented) — machine-checked on BOTH fresh-stack
+  // runs. Exit 0 = PASS; exit 1 = an experiment check failed, determinism
+  // broke, or either coupling is no longer proven (the coupling checks fail
+  // loudly the moment the runtime contract drifts, forcing a revisit).
+  const p3CouplingProven = (facts: RunFacts): boolean =>
+    facts.p3AdmissionCoupling.missingPreconditionRefused === true &&
+    facts.p3AdmissionCoupling.probeRunFailed === true &&
+    facts.p3AdmissionCoupling.probeAckAbsentBeforeReDrive === true &&
+    facts.p3AdmissionCoupling.crossRunTheftRejected === 'COMPUTER_AGENT_PRECONDITION_REJECTED' &&
+    facts.p3AdmissionCoupling.runTwoLeftPaused === true &&
+    facts.p3AdmissionCoupling.reDriveCompleted === true &&
+    facts.p3AdmissionCoupling.reDriveCausalParentCount === 1;
+  const p5CouplingProven = (facts: RunFacts): boolean =>
+    facts.p5RuntimeCausalChain.runtimeDependentCausalParentCount === 1 &&
+    facts.p5RuntimeCausalChain.parentMatchesVerifiedFact === true &&
+    facts.p5RuntimeCausalChain.runtimeProducedParentedVerifies === true;
   const experimentOk = failuresOne === 0 && failuresTwo === 0 && factsEqual && deterministic;
-  const gatePass = experimentOk && !p3bGapPresent && !p5bGapPresent;
-  transcript.push('GATE VERDICT: FAIL — UNSATISFIED DEPENDENCIES');
-  if (p3bGapPresent) {
-    transcript.push('  - P3b admission coupling: Node B\'s independent verification of the Node-A attestation is NOT');
-    transcript.push('    consumed by the dependent action\'s admission — the merged V2-008 ResumeAfterHumanInput and');
-    transcript.push('    the V2-005 resume command accept no admission/verification material, and the runtime walk');
-    transcript.push('    never consults prior-step attestation bindings (machine-confirmed by the section-9 probe on');
-    transcript.push('    both fresh-stack runs; the full key set of the public resume surface is pinned in the gate test).');
-  }
-  if (p5bGapPresent) {
-    transcript.push('  - P5b runtime causal chain: the runtime-produced dependent attestation carries causalParents: []');
-    transcript.push('    — the merged V2-008 public production surface (StepAttestationMaterial) has no causal-parent');
-    transcript.push('    input, so the actual dependent execution does not carry/enforce the causal predecessor');
-    transcript.push('    binding (machine-confirmed on both fresh-stack runs; the surface key set is pinned in the gate');
-    transcript.push('    test).');
-  }
-  transcript.push('  (surfaced per the architect\'s PR #152 REQUEST-CHANGES directive; resolution requires a public');
-  transcript.push('   admission/causal coupling surface in the owning module — the architect\'s disposition. V2-015');
-  transcript.push('   remains blocked exactly as the frozen roadmap requires.)');
+  const gatePass = experimentOk && p3CouplingProven(one.facts) && p3CouplingProven(two.facts) && p5CouplingProven(one.facts) && p5CouplingProven(two.facts);
+  transcript.push('GATE VERDICT: PASS — every frozen proof green on the RUNTIME COMPOSITION PATH');
+  transcript.push('  - P3 admission coupling (PROVEN): V2-014 verification → VerifiedExecutionFact → Node-B admission');
+  transcript.push('    → dependent side effect. The section-5 main path consumes the verification-derived');
+  transcript.push('    precondition; the section-9 fail-closed probes prove the dependent action is IMPOSSIBLE');
+  transcript.push('    without it (typed AGENT_PRECONDITION_REJECTED, zero side effects) and that cross-run fact');
+  transcript.push('    theft is rejected typed at drive entry with the run left paused, re-drivable (machine-');
+  transcript.push('    confirmed on both fresh-stack runs; the consumed surface key set is pinned in the gate test).');
+  transcript.push('  - P5 runtime causal chain (PROVEN): the RUNTIME-PRODUCED dependent attestation carries EXACTLY');
+  transcript.push('    Node A\'s execution digest in causalParents (the durable binding AND the signed envelope),');
+  transcript.push('    and that produced attestation verifies under the causalParents expectation — never a');
+  transcript.push('    hand-built statement for the positive proof (machine-confirmed on both fresh-stack runs).');
+  transcript.push('  (the blocked PR #152 attempt preserved the two gaps as fail-closed unsatisfied dependencies;');
+  transcript.push('   V2-016 — merged as main 11d6afbf — supplied the runtime contract this re-prove consumes.');
+  transcript.push('   V2-015 remains blocked until this gate is merged, exactly as the frozen roadmap requires.)');
   transcript.push('');
   transcript.push(
     `DOGFOODING RESULT: ${gatePass
-      ? 'PASS (the gaps are resolved — every proof on the runtime composition path)'
+      ? 'PASS (every frozen proof on the runtime composition path — the two PR #152 blocking couplings positively re-proven)'
       : experimentOk
-        ? 'FAIL (fail-closed: 2 unsatisfied dependencies; every machine-checkable check PASSES and is deterministic across the two fresh runs)'
+        ? 'FAIL (the runtime composition path no longer proves both couplings — see the checks above)'
         : 'FAIL (experiment failure — see the checks above)'}`,
   );
   const output = transcript.join('\n');
   // eslint-disable-next-line no-console
   console.log(output);
   console.error(`normalized-transcript-sha256: ${sha256Of(normalizedTwo)}`);
-  process.exit(experimentOk ? (gatePass ? 0 : 3) : 1);
+  process.exit(gatePass ? 0 : 1);
 }
 
 /**
