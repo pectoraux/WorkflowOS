@@ -133,6 +133,17 @@ export {
   type RunHistoryReconstruction,
 } from './internal/evidence.js';
 
+// internal/cross-device continuation + coordination composition (the seam)
+export {
+  planCrossDeviceContinuation,
+  recordContinuationOutcome,
+  verifyGraphAgainstAttestations,
+  type CrossDeviceContinuationInput,
+  type CrossDeviceContinuationDecision,
+  type ContinuationRecordingResult,
+  type GraphAttestationVerification,
+} from './internal/coordination.js';
+
 // internal/canonical serialization: byte-deterministic serialization,
 // fail-closed typed parse, and the graph-level mutation-detection digest
 export {
