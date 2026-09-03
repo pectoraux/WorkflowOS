@@ -142,3 +142,27 @@ DOGFOODING RESULT: PASS (every machine-checkable check green; the four fresh-sta
 ## Negative findings (append-only)
 
 - No negative findings in the composition itself. The recorded honest observations are the limitations above (host kinds in-process, verifier process not machine, PGlite single-connection, graph state as composition rather than durable tables — each a scope boundary of the frozen work order, not a failure).
+
+## Task 8 completion matrix (the full verification battery — final receipts)
+
+All commands executed from `backend/` at the final head; every scoped battery run TWICE (deterministic, identical counts):
+
+| Battery | Command | Result |
+|---|---|---|
+| V2-015 scoped (unit + integration) ×2 | `bunx vitest run tests/unit/execution-proof-graph tests/integration/execution-proof-graph` | **108/108 green** both runs (84 unit + 24 integration) |
+| Architecture suite | `bunx vitest run tests/architecture` | **905/905 green** (incl. the 11 V2-015 boundary tests; zero regressions) |
+| Full non-integration scope | `bunx vitest run tests/unit tests/architecture tests/continuous-validation tests/browser-validation tests/validation-scheduling tests/engineering-signals tests/progressive-release` | **2926 passed / 0 failed** |
+| Integration chunk 1 (agent-intelligence → auth) | `bunx vitest run tests/integration/{agent-intelligence,agent-roles,agents,architect,architecture,architecture-governance,audit,auth}` | 612 passed / 29 skipped |
+| Integration chunk 2 (benchmark → development-planner) | `bunx vitest run tests/integration/{benchmark,computer-agent,delegation,development-governance,development-planner}` | 190 passed / **3 failed — the INHERITED WORK-069 governance trio** (W052-AC01 + W052-AC03 ×2; verified identical on canonical main in the same window during the PR #156 final-head verification round; zero governance files in this diff) / 1 skipped |
+| Integration chunk 3 (dev-runtime → execution-routing, incl. execution-proof-graph) | `bunx vitest run tests/integration/{dev-runtime,e2e,engineering-signals,execution-attestation,execution-proof-graph,execution-policy,execution-routing}` | 228 passed / 6 skipped |
+| Integration chunk 4 (frontend → notifications) | `bunx vitest run tests/integration/{frontend,github,llm,maintenance,marketplace,node-capability,notifications}` | 102 passed |
+| Integration chunk 5 (onboarding → repository-intelligence) | `bunx vitest run tests/integration/{onboarding,orchestration,postgres,progressive-release,projects,redis,repository-intelligence}` | 145 passed / 23 skipped |
+| Integration chunk 6 (requirements → webpack) | `bunx vitest run tests/integration/{requirements,reverse-teaching,reviews,runtime,storage,teaching-sessions,trigger-scheduling,validation-scheduling,webpack}` | 100 passed / 6 skipped |
+| Integration chunk 7 (verification → workflow-ir) | `bunx vitest run tests/integration/{verification,work-items,workbench,workflow-compiler,workflow-deployments,workflow-ir}` | 174 passed |
+| Integration chunk 8 (workflow-optimization → workflows + top-level) | `bunx vitest run tests/integration/{workflow-optimization,workflow-repository,workflow-runs,workflows} tests/integration/async-worker.integration.test.ts` | 216 passed |
+| **TOTAL (full canonical scope, disjoint chunks)** | | **4693 passed / 3 failed (the inherited trio) / 65+ skipped — ZERO V2-015-attributable failures** |
+| Typecheck | `bun run typecheck` | exactly the 2 inherited `workflow-deployments.route.ts` TS2739 baseline errors; **zero new** |
+| Scoped lint | `bunx eslint src/execution-proof-graph tests/unit/execution-proof-graph tests/integration/execution-proof-graph tests/architecture/execution-proof-graph-boundary.test.ts` | 0 errors / 0 warnings |
+| Dogfooding | `bunx tsx tests/integration/execution-proof-graph/run-v2-015-dogfooding.ts` (×2 invocations) | exit 0 both; 31/31 checks; 4 fresh-stack runs per invocation; normalized-transcript sha-256 `6a7282b1…d253e7` identical |
+
+Baseline comparison: the pre-V2-015 base (`493da4c8`) CI totals were 4698 passed / 3 failed / 2 skipped (PR #156 final head, the +6 IG-006 gate tests included); the +108 V2-015 tests are ALL green and the ONLY failures remain the 3 inherited WORK-069 governance failures — zero new failures attributable to this work.
