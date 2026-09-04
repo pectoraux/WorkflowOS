@@ -58,7 +58,7 @@ import {
   createWorkflowIrBuilder,
   serializeWorkflowIrDocument,
 } from '../../src/workflow-ir/index.js';
-import type { ControlEdge, WorkflowIrDocument, WorkflowNode } from '../../src/workflow-ir/index.js';
+import type { WorkflowIrDocument, WorkflowNode } from '../../src/workflow-ir/index.js';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseClient } from '@platform/index.js';
 
@@ -201,20 +201,15 @@ function authorDigestWorkflow(): WorkflowIrDocument {
     failurePolicy: { strategy: 'fail_workflow' },
     completionEvidence: 'observation',
   };
-  const edges: ControlEdge[] = [
-    { from: 'fetch_tickets', to: 'review_gate', on: 'success' },
-    { from: 'review_gate', to: 'send_digest', on: { outcome: 'approved' } },
-    { from: 'review_gate', to: 'log_rejection', on: { outcome: 'rejected' } },
-  ];
   return createWorkflowIrBuilder()
     .withStart('fetch_tickets')
     .addNode(fetchTickets)
     .addNode(reviewGate)
     .addNode(sendDigest)
     .addNode(logRejection)
-    .addEdge(edges[0])
-    .addEdge(edges[1])
-    .addEdge(edges[2])
+    .addEdge({ from: 'fetch_tickets', to: 'review_gate', on: 'success' })
+    .addEdge({ from: 'review_gate', to: 'send_digest', on: { outcome: 'approved' } })
+    .addEdge({ from: 'review_gate', to: 'log_rejection', on: { outcome: 'rejected' } })
     .addWorkflowOutput({
       name: 'messageId',
       type: { kind: 'string' },
@@ -317,7 +312,8 @@ test.describe('V2-017 T6 — the Run experience over the real authorities', () =
     };
     const mine = runsBody.runs.filter((r) => r.workflowId === created.workflow.id);
     expect(mine.length).toBeGreaterThan(0);
-    const runId = mine[0].id;
+    const runId = mine[0]?.id ?? '';
+    expect(runId).not.toBe('');
     const pauseRes = await page.request.post(`/api/workflow-runs/runs/${runId}/pause`, {
       data: { commandId: crypto.randomUUID(), correlationId: crypto.randomUUID(), atStepId: 'review_gate' },
     });

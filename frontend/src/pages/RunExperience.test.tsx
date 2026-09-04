@@ -423,6 +423,133 @@ describe('V2-017 T6 — the run experience', () => {
       ).toBeInTheDocument();
       expect(screen.queryByRole('list', { name: 'Where it runs' })).not.toBeInTheDocument();
     });
+
+    it('cloud_allowed: BOTH environments admitted — never an invented unavailability', async () => {
+      await openPreview(
+        fullRoutes({
+          '/workflow-deployments/deployments': () =>
+            jsonResponse(200, {
+              deployments: [
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  placement: { placement: { required: 'cloud_allowed' }, privacy: { localOnly: false } },
+                },
+              ],
+            }),
+        }),
+      );
+      const where = screen.getByRole('list', { name: 'Where it runs' });
+      expect(within(where).getByText('This device')).toBeInTheDocument();
+      expect(within(where).getByText('Cloud')).toBeInTheDocument();
+      expect(within(where).getAllByText(/^Available$/).length).toBe(2);
+      // No unavailable option was invented.
+      expect(within(where).queryByText(/Not available/i)).not.toBeInTheDocument();
+    });
+
+    it('any_supported_node: BOTH environments admitted', async () => {
+      await openPreview(
+        fullRoutes({
+          '/workflow-deployments/deployments': () =>
+            jsonResponse(200, {
+              deployments: [
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  placement: {
+                    placement: { required: 'any_supported_node' },
+                    privacy: { localOnly: false },
+                  },
+                },
+              ],
+            }),
+        }),
+      );
+      const where = screen.getByRole('list', { name: 'Where it runs' });
+      expect(within(where).getAllByText(/^Available$/).length).toBe(2);
+      expect(within(where).queryByText(/Not available/i)).not.toBeInTheDocument();
+    });
+
+    it('device_preferred with an explicit cloud fallback: device preferred, cloud admitted as an explicit fallback', async () => {
+      await openPreview(
+        fullRoutes({
+          '/workflow-deployments/deployments': () =>
+            jsonResponse(200, {
+              deployments: [
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  placement: {
+                    placement: { required: 'device_preferred', fallbackOrder: ['cloud_allowed'] },
+                    privacy: { localOnly: false },
+                  },
+                },
+              ],
+            }),
+        }),
+      );
+      const where = screen.getByRole('list', { name: 'Where it runs' });
+      expect(within(where).getByText('This device')).toBeInTheDocument();
+      expect(
+        within(where).getByText(/Available · preferred by this workflow/i),
+      ).toBeInTheDocument();
+      expect(within(where).getByText(/Available · as an explicit fallback/i)).toBeInTheDocument();
+    });
+
+    it('device_preferred WITHOUT a cloud fallback: cloud stays honestly unavailable', async () => {
+      await openPreview(
+        fullRoutes({
+          '/workflow-deployments/deployments': () =>
+            jsonResponse(200, {
+              deployments: [
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  placement: {
+                    placement: { required: 'device_preferred' },
+                    privacy: { localOnly: false },
+                  },
+                },
+              ],
+            }),
+        }),
+      );
+      const where = screen.getByRole('list', { name: 'Where it runs' });
+      expect(
+        within(where).getByText(/Available · preferred by this workflow/i),
+      ).toBeInTheDocument();
+      expect(
+        within(where).getByText(/Not available — this workflow runs on your device only/i),
+      ).toBeInTheDocument();
+    });
+
+    it('multiple enabled policies COMBINE: each admitted environment stays available (no invented unavailability)', async () => {
+      await openPreview(
+        fullRoutes({
+          '/workflow-deployments/deployments': () =>
+            jsonResponse(200, {
+              deployments: [
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  id: 'dep-1',
+                  placement: { placement: { required: 'device_local' }, privacy: { localOnly: true } },
+                },
+                {
+                  ...DEPLOYMENTS_CLOUD[0],
+                  id: 'dep-2',
+                  placement: {
+                    placement: { required: 'cloud_required' },
+                    privacy: { localOnly: false },
+                  },
+                },
+              ],
+            }),
+        }),
+      );
+      const where = screen.getByRole('list', { name: 'Where it runs' });
+      expect(within(where).getByText('This device')).toBeInTheDocument();
+      expect(within(where).getByText('Cloud')).toBeInTheDocument();
+      // Each environment is admitted by one policy — with its own qualifier.
+      expect(within(where).getAllByText(/Available · required/i).length).toBe(2);
+      // Neither admitted environment is invented away.
+      expect(within(where).queryByText(/Not available/i)).not.toBeInTheDocument();
+    });
   });
 
   describe('the Run command (the authoritative command semantics)', () => {
@@ -475,6 +602,74 @@ describe('V2-017 T6 — the run experience', () => {
       await waitFor(() =>
         expect(screen.queryByRole('region', { name: 'Run preview' })).not.toBeInTheDocument(),
       );
+    });
+
+    it('the exact run THIS command created is started — a concurrent sibling run (newer updatedAt) is never started', async () => {
+      // The race the architect found: the request creates 'run-created';
+      // the re-read list ALSO carries a sibling manual run of the SAME
+      // workflow with a NEWER updatedAt. The start command must target the
+      // EXACT run the request returned — never the newest heuristic.
+      const routes = fullRoutes({
+        'POST /organizations/org-1/workflow-runs/runs': () =>
+          jsonResponse(201, {
+            run: run({ id: 'run-created', state: 'requested', updatedAt: '2026-09-04T08:00:30Z' }),
+            created: true,
+            executed: true,
+          }),
+        '/organizations/org-1/workflow-runs/runs': () =>
+          jsonResponse(200, {
+            runs: [
+              // The concurrent sibling: same workflow, NEWER updatedAt.
+              run({ id: 'run-sibling', state: 'requested', updatedAt: '2026-09-04T09:00:00Z' }),
+              run({ id: 'run-created', state: 'requested', updatedAt: '2026-09-04T08:00:30Z' }),
+            ],
+          }),
+        '/workflow-runs/runs/run-created/start': () =>
+          jsonResponse(200, { run: run({ id: 'run-created', state: 'running' }), attempt: null, executed: true }),
+        '/workflow-runs/runs/run-sibling/start': () =>
+          jsonResponse(200, { run: run({ id: 'run-sibling', state: 'running' }), attempt: null, executed: true }),
+        '/workflow-runs/runs/run-created/history': () => jsonResponse(200, history([])),
+      });
+      const user = await openPreview(routes);
+      await user.click(screen.getByRole('button', { name: 'Run' }));
+      await waitFor(() => {
+        const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(
+          (c) => String(c[0]),
+        );
+        // The start command targeted the EXACT created run.
+        expect(calls.some((c) => c.includes('/workflow-runs/runs/run-created/start'))).toBe(true);
+        expect(calls.some((c) => c.includes('/workflow-runs/runs/run-sibling/start'))).toBe(false);
+      });
+    });
+
+    it('fail closed: when the exact returned run is absent from the re-read list, NO start is sent', async () => {
+      const routes = fullRoutes({
+        'POST /organizations/org-1/workflow-runs/runs': () =>
+          jsonResponse(201, {
+            run: run({ id: 'run-ghost', state: 'requested' }),
+            created: true,
+            executed: true,
+          }),
+        '/organizations/org-1/workflow-runs/runs': () =>
+          jsonResponse(200, {
+            runs: [run({ id: 'run-other', state: 'requested', updatedAt: '2026-09-04T09:00:00Z' })],
+          }),
+        '/workflow-runs/runs/run-ghost/start': () =>
+          jsonResponse(200, { run: run({ id: 'run-ghost', state: 'running' }), attempt: null, executed: true }),
+      });
+      const user = await openPreview(routes);
+      await user.click(screen.getByRole('button', { name: 'Run' }));
+      await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+      expect(
+        screen.getByText(/the requested run is not in the runs list/i),
+      ).toBeInTheDocument();
+      // The start command was NEVER sent for any run.
+      const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) =>
+        String(c[0]),
+      );
+      expect(calls.some((c) => c.includes('/start'))).toBe(false);
+      // The preview stays open with the honest error.
+      expect(screen.getByRole('region', { name: 'Run preview' })).toBeInTheDocument();
     });
 
     it('a typed command failure is a visible error — never a fabricated success', async () => {

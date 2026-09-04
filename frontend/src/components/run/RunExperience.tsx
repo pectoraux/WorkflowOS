@@ -43,8 +43,6 @@ import {
  *     disclosure).
  */
 
-const DEVICE_PLACEMENTS: ReadonlySet<string> = new Set(['device_local', 'device_preferred']);
-
 /** The steps from the authoritative presentation layer (F-T4-001 rules). */
 function stepsFromContent(content: unknown): string[] | null {
   if (typeof content !== 'object' || content === null || Array.isArray(content)) return null;
@@ -171,35 +169,133 @@ interface WhereOption {
 }
 
 /**
- * The where-it-runs options from the placement policy (the deployment
- * read — the public placement authority). The Run command itself takes no
- * location parameter (the authoritative command semantics); these are the
- * FACTS of where this workflow runs, with explicit reasons when an option
- * is unavailable.
+ * The V2-004 placement vocabulary, consumed faithfully (the frozen
+ * placement contract — never collapsed to a binary heuristic):
+ *
+ *   device_local        → device only;
+ *   device_preferred    → device preferred, cloud ONLY through an
+ *                         explicit fallback;
+ *   cloud_allowed       → device and cloud both admitted;
+ *   cloud_preferred     → cloud preferred, device ONLY through an
+ *                         explicit fallback;
+ *   cloud_required      → cloud only;
+ *   any_supported_node  → device and cloud.
+ *
+ * The fallbackOrder carries placement tokens: a fallback admits an
+ * environment iff it intersects that environment's admitting tokens.
+ */
+const BOTH_ADMITTED = new Set(['cloud_allowed', 'any_supported_node']);
+const CLOUD_FALLBACK_TOKENS = new Set([
+  'cloud_allowed',
+  'cloud_preferred',
+  'cloud_required',
+  'any_supported_node',
+]);
+const DEVICE_FALLBACK_TOKENS = new Set([
+  'device_local',
+  'device_preferred',
+  'cloud_allowed',
+  'any_supported_node',
+]);
+
+type Admission = false | 'primary-required' | 'primary-preferred' | 'fallback' | 'admitted';
+
+/** How ONE deployment's policy admits the device environment. */
+function deviceAdmission(policy: {
+  placement: { required: string; fallbackOrder?: string[] };
+}): Admission {
+  const required = policy.placement.required;
+  if (required === 'device_local') return 'primary-required';
+  if (required === 'device_preferred') return 'primary-preferred';
+  if (BOTH_ADMITTED.has(required)) return 'admitted';
+  // cloud_preferred: the device ONLY through an explicit fallback;
+  // cloud_required: never.
+  if (required === 'cloud_preferred') {
+    return policy.placement.fallbackOrder?.some((f) => DEVICE_FALLBACK_TOKENS.has(f))
+      ? 'fallback'
+      : false;
+  }
+  return false;
+}
+
+/** How ONE deployment's policy admits the cloud environment. */
+function cloudAdmission(policy: {
+  placement: { required: string; fallbackOrder?: string[] };
+}): Admission {
+  const required = policy.placement.required;
+  if (required === 'cloud_required') return 'primary-required';
+  if (required === 'cloud_preferred') return 'primary-preferred';
+  if (BOTH_ADMITTED.has(required)) return 'admitted';
+  // device_preferred: the cloud ONLY through an explicit fallback;
+  // device_local: never.
+  if (required === 'device_preferred') {
+    return policy.placement.fallbackOrder?.some((f) => CLOUD_FALLBACK_TOKENS.has(f))
+      ? 'fallback'
+      : false;
+  }
+  return false;
+}
+
+const ADMISSION_RANK: Record<Exclude<Admission, false>, number> = {
+  'primary-required': 3,
+  'primary-preferred': 2,
+  admitted: 1,
+  fallback: 1,
+};
+
+/**
+ * The where-it-runs options from the placement policies (the deployment
+ * read — the public placement authority). Multiple enabled policies
+ * COMBINE: an environment is available when any policy admits it (with
+ * the strongest qualifier), and unavailable only when every policy
+ * denies it (with the explicit reason). The Run command itself takes no
+ * location parameter (the authoritative command semantics); these are
+ * the FACTS of where this workflow runs.
  */
 function whereOptions(deployments: ProductDeployment[]): WhereOption[] | null {
   const enabled = deployments.filter((d) => d.enabled);
   if (enabled.length === 0) return null;
-  const device = enabled.some((d) => DEVICE_PLACEMENTS.has(d.placement.placement.required));
-  if (device) {
-    return [
-      { label: 'This device', available: true, qualifier: 'required', reason: null },
-      {
-        label: 'Cloud',
-        available: false,
-        qualifier: null,
-        reason: 'Not available — this workflow runs on your device only',
-      },
-    ];
-  }
-  const preferred = enabled.some((d) => d.placement.placement.required === 'cloud_preferred');
+  const deviceAdmissions = enabled
+    .map((d) => deviceAdmission(d.placement))
+    .filter((a): a is Exclude<Admission, false> => a !== false);
+  const cloudAdmissions = enabled
+    .map((d) => cloudAdmission(d.placement))
+    .filter((a): a is Exclude<Admission, false> => a !== false);
+
+  const strongest = (admissions: Array<Exclude<Admission, false>>): string | null => {
+    if (admissions.length === 0) return null;
+    return admissions.reduce((best, current) =>
+      ADMISSION_RANK[current] > ADMISSION_RANK[best] ? current : best,
+    );
+  };
+  const deviceAdmissionStrongest = strongest(deviceAdmissions);
+  const cloudAdmissionStrongest = strongest(cloudAdmissions);
+
+  const qualifierWord = (admission: string | null): string | null => {
+    if (admission === 'primary-required') return 'required by this workflow';
+    if (admission === 'primary-preferred') return 'preferred by this workflow';
+    if (admission === 'fallback') return 'as an explicit fallback';
+    return null; // plainly admitted (both-admitted policies)
+  };
+
   return [
-    { label: 'Cloud', available: true, qualifier: preferred ? 'preferred' : null, reason: null },
     {
       label: 'This device',
-      available: false,
-      qualifier: null,
-      reason: 'Not available — this workflow runs in the cloud only',
+      available: deviceAdmissionStrongest !== null,
+      qualifier: qualifierWord(deviceAdmissionStrongest),
+      reason:
+        deviceAdmissionStrongest === null
+          ? 'Not available — this workflow runs in the cloud only'
+          : null,
+    },
+    {
+      label: 'Cloud',
+      available: cloudAdmissionStrongest !== null,
+      qualifier: qualifierWord(cloudAdmissionStrongest),
+      reason:
+        cloudAdmissionStrongest === null
+          ? 'Not available — this workflow runs on your device only'
+          : null,
     },
   ];
 }
@@ -288,20 +384,27 @@ export default function RunExperience({
     setSubmitting(true);
     setCommandError(null);
     try {
-      await workflowRuns.request(workflow.organizationId, {
+      // The request succeeds (the backend owns every decision) and returns
+      // the authoritative run id — the create-or-converge identity of THIS
+      // command.
+      const requested = await workflowRuns.request(workflow.organizationId, {
         workflowId: workflow.id,
         versionId: pinnedVersionId,
         installationId: installation ? installation.installation.id : null,
       });
-      // The request succeeded (the backend owns every decision): start it.
-      // The run id is deterministic from the trigger surface — re-READ the
-      // runs list to discover it (never guessed client-side).
+      // The mandated re-read of the runs list — locating the EXACT run this
+      // command created/converged (never a workflowId + newest heuristic:
+      // a concurrent sibling run must never be started by mistake). Fail
+      // closed if the authoritative run is absent from the list.
       const runs = await workflowRuns.listForOrganization(workflow.organizationId);
-      const mine = runs.filter((r) => r.workflowId === workflow.id);
-      const newest = mine.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-      if (newest) {
-        await workflowRuns.start(newest.id);
+      const exact = runs.find((r) => r.id === requested.run.id);
+      if (!exact) {
+        setCommandError(
+          'The requested run is not in the runs list — it could not be started safely.',
+        );
+        return;
       }
+      await workflowRuns.start(exact.id);
       setPreviewOpen(false);
       onRunsChanged();
     } catch (err) {
@@ -458,7 +561,7 @@ export default function RunExperience({
                     {option.available ? (
                       <span className="text-muted-foreground">
                         Available
-                        {option.qualifier ? ` · ${option.qualifier} by this workflow` : ''}
+                        {option.qualifier ? ` · ${option.qualifier}` : ''}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">{option.reason}</span>
