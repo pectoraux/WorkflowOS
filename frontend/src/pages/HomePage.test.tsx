@@ -269,6 +269,163 @@ describe('V2-017 T2 — workflow-first Home', () => {
     });
   });
 
+  describe('F-T2-001 regression — Home aggregates EVERY organization of the session user', () => {
+    const orgsTwo: RouteHandler = () =>
+      jsonResponse(200, {
+        organizations: [
+          { id: 'org-1', name: 'Acme', roleId: 'owner' },
+          { id: 'org-2', name: 'Globex', roleId: 'owner' },
+        ],
+      });
+    const acmeWorkflows: RouteHandler = () =>
+      jsonResponse(200, {
+        workflows: [
+          {
+            id: 'wf-acme-1',
+            organizationId: 'org-1',
+            ownerUserId: 'u-1',
+            slug: 'acme-invoice-digest',
+            name: 'Acme invoice digest',
+            description: null,
+            visibility: 'private',
+            headVersionId: 'ver-1',
+            forkedFromWorkflowId: null,
+            forkedFromVersionId: null,
+            createdAt: '2026-09-01T10:00:00Z',
+            updatedAt: '2026-09-02T08:00:00Z',
+          },
+        ],
+      });
+    const globexWorkflows: RouteHandler = () =>
+      jsonResponse(200, {
+        workflows: [
+          {
+            id: 'wf-globex-1',
+            organizationId: 'org-2',
+            ownerUserId: 'u-1',
+            slug: 'globex-weekly-report',
+            name: 'Globex weekly report',
+            description: null,
+            visibility: 'private',
+            headVersionId: 'ver-2',
+            forkedFromWorkflowId: null,
+            forkedFromVersionId: null,
+            createdAt: '2026-09-03T10:00:00Z',
+            updatedAt: '2026-09-04T09:00:00Z',
+          },
+        ],
+      });
+    const acmeRuns: RouteHandler = () =>
+      jsonResponse(200, {
+        runs: [
+          {
+            id: 'run-acme-1',
+            organizationId: 'org-1',
+            workflowId: 'wf-acme-1',
+            versionId: 'ver-1',
+            state: 'failed',
+            createdAt: '2026-09-04T08:00:00Z',
+            updatedAt: '2026-09-04T08:30:00Z',
+          },
+        ],
+      });
+    const globexRuns: RouteHandler = () =>
+      jsonResponse(200, {
+        runs: [
+          {
+            id: 'run-globex-1',
+            organizationId: 'org-2',
+            workflowId: 'wf-globex-1',
+            versionId: 'ver-2',
+            state: 'paused',
+            createdAt: '2026-09-04T07:00:00Z',
+            updatedAt: '2026-09-04T07:10:00Z',
+          },
+        ],
+      });
+    const noItems: RouteHandler = () => jsonResponse(200, { workflows: [], runs: [] });
+    const failure: RouteHandler = () => jsonResponse(500, { error: 'boom' });
+
+    it('shows workflow records from BOTH organizations, keeping the recent ordering across orgs', async () => {
+      renderHome({
+        '/organizations/org-1/workflow-repository/workflows': acmeWorkflows,
+        '/organizations/org-2/workflow-repository/workflows': globexWorkflows,
+        '/organizations/org-1/workflow-runs/runs': noItems,
+        '/organizations/org-2/workflow-runs/runs': noItems,
+        '/organizations': orgsTwo,
+      });
+      const section = await screen.findByRole('region', { name: 'Recent workflows' });
+      const items = await within(section).findAllByRole('listitem');
+      // Most recent first across the aggregate: Globex (09-04) precedes Acme (09-02)
+      // even though Acme is the first organization in the collection.
+      expect(items.map((n) => n.textContent)).toEqual([
+        expect.stringMatching(/Globex weekly report/),
+        expect.stringMatching(/Acme invoice digest/),
+      ]);
+    });
+
+    it('shows attention runs from BOTH organizations', async () => {
+      renderHome({
+        '/organizations/org-1/workflow-repository/workflows': acmeWorkflows,
+        '/organizations/org-2/workflow-repository/workflows': globexWorkflows,
+        '/organizations/org-1/workflow-runs/runs': acmeRuns,
+        '/organizations/org-2/workflow-runs/runs': globexRuns,
+        '/organizations': orgsTwo,
+      });
+      const section = await screen.findByRole('region', { name: 'Needs attention' });
+      const items = await within(section).findAllByRole('listitem');
+      expect(items.length).toBe(2);
+      expect(within(items[0]).getByText('Failed')).toBeInTheDocument();
+      expect(within(items[1]).getByText('Paused')).toBeInTheDocument();
+    });
+
+    it('renders Error for the affected surface when one organization read fails — never a silent partial success', async () => {
+      renderHome({
+        // org-1's workflow read succeeds, org-2's fails: the aggregate must
+        // be an ERROR for Recent workflows — the org-1 records must NOT be
+        // presented as a successful (partial) result, and never as empty.
+        '/organizations/org-1/workflow-repository/workflows': acmeWorkflows,
+        '/organizations/org-2/workflow-repository/workflows': failure,
+        '/organizations/org-1/workflow-runs/runs': noItems,
+        '/organizations/org-2/workflow-runs/runs': noItems,
+        '/organizations': orgsTwo,
+      });
+      const workflowsSection = await screen.findByRole('region', { name: 'Recent workflows' });
+      await waitFor(() => expect(within(workflowsSection).getByRole('alert')).toBeInTheDocument());
+      expect(within(workflowsSection).getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      expect(within(workflowsSection).queryAllByRole('listitem')).toHaveLength(0);
+      expect(within(workflowsSection).queryByText(/No workflows yet/i)).not.toBeInTheDocument();
+      // The error is scoped to the affected surface: the run reads all
+      // succeeded, so Needs attention stays honestly empty.
+      const attentionSection = await screen.findByRole('region', { name: 'Needs attention' });
+      await waitFor(() =>
+        expect(within(attentionSection).getByText(/Nothing needs your attention/i)).toBeInTheDocument(),
+      );
+      expect(within(attentionSection).queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('renders Error for Needs attention when one organization run read fails — never partial, never empty', async () => {
+      renderHome({
+        '/organizations/org-1/workflow-repository/workflows': acmeWorkflows,
+        '/organizations/org-2/workflow-repository/workflows': globexWorkflows,
+        // org-1's run read succeeds, org-2's fails: Needs attention must be
+        // an ERROR — org-1's attention run must not silently stand in.
+        '/organizations/org-1/workflow-runs/runs': acmeRuns,
+        '/organizations/org-2/workflow-runs/runs': failure,
+        '/organizations': orgsTwo,
+      });
+      const attentionSection = await screen.findByRole('region', { name: 'Needs attention' });
+      await waitFor(() => expect(within(attentionSection).getByRole('alert')).toBeInTheDocument());
+      expect(within(attentionSection).getByRole('button', { name: /try again/i })).toBeInTheDocument();
+      expect(within(attentionSection).queryAllByRole('listitem')).toHaveLength(0);
+      expect(within(attentionSection).queryByText(/Nothing needs your attention/i)).not.toBeInTheDocument();
+      // The workflow reads all succeeded: Recent workflows shows real data.
+      const workflowsSection = await screen.findByRole('region', { name: 'Recent workflows' });
+      await waitFor(() => expect(within(workflowsSection).getAllByRole('listitem').length).toBe(2));
+      expect(within(workflowsSection).queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
   describe('surfaces without an exposed read stay honestly Unavailable', () => {
     it('marks pending approvals, updates, and device issues Unavailable — never fake-empty', async () => {
       renderHome({

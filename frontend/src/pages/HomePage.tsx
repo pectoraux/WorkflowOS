@@ -27,8 +27,11 @@ import {
  *             never a fabricated empty list.
  *
  * The reads are consume-only: the V2-002 workflow list and the V2-005 run
- * list (via the first organization of the session user). The frontend owns
- * no workflow/run/approval state of its own.
+ * list, aggregated across EVERY organization of the session user (F-T2-001:
+ * there is no authoritative current-organization selection — the user's
+ * Home scope is the full organization collection, so dropping any of them
+ * would silently discard authoritative records). The frontend owns no
+ * workflow/run/approval state of its own.
  */
 
 type ReadState<T> =
@@ -63,19 +66,36 @@ function useHomeRead<T>(fetcher: () => Promise<T[]>) {
   return { state, refetch };
 }
 
-/** Recent workflows: the org's visible workflows (V2-002 read). */
+/**
+ * Recent workflows: the V2-002 read aggregated across every organization of
+ * the session user (F-T2-001). All-or-error: Promise.all propagates ANY
+ * failed per-organization read, so a partial collection is never presented
+ * as a successful result. Empty only when the organization collection is
+ * empty (derivably no workflows) or every read succeeded with no items.
+ */
 async function fetchRecentWorkflows(): Promise<ProductWorkflow[]> {
   const orgs = await organizations.listForUser();
   if (orgs.length === 0) return [];
-  return workflowRepository.listForOrganization(orgs[0].id);
+  const perOrg = await Promise.all(
+    orgs.map((org) => workflowRepository.listForOrganization(org.id)),
+  );
+  return perOrg.flat();
 }
 
-/** Needs attention: failed/paused runs (V2-005 read, presentation filter). */
+/**
+ * Needs attention: failed/paused runs (V2-005 read, presentation filter)
+ * aggregated across every organization of the session user (F-T2-001), with
+ * the same all-or-error semantics: any failed run read errors the surface.
+ */
 async function fetchAttentionRuns(): Promise<ProductWorkflowRun[]> {
   const orgs = await organizations.listForUser();
   if (orgs.length === 0) return [];
-  const runs = await workflowRuns.listForOrganization(orgs[0].id);
-  return runs.filter((run) => run.state === 'failed' || run.state === 'paused');
+  const perOrg = await Promise.all(
+    orgs.map((org) => workflowRuns.listForOrganization(org.id)),
+  );
+  return perOrg
+    .flat()
+    .filter((run) => run.state === 'failed' || run.state === 'paused');
 }
 
 function formatDate(iso: string): string {
