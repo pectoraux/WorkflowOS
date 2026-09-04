@@ -14,9 +14,14 @@ import WorkflowDetailPage from './WorkflowDetailPage';
  * installations read, and the workflow-deployments reads. HONESTY RULES:
  *   - loading / error / data states explicitly; a failed read is never a
  *     successful empty;
- *   - steps derive ONLY from authoritative IR content (parsed
- *     presentation-side, never invented); non-IR content → honest
- *     Unavailable;
+ *   - F-T4-001: step labels derive ONLY from the authoritative V2-003
+ *     presentation layer (`presentation.nodeLabels`, nodeId → label, at
+ *     the document top level) — internal WorkflowNode IDs NEVER surface
+ *     in the primary consumer detail UX (neither raw nor humanized); when
+ *     any node lacks a usable presentation label, the whole steps surface
+ *     FAILS CLOSED to the honest steps-unavailable state (never a partial
+ *     list, never the internal ID); non-IR content → the same honest
+ *     unavailable state;
  *   - the primary actions (Run / Teach Me / Edit) are communicated; their
  *     deep flows belong to later tasks — Run/Teach Me carry honest
  *     arrives-with notes; Edit enters the EXISTING expert workspace;
@@ -83,6 +88,15 @@ const IR_CONTENT = {
     ],
     edges: [],
     defaultPlacement: 'cloud_allowed',
+  },
+  // The V2-003 presentation layer — the ONLY source of consumer-facing
+  // step labels (F-T4-001). Internal node IDs are keys, never values.
+  presentation: {
+    title: 'Weekly invoice digest',
+    nodeLabels: {
+      fetch_open_tickets: 'Collect the open tickets',
+      send_followup: 'Email the weekly digest',
+    },
   },
 };
 
@@ -237,12 +251,19 @@ describe('V2-017 T4 — workflow detail', () => {
     expect(screen.getByRole('link', { name: 'Edit' })).toBeInTheDocument();
     // Attention state (run-derived: a failed run exists).
     expect(screen.getByText('Needs attention')).toBeInTheDocument();
-    // Steps (derived from the authoritative IR content — never invented).
+    // Steps (F-T4-001): labels come ONLY from the authoritative V2-003
+    // presentation layer (nodeLabels), in the authoritative node order.
     const steps = screen.getByRole('list', { name: /what it does/i });
     expect(within(steps).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
-      expect.stringMatching(/Fetch open tickets/i),
-      expect.stringMatching(/Send followup/i),
+      'Collect the open tickets',
+      'Email the weekly digest',
     ]);
+    // Internal node IDs NEVER surface in the primary consumer detail UX —
+    // neither raw nor humanized (F-T4-001).
+    expect(screen.queryByText(/fetch_open_tickets/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/fetch open tickets/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/send_followup/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/send followup/i)).not.toBeInTheDocument();
     // When it runs (subscription) and where (placement).
     expect(screen.getByText('Runs daily')).toBeInTheDocument();
     expect(screen.getByText('Cloud')).toBeInTheDocument();
@@ -316,6 +337,81 @@ describe('V2-017 T4 — workflow detail', () => {
       screen.getByText(/steps aren't available in a human-readable form yet/i),
     ).toBeInTheDocument();
     // No invented steps.
+    expect(screen.queryByRole('list', { name: /what it does/i })).not.toBeInTheDocument();
+  });
+
+  it('F-T4-001: no presentation nodeLabels → the honest steps-unavailable state; internal node IDs never surface', async () => {
+    // A WorkflowIR document WITHOUT the presentation layer: the page must
+    // fail closed (the honest unavailable state) — it must NOT fall back to
+    // the internal node IDs (raw or humanized) as step names.
+    const noPresentation = { ...IR_CONTENT, presentation: undefined };
+    renderDetail(
+      'wf-1',
+      fullRoutes({
+        '/workflow-repository/workflows/wf-1/versions': () =>
+          jsonResponse(200, { versions: [{ ...VERSIONS[1], content: noPresentation }] }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Weekly invoice digest' })).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/steps aren't available in a human-readable form yet/i),
+    ).toBeInTheDocument();
+    // No invented steps, and the internal node IDs never surface.
+    expect(screen.queryByRole('list', { name: /what it does/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/fetch_open_tickets/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/fetch open tickets/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/send_followup/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/send followup/i)).not.toBeInTheDocument();
+  });
+
+  it('F-T4-001: a partial or whitespace-only nodeLabels map fails closed — never a partial list, never node IDs', async () => {
+    // Case 1 — partial coverage: one node labeled, one unlabeled. The whole
+    // steps surface fails closed (a partial step list would misrepresent
+    // the workflow; the unlabeled node must never leak its internal ID).
+    const partial = {
+      ...IR_CONTENT,
+      presentation: { nodeLabels: { fetch_open_tickets: 'Collect the open tickets' } },
+    };
+    renderDetail(
+      'wf-1',
+      fullRoutes({
+        '/workflow-repository/workflows/wf-1/versions': () =>
+          jsonResponse(200, { versions: [{ ...VERSIONS[1], content: partial }] }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Weekly invoice digest' })).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/steps aren't available in a human-readable form yet/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /what it does/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/send_followup/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/send followup/i)).not.toBeInTheDocument();
+
+    // Case 2 — whitespace-only label: not a usable presentation label; the
+    // surface fails closed the same way.
+    const blank = {
+      ...IR_CONTENT,
+      presentation: {
+        nodeLabels: { fetch_open_tickets: '   ', send_followup: 'Email the weekly digest' },
+      },
+    };
+    renderDetail(
+      'wf-1',
+      fullRoutes({
+        '/workflow-repository/workflows/wf-1/versions': () =>
+          jsonResponse(200, { versions: [{ ...VERSIONS[1], content: blank }] }),
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Weekly invoice digest' })).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/steps aren't available in a human-readable form yet/i),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: /what it does/i })).not.toBeInTheDocument();
   });
 
