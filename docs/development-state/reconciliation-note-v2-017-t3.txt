@@ -1,0 +1,6 @@
+V2-017 T3 post-merge reconciliation
+
+Authoritative merge: PR #182, merge commit 27e6162c03f50c26041d7a71ae5c1ff99151f9a8.
+Canonical main before reconciliation: 27e6162c03f50c26041d7a71ae5c1ff99151f9a8.
+
+The task-level development state and human-readable roadmap were synchronized after the authoritative Git merge. T3 is COMPLETE; T5 and T13 remain the eligible frontier. No runtime or semantic authority changed in this reconciliation.
