@@ -4,6 +4,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from './App';
+import { UniversalProductShell } from './components/shell/UniversalProductShell';
 import { auth } from './api/client';
 
 /**
@@ -173,6 +174,57 @@ describe('V2-017 Task 1 — universal product navigation', () => {
       await waitFor(() =>
         expect(screen.getAllByText(/Sign in/i).length).toBeGreaterThan(0),
       );
+    });
+  });
+
+  describe('implementation-authority language stays out of the product shell', () => {
+    // The approved UX authority keeps architectural machinery behind the
+    // interface: the backend-authority principle is a governance invariant,
+    // never human-facing product copy. Deterministic regression for the
+    // architect HOLD (PR #173, review 5108140185): the human-facing shell
+    // must not render authority/implementation language. The scope is the
+    // SHELL — page content is governed by the later frozen tasks.
+    const FORBIDDEN_PATTERNS: RegExp[] = [
+      /backend retains/i,
+      /authoritative/i,
+      /\bauthorit(?:y|ies)\b/i,
+    ];
+
+    it('renders the shell itself without authority-language leaks', async () => {
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <UniversalProductShell>
+            <div>Page content</div>
+          </UniversalProductShell>
+        </MemoryRouter>,
+      );
+      // The shell renders synchronously (it owns no product state).
+      expect(screen.getByRole('banner')).toBeInTheDocument();
+      expect(screen.getByRole('contentinfo')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Expert workspace/i })).toHaveAttribute(
+        'href',
+        '/expert',
+      );
+      for (const pattern of FORBIDDEN_PATTERNS) {
+        expect(screen.queryAllByText(pattern)).toHaveLength(0);
+      }
+    });
+
+    it('keeps the composed product footer free of authority language', async () => {
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <App />
+        </MemoryRouter>,
+      );
+      await waitFor(() =>
+        expect(
+          screen.getByRole('heading', { name: /What do you want to get done\?/i }),
+        ).toBeInTheDocument(),
+      );
+      const footer = screen.getByRole('contentinfo');
+      for (const pattern of FORBIDDEN_PATTERNS) {
+        expect(footer.textContent ?? '').not.toMatch(pattern);
+      }
     });
   });
 });

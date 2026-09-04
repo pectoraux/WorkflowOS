@@ -109,10 +109,13 @@ export function UniversalProductShell({ children }: UniversalProductShellProps) 
         <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8">{children}</div>
       </main>
 
-      {/* Authority boundary + the intentional expert entry (INSPECT level). */}
+      {/* Product footer: user-facing brand + the intentional expert entry
+          (INSPECT level). V2-017 HOLD correction: no implementation-authority
+          copy — architectural machinery stays behind the interface (UX
+          spec §3/§25); the footer stays navigation/action-focused. */}
       <footer className="mt-auto border-t border-border bg-card">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 text-xs text-muted-foreground sm:px-6">
-          <span>WorkflowOS — the backend retains all authoritative state.</span>
+          <span>WorkflowOS</span>
           <Link
             to="/expert"
             className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground"
