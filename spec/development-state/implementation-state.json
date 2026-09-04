@@ -13,11 +13,10 @@
   "completionAuthority": "actual Git merge",
   "statusVocabulary": ["ELIGIBLE", "IN_PROGRESS", "BLOCKED", "COMPLETE", "STALE_BASE", "OBSOLETE"],
   "asOf": "2026-09-04",
-  "currentMain": "6637c0bcfd0f1d66cabe6420af5637e295da310b",
   "workOrderStatus": "READY",
   "currentTask": "T2",
   "nextEligible": ["T3", "T5", "T13"],
-  "nextAction": "Close obsolete T2 PR #175, then restart T2 from current main 6637c0bcfd0f1d66cabe6420af5637e295da310b. Recreate or carry forward only the RED-first Home contract on the fresh task branch. No implementation branch may use the pre-governance base as its dependency.",
+  "nextAction": "Implement and verify T2 on the current branch from base `fdae3fe486d94362516b84af37a73e4575e32c11`. No unmerged sibling branch is a dependency. After Architect-approved merge, reconcile this state and the roadmap with the actual merge commit before selecting the next task.",
   "tasks": {
     "T1": {
       "status": "COMPLETE",
@@ -30,13 +29,12 @@
       "scope": "consumer shell, Home/Workflows/Explore/Activity navigation, Create and Expert entry, protected-route preservation"
     },
     "T2": {
-      "status": "STALE_BASE",
+      "status": "IN_PROGRESS",
       "dependsOn": ["T1"],
-      "baseSha": "520b93b0c757bd0827d09de66d628f0fc4dbcba8",
-      "pr": 175,
-      "branch": "feat/v2-017-task-2-workflow-first-home",
-      "headSha": "7fa73064468861271d8843c1b2ba34fc4a97f8be",
-      "evidence": "PR #175 contains the RED-first Home contract, but its base predates the merged governance roadmap package at main 6637c0bcfd0f1d66cabe6420af5637e295da310b. The branch is preserved as historical evidence only and must not be used as an implementation dependency.",
+      "baseSha": "fdae3fe486d94362516b84af37a73e4575e32c11",
+      "branch": "feat/v2-017-task-2-workflow-first-home-r2",
+      "headSha": "b586c7f020b672138f65a550cdb3a5b2543823c7",
+      "evidence": "Fresh branch from the reconciled main. RED contract carried forward from historical PR #175 because the current HomePage on main still lacks the required T2 entry modes and attention headings. The historical PR is not a dependency.",
       "scope": "goal/search entry, recent workflows, attention, approvals, updates, device issues; explicit success/empty/error distinction"
     },
     "T3": {"status": "ELIGIBLE", "dependsOn": ["T1"], "scope": "workflow library"},
@@ -88,6 +86,19 @@
       "pr": 175,
       "oldBaseSha": "520b93b0c757bd0827d09de66d628f0fc4dbcba8",
       "newRequiredBaseSha": "6637c0bcfd0f1d66cabe6420af5637e295da310b",
+      "recordedAt": "2026-09-04"
+    },
+    {
+      "event": "GOVERNANCE_RECONCILED",
+      "pr": 177,
+      "mergeCommit": "fdae3fe486d94362516b84af37a73e4575e32c11",
+      "recordedAt": "2026-09-04"
+    },
+    {
+      "event": "T2_REACTIVATED",
+      "baseSha": "fdae3fe486d94362516b84af37a73e4575e32c11",
+      "branch": "feat/v2-017-task-2-workflow-first-home-r2",
+      "headSha": "b586c7f020b672138f65a550cdb3a5b2543823c7",
       "recordedAt": "2026-09-04"
     }
   ]
