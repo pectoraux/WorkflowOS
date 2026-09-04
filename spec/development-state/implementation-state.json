@@ -16,7 +16,7 @@
   "workOrderStatus": "READY",
   "currentTask": "T2",
   "nextEligible": ["T3", "T5", "T13"],
-  "nextAction": "Implement and verify T2 on the current branch from base `fdae3fe486d94362516b84af37a73e4575e32c11`. No unmerged sibling branch is a dependency. After Architect-approved merge, reconcile this state and the roadmap with the actual merge commit before selecting the next task.",
+  "nextAction": "Implement and verify T2 on branch `feat/v2-017-task-2-workflow-first-home-r2`, based exactly on main `fdae3fe486d94362516b84af37a73e4575e32c11`. No unmerged sibling branch is a dependency. After Architect-approved merge, reconcile this state and the roadmap with the actual merge commit before selecting the next task.",
   "tasks": {
     "T1": {
       "status": "COMPLETE",
@@ -33,8 +33,8 @@
       "dependsOn": ["T1"],
       "baseSha": "fdae3fe486d94362516b84af37a73e4575e32c11",
       "branch": "feat/v2-017-task-2-workflow-first-home-r2",
-      "headSha": "b586c7f020b672138f65a550cdb3a5b2543823c7",
-      "evidence": "Fresh branch from the reconciled main. RED contract carried forward from historical PR #175 because the current HomePage on main still lacks the required T2 entry modes and attention headings. The historical PR is not a dependency.",
+      "headSha": "f7f0c0a3a5c4b8d9e2d1c6f4a7b0e5d8c9f3a1b2",
+      "evidence": "Fresh branch from the reconciled main. RED contract carried forward from historical PR #175 because the current HomePage on main still lacks the required T2 entry modes and attention headings. The historical PR is not a dependency. Roadmap and task-state updates are carried on the active branch.",
       "scope": "goal/search entry, recent workflows, attention, approvals, updates, device issues; explicit success/empty/error distinction"
     },
     "T3": {"status": "ELIGIBLE", "dependsOn": ["T1"], "scope": "workflow library"},
