@@ -29,5 +29,7 @@ describe('V2-017 T2 — workflow-first Home', () => {
     expect(screen.getByRole('heading', { name: /Pending approvals/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Updates/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Device issues/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('status', { name: 'Unavailable' })).toHaveLength(5);
+    expect(screen.queryByText(/No items yet/i)).not.toBeInTheDocument();
   });
 });
