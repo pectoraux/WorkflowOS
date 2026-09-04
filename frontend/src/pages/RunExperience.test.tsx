@@ -43,11 +43,21 @@ function jsonResponse(status: number, body: unknown): Response {
 type RouteHandler = () => Response | Promise<Response>;
 
 function mockApi(routes: Record<string, RouteHandler>): ReturnType<typeof vi.fn> {
+  // Keys may carry a method prefix ('POST /path'); the longest fragment
+  // wins, and a method-prefixed key matches only that HTTP verb.
   const ordered = Object.entries(routes).sort((a, b) => b[0].length - a[0].length);
-  return vi.fn().mockImplementation((input: RequestInfo | URL) => {
+  return vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input).replace(/^https?:\/\/[^/]+/, '');
-    for (const [fragment, handler] of ordered) {
-      if (url.includes(fragment)) return Promise.resolve(handler());
+    const method = (init?.method ?? 'GET').toUpperCase();
+    for (const [key, handler] of ordered) {
+      const methodPrefix = /^([A-Z]+) (.*)$/.exec(key);
+      if (methodPrefix) {
+        if (methodPrefix[1] === method && url.includes(methodPrefix[2])) {
+          return Promise.resolve(handler());
+        }
+        continue;
+      }
+      if (url.includes(key)) return Promise.resolve(handler());
     }
     return Promise.resolve(jsonResponse(500, { error: `unmocked ${url}` }));
   });
@@ -254,11 +264,12 @@ const PAUSED_AT_REVIEW = history([
     id: 'tl-2',
     runId: 'run-3',
     attemptNumber: 1,
-    stepId: 'review_gate',
+    stepId: null,
     eventName: 'workflow.run.paused',
     occurredAt: '2026-09-04T08:10:00Z',
     sequence: 2,
-    detail: null,
+    // The authoritative wire shape: the pause point rides detail.atStepId.
+    detail: { atStepId: 'review_gate' },
   },
 ]);
 
@@ -267,11 +278,11 @@ const PAUSED_AT_SEND = history([
     id: 'tl-2',
     runId: 'run-3',
     attemptNumber: 1,
-    stepId: 'send_followup',
+    stepId: null,
     eventName: 'workflow.run.paused',
     occurredAt: '2026-09-04T08:10:00Z',
     sequence: 2,
-    detail: null,
+    detail: { atStepId: 'send_followup' },
   },
 ]);
 
@@ -416,22 +427,31 @@ describe('V2-017 T6 — the run experience', () => {
 
   describe('the Run command (the authoritative command semantics)', () => {
     it('requests the run through the real route (envelope + manual trigger + the installation pin), then starts it, then refetches', async () => {
+      // The authority's state changes after the command: the runs list is
+      // empty until the request lands, then carries the new run.
+      let runRequested = false;
       const routes = fullRoutes({
+        'POST /organizations/org-1/workflow-runs/runs': () => {
+          runRequested = true;
+          return jsonResponse(201, { run: run({ state: 'requested' }), created: true, executed: true });
+        },
         '/organizations/org-1/workflow-runs/runs': () =>
-          jsonResponse(201, { run: run({ state: 'requested' }), created: true, executed: true }),
+          jsonResponse(200, { runs: runRequested ? [run({ state: 'requested' })] : [] }),
         '/workflow-runs/runs/run-3/start': () =>
           jsonResponse(200, { run: run({ state: 'running' }), attempt: null, executed: true }),
         '/workflow-runs/runs/run-3/history': () => jsonResponse(200, history([])),
       });
       const user = await openPreview(routes);
-      await user.click(screen.getByRole('button', { name: 'Run', exact: true }));
+      await user.click(screen.getByRole('button', { name: 'Run' }));
       // The two REAL commands fired with the authoritative shapes.
       await waitFor(() => {
         const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map(
           (c) => String(c[0]),
         );
-        expect(calls).toContain('/organizations/org-1/workflow-runs/runs');
-        expect(calls).toContain('/workflow-runs/runs/run-3/start');
+        expect(
+          calls.some((c) => c.includes('/organizations/org-1/workflow-runs/runs')),
+        ).toBe(true);
+        expect(calls.some((c) => c.includes('/workflow-runs/runs/run-3/start'))).toBe(true);
       });
       const bodies = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
         .map((c) => (c[1] as RequestInit | undefined)?.body)
@@ -459,7 +479,7 @@ describe('V2-017 T6 — the run experience', () => {
 
     it('a typed command failure is a visible error — never a fabricated success', async () => {
       const routes = fullRoutes({
-        '/organizations/org-1/workflow-runs/runs': () =>
+        'POST /organizations/org-1/workflow-runs/runs': () =>
           jsonResponse(409, {
             error: 'workflow-run-invalid-state-transition',
             code: 'RUN_INVALID_STATE_TRANSITION',
@@ -467,7 +487,7 @@ describe('V2-017 T6 — the run experience', () => {
           }),
       });
       const user = await openPreview(routes);
-      await user.click(screen.getByRole('button', { name: 'Run', exact: true }));
+      await user.click(screen.getByRole('button', { name: 'Run' }));
       await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
       expect(screen.getByText(/couldn't start this run/i)).toBeInTheDocument();
       // The typed authority decision is shown verbatim — authorization
