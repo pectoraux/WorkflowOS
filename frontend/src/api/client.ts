@@ -410,59 +410,7 @@ export const workflowRepository = {
     );
     return body.installations ?? [];
   },
-
-  /**
-   * Create-or-converge a workflow through the existing V2-002 authoring
-   * route (born with immutable version 1). T5 (V2-017): the creation flow
-   * commits the user's captured input as the version-1 content with an
-   * HONEST protocol descriptor — 'workflowos-captured-input-v1' declares
-   * the captured-input format and NEVER claims WorkflowIR compatibility
-   * (the descriptor is opaque to the repository; the version author owns
-   * the declaration). The backend remains the authority: validation,
-   * ownership, immutability, and the created/converged result all come
-   * from the authoritative response.
-   */
-  createForOrganization: async (
-    organizationId: string,
-    input: CreateWorkflowInput,
-  ): Promise<CreateWorkflowResult> => {
-    return apiPost<CreateWorkflowResult>(
-      `/organizations/${organizationId}/workflow-repository/workflows`,
-      input,
-    );
-  },
 };
-
-/** The creation input the V2-002 authoring route accepts (T5). */
-export interface CreateWorkflowInput {
-  slug: string;
-  name: string;
-  description?: string | null;
-  visibility: string;
-  /** The captured starting content (goal/steps) — opaque to the repository. */
-  content: Record<string, unknown>;
-  /** The version author's honest compatibility descriptor. */
-  protocol: { irSchemaVersion: string };
-}
-
-/** An immutable workflow version (the V2-002 wire shape). */
-export interface ProductWorkflowVersion {
-  id: string;
-  workflowId: string;
-  versionNumber: number;
-  contentDigest: string;
-  content: unknown;
-  protocol: unknown;
-  parentVersionId: string | null;
-  createdByUserId: string;
-  createdAt: string;
-}
-
-export interface CreateWorkflowResult {
-  workflow: ProductWorkflow;
-  initialVersion: ProductWorkflowVersion;
-  created: boolean;
-}
 
 export const workflowDeployments = {
   /** The organization's deployments — placement and enable state (read). */

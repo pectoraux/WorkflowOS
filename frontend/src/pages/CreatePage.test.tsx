@@ -1,7 +1,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import CreatePage from './CreatePage';
@@ -68,14 +68,15 @@ describe('V2-017 T2 — Create entry-point landing', () => {
  *   - the captured input is transient client-local state, never durable
  *     workflow truth: nothing renders as created before the authoritative
  *     POST succeeds, and the success surface renders FROM THE RESPONSE;
- *   - the durable creation goes through the existing V2-002 create route
- *     with the captured input as the version-1 content and an HONEST
- *     protocol descriptor (captured-input, never claiming WorkflowIR
- *     compatibility); immutable-version semantics are surfaced verbatim;
- *   - a failed commit stays a visible error (never a silent success), and
- *     the create-or-converge result is shown honestly (created flag);
- *   - with no organization, the honest missing-information state appears —
- *     no commit is possible, nothing is fabricated.
+ *   - the durable commit FAILS CLOSED (F-T5-001): the frozen V2-002
+ *     contract requires a version's irSchemaVersion to truthfully declare
+ *     WorkflowIR compatibility, the IR requires at least one authored node,
+ *     and no public authoring authority accepts captured input — so the
+ *     preview surfaces the MISSING-AUTHORITY dependency honestly and NO
+ *     create POST (with any fabricated/non-WorkflowIR irSchemaVersion) is
+ *     ever sent; nothing renders as committed;
+ *   - the correction surface (name/slug/description/visibility) remains
+ *     the user-owned preview of what they meant.
  */
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -107,43 +108,6 @@ const orgsOne = () =>
   jsonResponse(200, {
     organizations: [{ id: 'org-1', name: 'Acme', roleId: 'owner' }],
   });
-const orgsNone = () => jsonResponse(200, { organizations: [] });
-const orgsTwo = () =>
-  jsonResponse(200, {
-    organizations: [
-      { id: 'org-1', name: 'Acme', roleId: 'owner' },
-      { id: 'org-2', name: 'Globex', roleId: 'owner' },
-    ],
-  });
-
-const createdWorkflow = (name: string) => ({
-  workflow: {
-    id: 'wf-new',
-    organizationId: 'org-1',
-    ownerUserId: 'user-1',
-    slug: 'weekly-invoice-digest',
-    name,
-    description: 'Collect invoices and email the digest.',
-    visibility: 'private',
-    headVersionId: 'ver-1',
-    forkedFromWorkflowId: null,
-    forkedFromVersionId: null,
-    createdAt: '2026-09-04T10:00:00Z',
-    updatedAt: '2026-09-04T10:00:00Z',
-  },
-  initialVersion: {
-    id: 'ver-1',
-    workflowId: 'wf-new',
-    versionNumber: 1,
-    contentDigest: 'sha256:abc',
-    content: {},
-    protocol: { irSchemaVersion: 'workflowos-captured-input-v1' },
-    parentVersionId: null,
-    createdByUserId: 'user-1',
-    createdAt: '2026-09-04T10:00:00Z',
-  },
-  created: true,
-});
 
 function renderCreateFlow(search: string, routes: Record<string, RouteHandler>) {
   vi.stubGlobal('fetch', mockApi(routes));
@@ -247,112 +211,45 @@ describe('V2-017 T5 — Tell / Show / Tell + Show creation', () => {
     expect(screen.queryByRole('heading', { name: /here's what i understood/i })).not.toBeInTheDocument();
   });
 
-  it('explicit commit creates through the V2-002 route with the honest captured-input payload', async () => {
-    const routes: Record<string, RouteHandler> = {
+  it('FAILS CLOSED (F-T5-001): the preview surfaces the missing-authority dependency and NO create POST is ever sent', async () => {
+    await reachPreview({
       '/organizations': orgsOne,
-      '/organizations/org-1/workflow-repository/workflows': (_input, init) => {
-        expect(init?.method).toBe('POST');
-        return jsonResponse(201, createdWorkflow('Weekly invoice digest'));
+      // The authoring route is mocked ONLY to prove it is never called:
+      // any call here would carry a fabricated/non-WorkflowIR
+      // irSchemaVersion on a durable WorkflowVersion — the F-T5-001
+      // blocking violation.
+      '/organizations/org-1/workflow-repository/workflows': () => {
+        throw new Error('F-T5-001 violation: the create route must never be called from the captured-input flow');
       },
-    };
-    const user = await reachPreview(routes);
-    await user.clear(screen.getByRole('textbox', { name: /workflow name/i }));
-    await user.type(screen.getByRole('textbox', { name: /workflow name/i }), 'Weekly invoice digest');
-    await user.click(screen.getByRole('button', { name: 'Create workflow' }));
-    await screen.findByText(/workflow created/i);
-    // The success surface renders FROM THE RESPONSE: the authoritative name
-    // and the immutable initial version.
-    expect(screen.getByText('Weekly invoice digest')).toBeInTheDocument();
-    expect(screen.getByText(/version 1/i)).toBeInTheDocument();
-    expect(screen.getByText(/immutable/i)).toBeInTheDocument();
-    // The honest payload: captured input as content, the honest descriptor.
+    });
+    // The honest missing-authority state.
+    expect(screen.getByText(/durable creation isn't available yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/WorkflowIR/i)).toBeInTheDocument();
+    expect(screen.getByText(/missing/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing is committed/i)).toBeInTheDocument();
+    // The deterministic no-fabricated-descriptor proof: no POST (no call of
+    // any kind) to the authoring route ever left the page.
     const fetchMock = vi.mocked(fetch);
-    const createCall = fetchMock.mock.calls.find((c) =>
-      String(c[0]).includes('/organizations/org-1/workflow-repository/workflows'),
+    const createCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).includes('/workflow-repository/workflows'),
     );
-    expect(createCall).toBeDefined();
-    const payload = JSON.parse(String(createCall?.[1]?.body)) as {
-      name: string;
-      slug: string;
-      visibility: string;
-      content: { goal?: string; steps?: string[] };
-      protocol: { irSchemaVersion: string };
-    };
-    expect(payload.name).toBe('Weekly invoice digest');
-    expect(payload.slug).toMatch(/^[a-z0-9]/);
-    expect(payload.visibility).toBe('private');
-    expect(payload.content.goal).toBe('Send the weekly invoice digest');
-    expect(payload.protocol.irSchemaVersion).toBe('workflowos-captured-input-v1');
-  });
-
-  it('a converged create (created=false) is shown honestly — never a fabricated fresh creation', async () => {
-    const converged = createdWorkflow('Weekly invoice digest');
-    converged.created = false;
-    const routes: Record<string, RouteHandler> = {
-      '/organizations': orgsOne,
-      '/organizations/org-1/workflow-repository/workflows': () =>
-        jsonResponse(200, converged),
-    };
-    const user = await reachPreview(routes);
-    await user.clear(screen.getByRole('textbox', { name: /workflow name/i }));
-    await user.type(screen.getByRole('textbox', { name: /workflow name/i }), 'Weekly invoice digest');
-    await user.click(screen.getByRole('button', { name: 'Create workflow' }));
-    await waitFor(() => expect(screen.getByText(/already existed/i)).toBeInTheDocument());
-    expect(screen.getByText(/converged/i)).toBeInTheDocument();
-  });
-
-  it('a failed commit stays a visible error with retry — never a silent success', async () => {
-    const routes: Record<string, RouteHandler> = {
-      '/organizations': orgsOne,
-      '/organizations/org-1/workflow-repository/workflows': () =>
-        jsonResponse(400, { error: 'workflow-invalid-slug', message: 'slug must be 1-64 lowercase alphanumeric characters' }),
-    };
-    const user = await reachPreview(routes);
-    await user.clear(screen.getByRole('textbox', { name: /workflow name/i }));
-    await user.type(screen.getByRole('textbox', { name: /workflow name/i }), 'Weekly invoice digest');
-    await user.click(screen.getByRole('button', { name: 'Create workflow' }));
-    await screen.findByRole('alert');
-    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+    expect(createCalls).toHaveLength(0);
     expect(screen.queryByText(/workflow created/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('with no organization the honest missing-information state appears and no commit is possible', async () => {
-    renderCreateFlow('?mode=tell', { '/organizations': orgsNone });
-    await waitFor(() => expect(screen.getByText(/No organization yet/i)).toBeInTheDocument());
-    const user = userEvent.setup();
-    await user.type(
-      screen.getByRole('textbox', { name: /describe what you want done/i }),
-      'Send the weekly invoice digest',
-    );
-    await user.click(screen.getByRole('button', { name: 'Continue to preview' }));
-    await screen.findByRole('heading', { name: /here's what i understood/i });
-    const commit = screen.getByRole('button', { name: 'Create workflow' });
-    expect(commit).toBeDisabled();
-    expect(fetch).not.toHaveBeenCalledWith(
-      expect.stringContaining('/workflow-repository/workflows'),
-      expect.anything(),
-    );
-  });
-
-  it('with multiple organizations the user selects the creation target from the authoritative read', async () => {
-    const routes: Record<string, RouteHandler> = {
-      '/organizations': orgsTwo,
-      '/organizations/org-2/workflow-repository/workflows': (_input, init) => {
-        expect(init?.method).toBe('POST');
-        return jsonResponse(201, createdWorkflow('Weekly invoice digest'));
-      },
-    };
-    const user = await reachPreview(routes);
-    const orgSelect = screen.getByRole('combobox', { name: /organization/i });
-    await user.selectOptions(orgSelect, 'org-2');
+  it('the fail-closed state holds even when the captured input is fully corrected — no commit affordance exists', async () => {
+    const user = await reachPreview({ '/organizations': orgsOne });
+    // The correction surface remains (the user-owned preview of intent)...
     await user.clear(screen.getByRole('textbox', { name: /workflow name/i }));
     await user.type(screen.getByRole('textbox', { name: /workflow name/i }), 'Weekly invoice digest');
-    await user.click(screen.getByRole('button', { name: 'Create workflow' }));
-    await screen.findByText(/workflow created/i);
+    expect(screen.getByRole('textbox', { name: /workflow name/i })).toHaveValue('Weekly invoice digest');
+    // ...but there is NO commit button to press.
+    expect(screen.queryByRole('button', { name: /create workflow/i })).not.toBeInTheDocument();
     const fetchMock = vi.mocked(fetch);
-    const createCall = fetchMock.mock.calls.find((c) =>
-      String(c[0]).includes('/organizations/org-2/workflow-repository/workflows'),
+    const createCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).includes('/workflow-repository/workflows'),
     );
-    expect(createCall).toBeDefined();
+    expect(createCalls).toHaveLength(0);
   });
 });

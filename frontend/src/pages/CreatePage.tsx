@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import {
-  organizations,
-  workflowRepository,
-  type CreateWorkflowResult,
-  type Organization,
-} from '../api/client';
 
 /**
  * CreatePage — the universal creation entry (V2-017 T1 shell scope, T2
@@ -25,14 +19,14 @@ import {
  *     durable workflow truth — nothing renders as created before the
  *     authoritative POST responds, and the success surface renders FROM
  *     THE RESPONSE;
- *   - the durable commit goes through the existing authoring route with the
- *     captured input as the version-1 content and the honest descriptor
- *     'workflowos-captured-input-v1' (never claiming WorkflowIR
- *     compatibility); immutable-version semantics are surfaced verbatim;
- *   - a failed commit stays a visible error with retry; the
- *     create-or-converge result is shown honestly;
- *   - with no organization the honest missing-information state appears and
- *     no commit is possible;
+ *   - the durable commit FAILS CLOSED (F-T5-001): the frozen V2-002
+ *     contract requires a version's irSchemaVersion to truthfully declare
+ *     WorkflowIR compatibility, the WorkflowIR itself requires at least one
+ *     authored node, and NO public authoring authority accepts captured
+ *     input — so the preview surfaces the missing-authority dependency
+ *     honestly and never sends a create POST (a fabricated/non-WorkflowIR
+ *     irSchemaVersion on a durable WorkflowVersion is the blocking
+ *     violation); nothing renders as committed;
  *   - conversation/demonstration is INPUT, never a second durable workflow
  *     representation.
  */
@@ -59,9 +53,6 @@ type EntryModeKey = 'tell' | 'show' | 'tell-show';
 
 const VISIBILITIES = ['private', 'organization', 'public'] as const;
 
-/** The canonical slug shape (mirrors the authority's validation pattern). */
-const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -69,20 +60,6 @@ function slugify(text: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 64);
 }
-
-/** The honest captured-input descriptor (never claims WorkflowIR). */
-const CAPTURED_INPUT_PROTOCOL = { irSchemaVersion: 'workflowos-captured-input-v1' } as const;
-
-type OrgsState =
-  | { kind: 'loading' }
-  | { kind: 'error' }
-  | { kind: 'data'; orgs: Organization[] };
-
-type CommitState =
-  | { kind: 'idle' }
-  | { kind: 'submitting' }
-  | { kind: 'error'; message: string }
-  | { kind: 'success'; result: CreateWorkflowResult };
 
 export default function CreatePage() {
   const [params] = useSearchParams();
@@ -99,7 +76,7 @@ export default function CreatePage() {
   const mode: EntryModeKey | null = localMode ?? urlMode;
 
   // --- transient capture state (client-local, never authoritative) ---------
-  const [phase, setPhase] = useState<'capture' | 'preview' | 'committed'>('capture');
+  const [phase, setPhase] = useState<'capture' | 'preview'>('capture');
   const [goal, setGoal] = useState(goalParam ?? '');
   const [stepDraft, setStepDraft] = useState('');
   const [steps, setSteps] = useState<string[]>([]);
@@ -109,38 +86,6 @@ export default function CreatePage() {
   const [slug, setSlug] = useState('');
   const [description, setDescription] = useState('');
   const [visibility, setVisibility] = useState<string>('private');
-  const [orgId, setOrgId] = useState<string>('');
-
-  // --- the authoritative reads / the commit outcome ------------------------
-  const [orgsState, setOrgsState] = useState<OrgsState>({ kind: 'loading' });
-  const [commit, setCommit] = useState<CommitState>({ kind: 'idle' });
-
-  useEffect(() => {
-    let cancelled = false;
-    setOrgsState({ kind: 'loading' });
-    organizations
-      .listForUser()
-      .then((orgs) => {
-        if (!cancelled) setOrgsState({ kind: 'data', orgs });
-      })
-      .catch(() => {
-        if (!cancelled) setOrgsState({ kind: 'error' });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const orgs = useMemo(
-    () => (orgsState.kind === 'data' ? orgsState.orgs : []),
-    [orgsState],
-  );
-
-  useEffect(() => {
-    if (orgs.length > 0 && (orgId === '' || !orgs.some((o) => o.id === orgId))) {
-      setOrgId(orgs[0].id);
-    }
-  }, [orgs, orgId]);
 
   const addStep = useCallback(() => {
     const trimmed = stepDraft.trim();
@@ -161,42 +106,6 @@ export default function CreatePage() {
     setDescription(goal.trim());
     setPhase('preview');
   }, [goal, steps]);
-
-  const canCommit = useMemo(
-    () =>
-      orgs.length > 0 &&
-      orgId !== '' &&
-      name.trim().length > 0 &&
-      SLUG_PATTERN.test(slug) &&
-      commit.kind !== 'submitting',
-    [orgs, orgId, name, slug, commit.kind],
-  );
-
-  /** The EXPLICIT commit: durable creation through the existing authority. */
-  const createWorkflow = useCallback(async () => {
-    if (!canCommit) return;
-    setCommit({ kind: 'submitting' });
-    const content: Record<string, unknown> = {};
-    if (mode === 'tell' || mode === 'tell-show') content.goal = goal.trim();
-    if (mode === 'show' || mode === 'tell-show') content.steps = steps;
-    try {
-      const result = await workflowRepository.createForOrganization(orgId, {
-        slug,
-        name: name.trim(),
-        description: description.trim() || null,
-        visibility,
-        content,
-        protocol: CAPTURED_INPUT_PROTOCOL,
-      });
-      setCommit({ kind: 'success', result });
-      setPhase('committed');
-    } catch (err) {
-      setCommit({
-        kind: 'error',
-        message: err instanceof Error ? err.message : 'Creation failed.',
-      });
-    }
-  }, [canCommit, mode, goal, steps, orgId, slug, name, description, visibility]);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -320,13 +229,6 @@ export default function CreatePage() {
             </div>
           )}
 
-          {orgsState.kind === 'data' && orgs.length === 0 && (
-            <p role="status" className="text-sm text-muted-foreground">
-              No organization yet — an organization must exist before a
-              workflow can be created.
-            </p>
-          )}
-
           <button
             type="button"
             onClick={continueToPreview}
@@ -366,26 +268,6 @@ export default function CreatePage() {
 
           <div className="space-y-3">
             <h3 className="text-sm font-medium">Before it's saved</h3>
-
-            {orgs.length > 1 && (
-              <div>
-                <label htmlFor="create-org" className="text-sm">
-                  Organization
-                </label>
-                <select
-                  id="create-org"
-                  value={orgId}
-                  onChange={(event) => setOrgId(event.target.value)}
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                >
-                  {orgs.map((org) => (
-                    <option key={org.id} value={org.id}>
-                      {org.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             <div>
               <label htmlFor="create-name" className="text-sm">
@@ -452,43 +334,34 @@ export default function CreatePage() {
               </select>
             </div>
 
-            {orgsState.kind === 'data' && orgs.length === 0 && (
-              <p role="status" className="text-sm text-muted-foreground">
-                No organization yet — an organization must exist before a
-                workflow can be created.
-              </p>
-            )}
-            {orgsState.kind === 'error' && (
-              <p role="alert" className="text-sm text-muted-foreground">
-                Couldn't load your organizations right now.
-              </p>
-            )}
           </div>
 
-          {commit.kind === 'error' && (
-            <div>
-              <p role="alert" className="text-sm text-destructive">
-                {commit.message}
-              </p>
-              <button
-                type="button"
-                onClick={() => void createWorkflow()}
-                className="mt-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
-              >
-                Try again
-              </button>
-            </div>
-          )}
+          {/* The fail-closed durable boundary (F-T5-001): the frozen V2-002
+              contract requires a version's irSchemaVersion to truthfully
+              declare WorkflowIR compatibility; the WorkflowIR requires at
+              least one authored node; no public authoring authority accepts
+              captured input. The missing-authority dependency is surfaced —
+              NO create POST (with any fabricated/non-WorkflowIR
+              irSchemaVersion) is ever sent. */}
+          <div className="rounded-md border border-border bg-accent/30 p-4">
+            <p
+              role="status"
+              aria-label="Durable creation unavailable"
+              className="text-sm font-medium"
+            >
+              Durable creation isn't available yet
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The workflow authority accepts WorkflowIR content only — a
+              version's protocol declaration must truthfully declare
+              WorkflowIR compatibility, and WorkflowOS can't yet turn your
+              captured input into a WorkflowIR document. A captured-input
+              authoring authority is missing (surfaced to the architect).
+              Nothing is committed; your captured input stays on this page.
+            </p>
+          </div>
 
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => void createWorkflow()}
-              disabled={!canCommit}
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {commit.kind === 'submitting' ? 'Creating…' : 'Create workflow'}
-            </button>
             <button
               type="button"
               onClick={() => setPhase('capture')}
@@ -496,37 +369,6 @@ export default function CreatePage() {
             >
               Change something
             </button>
-          </div>
-        </section>
-      )}
-
-      {/* --- the committed result: rendered FROM THE RESPONSE --------------- */}
-      {phase === 'committed' && commit.kind === 'success' && (
-        <section aria-label="Creation result" className="space-y-3 rounded-xl border border-border bg-card p-6">
-          <h2 className="text-xl font-semibold">
-            {commit.result.created ? 'Workflow created' : 'Workflow already existed'}
-          </h2>
-          <p className="text-sm font-medium">{commit.result.workflow.name}</p>
-          <p className="text-sm text-muted-foreground">
-            Version {commit.result.initialVersion.versionNumber} — immutable.
-            {commit.result.created
-              ? ' '
-              : ' The request converged with the existing one. '}
-            The captured input is stored as its starting content.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Link
-              to="/workflows"
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              See it in your workflows
-            </Link>
-            <Link
-              to="/"
-              className="rounded-md border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
-            >
-              Back to Home
-            </Link>
           </div>
         </section>
       )}

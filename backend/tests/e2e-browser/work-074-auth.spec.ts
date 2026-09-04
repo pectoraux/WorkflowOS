@@ -219,16 +219,17 @@ test.describe('WORK-074 — fresh-browser identity journey', () => {
     await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
-  // V2-017 T5 — the creation entry honest-state journey, real topology:
-  // the identity stack serves the real session + /organizations reads (but
-  // no V2-002 authoring route), so this journey proves in a real browser:
-  // the Tell capture with the goal pre-filled, the understanding preview
-  // (verbatim echo, honest limitation, correction fields), the honest
-  // missing-information state for a member of no organization (no commit
-  // possible), and — after creating an organization through the public
-  // route — the honest ERROR state when the commit POST 404s on this
-  // identity-only topology (a failed commit is NEVER a silent success).
-  test('T5 Create: Tell capture, preview, honest no-org → error transitions', async ({ page }) => {
+  // V2-017 T5 — the creation entry honest-state journey, real topology.
+  // F-T5-001 correction: the durable commit FAILS CLOSED — the frozen
+  // V2-002 contract requires a version's irSchemaVersion to truthfully
+  // declare WorkflowIR compatibility, the WorkflowIR requires at least one
+  // authored node, and no public authoring authority accepts captured
+  // input. The journey proves in a real browser: the Tell capture with the
+  // goal pre-filled, the understanding preview (verbatim echo, honest
+  // limitation, correction fields), the honest missing-authority state —
+  // and that NO create POST (with any fabricated/non-WorkflowIR
+  // irSchemaVersion) is ever sent.
+  test('T5 Create: Tell capture, preview, and the fail-closed durable boundary', async ({ page }) => {
     // Fresh user (no organization): the Tell capture with the goal pre-filled.
     await page.goto('/');
     await page.getByText('Create one', { exact: true }).click();
@@ -252,25 +253,25 @@ test.describe('WORK-074 — fresh-browser identity journey', () => {
     await expect(echo).toContainText('Send the weekly invoice digest');
     await expect(page.getByText(/can't yet turn your description into executable steps/i)).toBeVisible();
 
-    // The honest missing-information state: no organization ⇒ no commit.
-    await expect(page.getByText(/No organization yet/i)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('button', { name: 'Create workflow' })).toBeDisabled();
-
-    // Failed commits stay visibly FAILED, never silent successes: create an
-    // organization through the public route; the create POST then 404s on
-    // this identity-only topology → the honest error state with retry.
-    const res = await page.request.post('/api/organizations', { data: { name: 'Acme T5' } });
-    expect(res.ok()).toBeTruthy();
-    await page.goto('/create?mode=tell&q=Send%20the%20weekly%20invoice%20digest');
-    await expect(page.getByRole('textbox', { name: /describe what you want done/i })).toHaveValue('Send the weekly invoice digest', { timeout: 15_000 });
-    await page.getByRole('button', { name: 'Continue to preview' }).click();
-    await expect(page.getByRole('heading', { name: /here's what i understood/i })).toBeVisible();
-    await expect(page.getByText(/No organization yet/i)).toHaveCount(0);
-    const commit = page.getByRole('button', { name: 'Create workflow' });
-    await expect(commit).toBeEnabled({ timeout: 15_000 });
-    await commit.click();
-    await expect(page.getByRole('alert')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('button', { name: /try again/i })).toBeVisible();
-    await expect(page.getByText(/workflow created/i)).toHaveCount(0);
+    // The fail-closed durable boundary (F-T5-001): the preview surfaces the
+    // honest missing-authority state — and NO create POST (with any
+    // fabricated/non-WorkflowIR irSchemaVersion) is ever sent.
+    const createRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/workflow-repository/workflows')) {
+        createRequests.push(request.url());
+      }
+    });
+    await expect(
+      page.getByRole('status', { name: 'Durable creation unavailable' }),
+    ).toBeVisible();
+    await expect(page.getByText(/durable creation isn't available yet/i)).toBeVisible();
+    await expect(page.getByText(/WorkflowIR/i)).toBeVisible();
+    await expect(page.getByText(/nothing is committed/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /create workflow/i })).toHaveCount(0);
+    // The deterministic no-fabricated-descriptor proof: no request to the
+    // authoring route ever left the page.
+    await page.waitForTimeout(500);
+    expect(createRequests).toHaveLength(0);
   });
 });
