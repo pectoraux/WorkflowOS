@@ -366,10 +366,10 @@ describe('V2-017 T4 — workflow detail', () => {
     expect(screen.queryByText(/send followup/i)).not.toBeInTheDocument();
   });
 
-  it('F-T4-001: a partial or whitespace-only nodeLabels map fails closed — never a partial list, never node IDs', async () => {
-    // Case 1 — partial coverage: one node labeled, one unlabeled. The whole
-    // steps surface fails closed (a partial step list would misrepresent
-    // the workflow; the unlabeled node must never leak its internal ID).
+  it('F-T4-001: a partial nodeLabels map fails closed — never a partial list, never node IDs', async () => {
+    // One node labeled, one unlabeled: the whole steps surface fails closed
+    // (a partial step list would misrepresent the workflow; the unlabeled
+    // node must never leak its internal ID).
     const partial = {
       ...IR_CONTENT,
       presentation: { nodeLabels: { fetch_open_tickets: 'Collect the open tickets' } },
@@ -390,9 +390,9 @@ describe('V2-017 T4 — workflow detail', () => {
     expect(screen.queryByRole('list', { name: /what it does/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/send_followup/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/send followup/i)).not.toBeInTheDocument();
+  });
 
-    // Case 2 — whitespace-only label: not a usable presentation label; the
-    // surface fails closed the same way.
+  it('F-T4-001: a whitespace-only label is not a usable label — the surface fails closed', async () => {
     const blank = {
       ...IR_CONTENT,
       presentation: {

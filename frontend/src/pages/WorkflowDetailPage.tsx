@@ -27,9 +27,13 @@ import {
  *     workflow-deployments reads; no second workflow model, no mutations;
  *   - loading / error / data states explicitly — a failed read is never a
  *     successful empty;
- *   - steps derive ONLY from authoritative WorkflowIR content (parsed
- *     presentation-side); non-IR content renders the honest
- *     steps-unavailable state, never invented steps;
+ *   - steps derive ONLY from the authoritative V2-003 presentation layer
+ *     (presentation.nodeLabels, nodeId → label — F-T4-001): internal
+ *     WorkflowNode IDs NEVER surface in the consumer UX (neither raw nor
+ *     humanized); when any node lacks a usable presentation label, or the
+ *     content is not a WorkflowIR document, the surface FAILS CLOSED to
+ *     the honest steps-unavailable state — never a partial list, never
+ *     the internal ID;
  *   - the primary actions are communicated: Run and Teach Me carry honest
  *     arrives-with notes (their flows belong to the run/teaching tasks);
  *     Edit enters the EXISTING expert workspace (the authoring authority);
@@ -58,14 +62,15 @@ function formatDate(iso: string): string {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
 
-function humanizeNodeId(id: string): string {
-  return id
-    .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-/** The steps derived from authoritative WorkflowIR content (never invented). */
+/**
+ * The steps from the authoritative V2-003 presentation layer (F-T4-001).
+ *
+ * presentation.nodeLabels (document top level, nodeId → label) is the ONLY
+ * source of consumer-facing step names. Internal node IDs never render.
+ * Fail-closed rules: non-WorkflowIR content, no presentation, a node
+ * without a usable label, or a whitespace-only label → null (the honest
+ * steps-unavailable state) — never a partial list, never the internal ID.
+ */
 function stepsFromContent(content: unknown): string[] | null {
   if (
     typeof content !== 'object' ||
@@ -77,15 +82,28 @@ function stepsFromContent(content: unknown): string[] | null {
   const doc = content as {
     objectType?: unknown;
     ir?: { nodes?: unknown } | null;
+    presentation?: unknown;
   };
   if (doc.objectType !== 'workflowos/workflow-ir/v1') return null;
   if (!doc.ir || !Array.isArray(doc.ir.nodes)) return null;
+  const nodeLabels =
+    typeof doc.presentation === 'object' &&
+    doc.presentation !== null &&
+    !Array.isArray(doc.presentation)
+      ? (doc.presentation as { nodeLabels?: unknown }).nodeLabels
+      : undefined;
+  const labels: Record<string, unknown> =
+    typeof nodeLabels === 'object' && nodeLabels !== null && !Array.isArray(nodeLabels)
+      ? (nodeLabels as Record<string, unknown>)
+      : {};
   const steps: string[] = [];
   for (const node of doc.ir.nodes) {
-    if (typeof node !== 'object' || node === null) continue;
+    if (typeof node !== 'object' || node === null) return null;
     const { id } = node as { id?: unknown };
-    if (typeof id !== 'string') continue;
-    steps.push(humanizeNodeId(id));
+    if (typeof id !== 'string') return null;
+    const label = labels[id];
+    if (typeof label !== 'string' || label.trim() === '') return null;
+    steps.push(label);
   }
   return steps;
 }
@@ -275,7 +293,9 @@ export default function WorkflowDetailPage() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
-        {/* What it does — steps derived from authoritative IR content. */}
+        {/* What it does — steps from the authoritative V2-003
+            presentation layer (nodeLabels); internal node IDs never
+            render (F-T4-001). */}
         <section aria-label="What it does" className="rounded-xl border border-border bg-card p-5">
           <h2 className="font-medium">What it does</h2>
           {steps ? (
@@ -286,8 +306,8 @@ export default function WorkflowDetailPage() {
             </ol>
           ) : (
             <p className="mt-2 text-sm text-muted-foreground">
-              Steps aren't available in a human-readable form yet — the
-              version content isn't a readable WorkflowIR document.
+              Steps aren't available in a human-readable form yet — this
+              version doesn't carry readable step labels.
             </p>
           )}
         </section>
