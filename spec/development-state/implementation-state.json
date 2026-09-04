@@ -14,7 +14,7 @@
   "statusVocabulary": ["ELIGIBLE", "IN_PROGRESS", "BLOCKED", "COMPLETE", "STALE_BASE", "OBSOLETE"],
   "asOf": "2026-09-04",
   "currentMain": "520b93b0c757bd0827d09de66d628f0fc4dbcba8",
-  "workOrderStatus": "IN_PROGRESS",
+  "workOrderStatus": "READY",
   "currentTask": "T2",
   "nextEligible": ["T3", "T5", "T13"],
   "nextAction": "Finish T2 from the newest eligible main. T2 must not depend on an unmerged sibling. After a task is accepted and merged, reconcile this artifact and the human-readable roadmap, then recompute the frontier.",
