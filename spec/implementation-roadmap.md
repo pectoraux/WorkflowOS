@@ -122,7 +122,7 @@ The diagram is intentionally human-readable. The exact dependency graph remains 
 | Task | Status | Dependencies | Primary outcome |
 |---|---|---|---|
 | T1 | ✅ COMPLETE | V2-017 activation | Universal product shell, navigation, expert entry |
-| T2 | 🟨 STALE_BASE | T1 | Workflow-first Home and attention surfaces |
+| T2 | 🟦 IN_PROGRESS | T1 | Workflow-first Home and attention surfaces |
 | T3 | ⬜ ELIGIBLE | T1 | Workflow library |
 | T4 | ⬜ BLOCKED | T3 | Workflow detail |
 | T5 | ⬜ ELIGIBLE | T1 | Tell / Show / Tell + Show creation |
@@ -141,29 +141,27 @@ The diagram is intentionally human-readable. The exact dependency graph remains 
 ### Current frontier
 
 ```text
-ELIGIBLE FRONTIER
+CURRENT TASK
+
+T2  Workflow-first Home
+
+PARALLEL ELIGIBLE SIBLINGS
 
 T3  Workflow library
 T5  Tell / Show / Tell + Show
 T13 Expert/developer workspace
-
-CURRENT TASK
-
-T2  Workflow-first Home
-    stale implementation branch: PR #175
-    required new base: 6637c0bcfd0f1d66cabe6420af5637e295da310b
 ```
 
-No task may become eligible merely because a branch exists. Dependencies are complete only through authoritative merged Git evidence. A stale implementation branch is historical evidence, not a current implementation dependency.
+No task may become eligible merely because a branch exists. Dependencies are complete only through authoritative merged Git evidence.
 
 ## Current implementation snapshot
 
-- `main` after governance merge: `6637c0bcfd0f1d66cabe6420af5637e295da310b`.
+- `main` after governance/reconciliation: `fdae3fe486d94362516b84af37a73e4575e32c11`.
 - V2-017 Task 1 is complete through **PR #173**, merged as `3a507199ec8b70f4c4feb2829bb1b6a2070bfc38`.
-- V2-017 Task 2 was initially opened as **PR #175** from `520b93b0c757bd0827d09de66d628f0fc4dbcba8`, with RED-first Home contract coverage at `7fa73064468861271d8843c1b2ba34fc4a97f8be`.
-- The governance roadmap package then merged as **PR #176** at `6637c0bcfd0f1d66cabe6420af5637e295da310b`, making PR #175 stale by policy.
-- PR #175 must not be used as a dependency or merge target. Its RED-first test is recoverable historical evidence for a fresh T2 branch.
-- The next implementation base for T2 is exactly the current `main` SHA above.
+- PR #176 introduced the human-readable governance package and merged as `6637c0bcfd0f1d66cabe6420af5637e295da310b`.
+- PR #177 reconciled the post-merge state and marked the pre-governance T2 PR #175 stale; it merged as `fdae3fe486d94362516b84af37a73e4575e32c11`.
+- PR #175 remains closed and historical; its RED-first test is recoverable evidence but not an implementation dependency.
+- T2 must now be activated from this exact `main` revision and may not use the old branch head/base.
 
 The exact live branch/PR state must always be re-read from GitHub before continuing.
 
