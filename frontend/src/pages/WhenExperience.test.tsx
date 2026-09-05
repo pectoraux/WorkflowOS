@@ -7,9 +7,9 @@ import { MemoryRouter } from 'react-router-dom';
 import WhenSection from '../components/when/WhenSection';
 import type {
   ProductWorkflow,
-  ProductWorkflowVersion,
   ProductDeployment,
   ProductTriggerSubscription,
+  ProductScheduleSpec,
 } from '../api/client';
 
 /**
@@ -101,18 +101,6 @@ const OTHER_WORKFLOW: ProductWorkflow = {
   forkedFromVersionId: null,
   createdAt: '2026-09-01T11:00:00Z',
   updatedAt: '2026-09-04T09:00:00Z',
-};
-
-const VERSION_2: ProductWorkflowVersion = {
-  id: 'ver-2',
-  workflowId: 'wf-1',
-  versionNumber: 2,
-  contentDigest: 'sha256:new',
-  content: null,
-  protocol: { irSchemaVersion: 'workflowos-workflow-ir-v1' },
-  parentVersionId: null,
-  createdByUserId: 'user-1',
-  createdAt: '2026-09-04T09:00:00Z',
 };
 
 const DEPLOYMENT: ProductDeployment = {
@@ -319,7 +307,7 @@ describe('V2-017 T8 — the When experience', () => {
     it('fails closed to honest unavailable phrasing on unparseable authoritative facts', () => {
       renderWhen({
         subscriptions: [
-          subscription({ id: 'sub-1', schedule: { kind: 'cron' } as unknown }),
+          subscription({ id: 'sub-1', schedule: { kind: 'cron' } as unknown as ProductScheduleSpec }),
           subscription({
             id: 'sub-2',
             kind: 'event',
@@ -606,7 +594,49 @@ describe('V2-017 T8 — the When experience', () => {
     });
 
     it('creates the deployment first (create-or-converge, any-supported placement, the head version) when none exists, then attaches the subscription', async () => {
-      const { user, fetchMock } = renderWhen({ deployments: [] });
+      const routes: Record<string, RouteHandler> = {
+        'POST /organizations/org-1/workflow-deployments/deployments': () =>
+          jsonResponse(201, {
+            deployment: {
+              id: 'dep-new',
+              organizationId: 'org-1',
+              workflowId: 'wf-1',
+              versionId: 'ver-2',
+              installationId: null,
+              name: 'Weekly invoice digest',
+              description: null,
+              placement: {
+                placement: { required: 'any_supported_node' },
+                privacy: { localOnly: false },
+              },
+              enabled: true,
+              enabledAt: '2026-09-05T09:00:00Z',
+              disabledAt: null,
+              createdByUserId: 'user-1',
+              createdAt: '2026-09-05T09:00:00Z',
+              updatedAt: '2026-09-05T09:00:00Z',
+            },
+            created: true,
+          }),
+        'POST /workflow-deployments/deployments/dep-new/subscriptions': () =>
+          jsonResponse(201, {
+            subscription: {
+              id: 'sub-new',
+              organizationId: 'org-1',
+              deploymentId: 'dep-new',
+              kind: 'schedule',
+              schedule: { kind: 'daily', timezone: 'UTC', timeOfDay: '09:00' },
+              eventPattern: null,
+              deliveryPolicy: DEFAULT_POLICY,
+              enabled: true,
+              cursor: null,
+              createdAt: '2026-09-05T09:00:00Z',
+              updatedAt: '2026-09-05T09:00:00Z',
+            },
+            created: true,
+          }),
+      };
+      const { user, fetchMock } = renderWhen({ deployments: [], routes });
       await user.click(screen.getByRole('button', { name: 'Schedule' }));
       await user.click(screen.getByRole('radio', { name: 'On a schedule' }));
       await user.clear(screen.getByLabelText('Time'));
@@ -648,6 +678,20 @@ describe('V2-017 T8 — the When experience', () => {
           ),
         ).toBe(true),
       );
+      const subscriptionBody = JSON.parse(
+        String(
+          fetchMock.mock.calls.find(
+            ([input, init]) =>
+              String(input).includes('/workflow-deployments/deployments/dep-new/subscriptions') &&
+              (init?.method ?? 'GET') === 'POST',
+          )?.[1]?.body,
+        ),
+      );
+      expect(subscriptionBody).toEqual({
+        kind: 'schedule',
+        schedule: { kind: 'daily', timezone: 'UTC', timeOfDay: '09:00' },
+        enabled: true,
+      });
     });
 
     it('renders a typed backend rejection verbatim — never as a state — and stays open for correction', async () => {
@@ -844,7 +888,6 @@ describe('V2-017 T8 — the When experience', () => {
         'POST /workflow-deployments/subscriptions/sub-1/disable': () =>
           jsonResponse(409, {
             error: 'workflow-deployment-subscription-already-disabled',
-            reason: 'already disabled',
           }),
       };
       const { user } = renderWhen({
