@@ -184,10 +184,10 @@ const LESSON = {
   },
   prerequisites: [],
   steps: [
-    lessonStep('fetch', 1, {
+    lessonStep('fetch', 1),
+    lessonStep('send', 2, {
       disclosures: [{ field: 'step_human_readable_semantics', kind: 'NOT_SPECIFIED_BY_WORKFLOW' }],
     }),
-    lessonStep('send', 2),
   ],
   decisionPoints: [],
   observations: [],
@@ -287,7 +287,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
 
   describe('the lesson opening (§12)', () => {
     it('create-or-converges the session bound to the pinned version — the install pin verbatim when installed', async () => {
-      const { user, fetchMock } = renderTeach({
+      const { fetchMock } = renderTeach({
         installation: INSTALLATION,
         routes: {
           'POST /teaching-sessions/sessions': () =>
@@ -382,8 +382,8 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       });
       const panel = await opened();
       // The next checkpoint: Step 2 of 2, the presentation label.
-      expect(within(panel).getByText('Step 2 of 2')).toBeInTheDocument();
-      expect(within(panel).getByText('Email the weekly digest')).toBeInTheDocument();
+      expect(within(panel).getByText(/Step 2 of 2/)).toBeInTheDocument();
+      expect(within(panel).getByText(/Step 2 of 2 — Email the weekly digest/)).toBeInTheDocument();
       expect(within(panel).queryByText(/^send$/)).not.toBeInTheDocument();
       expect(within(panel).queryByText(/nodeId/i)).not.toBeInTheDocument();
       // The honest disclosure for the workflow's own gap.
@@ -419,6 +419,8 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       const { user, fetchMock } = renderTeach({
         routes: {
           'POST /teaching-sessions/sessions': () => jsonResponse(201, { session: session(), created: true }),
+          'GET /teaching-sessions/sessions/ts_1/practice-questions': () =>
+            jsonResponse(200, { questions: PRACTICE_QUESTIONS }),
           'POST /teaching-sessions/sessions/ts_1/practice': () =>
             jsonResponse(200, {
               session: session(),
@@ -432,7 +434,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
         },
       });
       const panel = await opened();
-      const practice = within(panel).getByRole('region', { name: 'Practice' });
+      const practice = within(within(panel).getByRole('region', { name: 'Practice' }));
       expect(practice.getByText('What does the "Email the weekly digest" step do?')).toBeInTheDocument();
       await user.click(practice.getByRole('radio', { name: 'The workflow declares: send semantics' }));
       await user.click(practice.getByRole('button', { name: 'Check' }));
@@ -456,7 +458,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       );
       expect(body).toEqual({ nodeId: 'send', answer: 'The workflow declares: send semantics' });
       await waitFor(() =>
-        expect(within(practice).getByText(/That matches the workflow's own declaration/i)).toBeInTheDocument(),
+        expect(practice.getByText(/That matches the workflow's own declaration/i)).toBeInTheDocument(),
       );
     });
   });
@@ -498,7 +500,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
         ).toBe(true),
       );
       // Resumed to the exact pending checkpoint.
-      await waitFor(() => expect(within(panel).getByText('Step 2 of 2')).toBeInTheDocument());
+      await waitFor(() => expect(within(panel).getByText(/Step 2 of 2/)).toBeInTheDocument());
     });
 
     it('a same-state rejection (409) renders verbatim — never a silent success', async () => {
@@ -600,7 +602,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       expect(within(panel).queryByRole('button', { name: "I've done it" })).not.toBeInTheDocument();
     });
 
-    it('a failed assessment renders the authority's corrections verbatim — never a fabricated pass', async () => {
+    it("a failed assessment renders the authority's corrections verbatim — never a fabricated pass", async () => {
       const { user } = renderTeach({
         routes: {
           'POST /teaching-sessions/sessions': () =>
@@ -627,7 +629,24 @@ describe('V2-017 T9 — the Teach Me experience', () => {
             }),
           'POST /teaching-sessions/sessions/ts_1/assessment': () =>
             jsonResponse(200, {
-              session: session(),
+              session: session({
+                confirmedCheckpoints: [
+                  { nodeId: 'fetch', confirmedAt: 1733568002000 },
+                  { nodeId: 'send', confirmedAt: 1733568003000 },
+                ],
+                progress: {
+                  confirmedCheckpoints: [
+                    { nodeId: 'fetch', confirmedAt: 1733568002000 },
+                    { nodeId: 'send', confirmedAt: 1733568003000 },
+                  ],
+                  nextCheckpointNodeId: null,
+                  allCheckpointsConfirmed: true,
+                  practiceAttemptCount: 0,
+                  correctPracticeAttemptCount: 0,
+                  assessmentAttemptCount: 1,
+                  passedAssessment: false,
+                },
+              }),
               outcome: {
                 assessmentId: 'as_1',
                 passed: false,
@@ -661,7 +680,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       expect(
         within(evidence).getByText(/kept separate from run evidence/i),
       ).toBeInTheDocument();
-      expect(within(evidence).getByText('learner_checkpoint_confirmation')).toBeInTheDocument();
+      expect(within(evidence).getByText(/learner_checkpoint_confirmation/)).toBeInTheDocument();
       // The teaching surface never uses execution-evidence vocabulary.
       expect(within(panel).queryByText(/^Run evidence$/)).not.toBeInTheDocument();
       expect(within(panel).queryByText(/^Execution evidence$/)).not.toBeInTheDocument();
@@ -837,7 +856,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
               actionability: 'agent_task',
               manualInstruction: 'Do the fetch step yourself, following the workflow.',
               uncertainty: [],
-              safetyGated: true,
+              safety: 'safety_gated',
               safetyNotice: 'This step uses messaging.send — a sensitive capability.',
             },
           ],
@@ -864,6 +883,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
       await waitFor(() =>
         expect(within(reverse).getByText(/sensitive capability/i)).toBeInTheDocument(),
       );
+      await user.type(within(reverse).getByLabelText('What did you do?'), 'I did it carefully');
       await user.click(within(reverse).getByRole('button', { name: 'I did this step' }));
       const alert = await within(reverse).findByRole('alert');
       expect(alert).toHaveTextContent('reverse-teaching-safety-acknowledgment-required');
