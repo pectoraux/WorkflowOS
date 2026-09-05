@@ -857,16 +857,20 @@ export const teaching = {
 export const reverseTeaching = {
   /**
    * Create (or converge on) the learner's reverse-teaching session for an
-   * INSTALLED pinned version — the §13 do-it-yourself entry.
+   * INSTALLED pinned version — the §13 do-it-yourself entry. The tuple is
+   * validated server-side against the V2-002 installation's immutable pin
+   * (a mismatch fails closed) — these identifiers locate the installation,
+   * they never define the pin.
    */
   startSession: async (
+    organizationId: string,
     workflowId: string,
     versionId: string,
     installationId: string,
   ): Promise<{ session: ProductReverseTeachingSession; created: boolean }> => {
     return apiPost<{ session: ProductReverseTeachingSession; created: boolean }>(
       `/reverse-teaching/sessions`,
-      { workflowId, versionId, installationId },
+      { organizationId, workflowId, versionId, installationId },
     );
   },
 

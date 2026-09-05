@@ -216,6 +216,7 @@ export default function TeachExperience({ workflow, versions, installation }: Te
     setReverseError(null);
     try {
       const created = await reverseTeaching.startSession(
+        installation.installation.organizationId,
         workflow.id,
         pinnedVersionId,
         installation.installation.id,

@@ -805,6 +805,7 @@ describe('V2-017 T9 — the Teach Me experience', () => {
         ),
       );
       expect(createBody).toEqual({
+        organizationId: 'org-1',
         workflowId: 'wf-1',
         versionId: 'ver-2',
         installationId: 'inst-1',
