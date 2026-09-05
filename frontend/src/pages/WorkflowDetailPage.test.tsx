@@ -328,9 +328,9 @@ describe('V2-017 T4 — workflow detail', () => {
     // labels, never internal step IDs), and the admissible actions.
     const recovery = screen.getByRole('region', { name: 'Recovery' });
     expect(within(recovery).getByText('I couldn\u2019t finish this.')).toBeInTheDocument();
-    expect(
-      within(recovery).getByText('It stopped: The website had changed.'),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(recovery).getByText('It stopped: The website had changed.')).toBeInTheDocument(),
+    );
     const known = within(recovery).getByRole('list', { name: 'What I know' });
     expect(within(known).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       '\u2713 Collect the open tickets',

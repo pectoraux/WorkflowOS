@@ -156,6 +156,10 @@ const FAILED_RUN: ProductWorkflowRun = {
   workflowId: 'wf-1',
   versionId: 'ver-2',
   installationId: 'inst-1',
+  trigger: { type: 'manual', id: 'trg-1' },
+  triggeredByUserId: 'user-1',
+  inputCommitments: [],
+  inputDigest: 'sha256:input',
   state: 'failed',
   createdAt: '2026-09-05T08:00:00Z',
   updatedAt: '2026-09-05T08:30:00Z',
@@ -415,7 +419,7 @@ describe('V2-017 T7 — the failure / recovery / takeover experience', () => {
       expect(body.installationId).toBe('inst-1');
       expect(typeof body.commandId).toBe('string');
       expect(typeof body.correlationId).toBe('string');
-      expect(body.trigger).toEqual({ type: 'manual' });
+      expect(body.trigger.type).toBe('manual');
       expect(typeof body.trigger.id).toBe('string');
       // The start targets EXACTLY the returned run (the re-read discipline).
       await waitFor(() =>
